@@ -108,7 +108,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    ROOT[".bughunter/"]
+    ROOT[".nexus/"]
     ROOT --> CFG["config.toml<br/>committed"]
     ROOT --> POL["policy.toml<br/>committed"]
     ROOT --> DB["bughunter.db<br/>local · WAL"]

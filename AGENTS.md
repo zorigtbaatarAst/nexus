@@ -49,7 +49,7 @@ that is hard to attribute.
    and returns a `ParsedFile`. It never learns about scans or baselines. This is also why
    parsing parallelizes cleanly.
 
-5. **`bh-verify` writes only through `SafeWriter`**, rooted at `.bughunter/generated-tests/`,
+5. **`bh-verify` writes only through `SafeWriter`**, rooted at `.nexus/generated-tests/`,
    canonicalizing the parent path *before* the prefix check. A jail that compares unresolved
    paths is not a jail.
 
@@ -183,7 +183,7 @@ that is hard to attribute.
   the index; counting it as a failure hides real bugs inside a large constant. See
   [ADR-017](docs/architecture-decisions.md#adr-017-external-is-a-resolution-outcome-not-a-failure).
 
-- **`.bughunter/` must be excluded wherever candidates come from.** The walker filters it
+- **`.nexus/` must be excluded wherever candidates come from.** The walker filters it
   structurally, but Tier 1 candidates also come from `git diff`, which knows nothing about
   that filter — so `walk::is_excluded` exists for both paths to consult. Without it
   BugHunter indexes its own config files.

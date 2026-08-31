@@ -62,7 +62,7 @@ curl -fsSL .../install.sh | sh -s -- --from-source
 # a specific version, or a different directory
 ... | sh -s -- --version v0.1.0 --dir ~/bin
 
-# remove it (project data in each repo's .bughunter/ is left alone)
+# remove it (project data in each repo's .nexus/ is left alone)
 ... | sh -s -- --uninstall
 
 # from a clone

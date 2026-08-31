@@ -40,7 +40,7 @@ install: release
 uninstall:
 	rm -f $(PREFIX)/bin/bughunter
 	@echo "removed $(PREFIX)/bin/bughunter"
-	@echo "project data in each repository's .bughunter/ was left alone"
+	@echo "project data in each repository's .nexus/ was left alone"
 
 clean:
 	cargo clean

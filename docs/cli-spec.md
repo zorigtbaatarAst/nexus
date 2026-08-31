@@ -9,7 +9,7 @@ over MCP is reachable here, because both are thin layers over the same `Engine`.
 ## 1. Commands
 
 ```bash
-bughunter init                    # detect, create .bughunter/, migrate the DB
+bughunter init                    # detect, create .nexus/, migrate the DB
 bughunter scan                    # full scan; establishes the baseline
 bughunter rescan                  # incremental; the everyday command
 bughunter status                  # baseline, drift, open bugs, regressions
@@ -231,7 +231,7 @@ The highest-value command in the tool, and the first thing to ask anyone reporti
 BugHunter doctor
 ────────────────────────────────────────
   ✓ git                 2.55.0, repository at /srv/autoland
-  ✓ database            .bughunter/bughunter.db, schema 3 (current)
+  ✓ database            .nexus/nexus.db, schema 3 (current)
   ✓ config              config.toml, policy.toml valid
   ✓ languages           java (tree-sitter-java 0.21.0), typescript (0.20.4)
   ✓ frameworks          spring-boot 3.5 (build.gradle:24)
@@ -239,7 +239,7 @@ BugHunter doctor
   ⚠ baseline            scan-013 is 47 commits behind HEAD — run: bughunter rescan
   ✓ sandbox             docker 29.6.2 available; policy.execute = "docker"
   ⚠ ai                  no provider configured; policy.ai = "agent" (MCP clients only)
-  ✓ disk                .bughunter/ 82 MB (db 41 MB, cache 39 MB)
+  ✓ disk                .nexus/ 82 MB (db 41 MB, cache 39 MB)
 
 2 warnings, 0 errors
 ```

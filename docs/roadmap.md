@@ -77,7 +77,7 @@ The full loop. This is the release the product is designed around.
 
 **Verification engine**
 - Reproduction planning, deterministic templates per `(bug_type, framework)`.
-- `SafeWriter` jail; generated tests under `.bughunter/generated-tests/`.
+- `SafeWriter` jail; generated tests under `.nexus/generated-tests/`.
 - Docker sandbox with the profile in [security.md](security.md) §4; host opt-in.
 - The **baseline-revision run** and the full judgement matrix.
 - `verify --promote` to move a reproduction into the project's real test tree.

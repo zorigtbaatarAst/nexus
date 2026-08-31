@@ -25,7 +25,7 @@ dangerous paths explicit, narrow and logged.
 
 ## 2. Explicit project permissions
 
-`.bughunter/policy.toml` is **committed to the repository**. Permissions are a property of
+`.nexus/policy.toml` is **committed to the repository**. Permissions are a property of
 the project that a human reviewed in a pull request, not of whoever happens to run the tool.
 
 ```toml
@@ -114,7 +114,7 @@ Container profile:
 
 ```
 --read-only                             repository mounted read-only
--v .bughunter/generated-tests:rw        the only writable project path
+-v .nexus/generated-tests:rw        the only writable project path
 -v <build-cache>:rw                     gradle/npm/pip cache, so runs are not glacial
 --network=none                          unless policy.allow_network = true
 --memory 4g --cpus 4 --pids-limit 512
@@ -162,14 +162,14 @@ BugHunter should not be the component that made that leak possible.
 
 - **Traversal** is confined to the project root. Symlinks pointing outside are not followed;
   they are recorded as skipped with a reason, not silently ignored.
-- **Writes** go through `SafeWriter`, rooted at `.bughunter/generated-tests/`, with the
+- **Writes** go through `SafeWriter`, rooted at `.nexus/generated-tests/`, with the
   parent path canonicalized *before* the prefix check so `..` and symlinks cannot escape. An
   attempted escape is a hard error plus an audit row.
 - **BugHunter never writes to a build file.** Telling a build system where a generated test
   lives is done with command-line arguments, never by editing `build.gradle`,
   `package.json`, `pom.xml` or `Cargo.toml`.
 - **The primary working tree is never mutated** during verification. Baseline runs use
-  `git worktree add --detach` into `.bughunter/cache/worktrees/`; no checkout, no stash, no
+  `git worktree add --detach` into `.nexus/cache/worktrees/`; no checkout, no stash, no
   reset of the developer's tree.
 
 ---
@@ -177,7 +177,7 @@ BugHunter should not be the component that made that leak possible.
 ## 7. Audit log
 
 Every execution and every AI call produces an `audit_events` row **and** a JSONL line in
-`.bughunter/audit.log`, so the record survives a database reset and can be tailed.
+`.nexus/audit.log`, so the record survives a database reset and can be tailed.
 
 ```json
 {"at":"2026-08-31T11:42:07Z","actor":"mcp:claude-code","action":"exec",

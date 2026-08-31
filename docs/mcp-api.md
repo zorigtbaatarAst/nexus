@@ -155,8 +155,8 @@ does not proceed:
   "reason": "policy.execute = \"none\"",
   "requested_command": ["./gradlew", "test", "--tests", "*BugHunter_BUG104*"],
   "sandbox": "docker",
-  "to_allow": "set execute = \"docker\" in .bughunter/policy.toml",
-  "test_written_to": ".bughunter/generated-tests/BUG-104/"
+  "to_allow": "set execute = \"docker\" in .nexus/policy.toml",
+  "test_written_to": ".nexus/generated-tests/BUG-104/"
 }
 ```
 

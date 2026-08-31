@@ -95,117 +95,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
-name = "bh-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bh-core",
- "bh-mcp",
- "bh-types",
- "clap",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "bh-core"
-version = "0.1.0"
-dependencies = [
- "bh-lang",
- "bh-lang-graphql",
- "bh-lang-java",
- "bh-lang-ts",
- "bh-store",
- "bh-types",
- "bh-vcs",
- "blake3",
- "ignore",
- "rayon",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "bh-lang"
-version = "0.1.0"
-dependencies = [
- "bh-types",
- "thiserror",
-]
-
-[[package]]
-name = "bh-lang-graphql"
-version = "0.1.0"
-dependencies = [
- "bh-lang",
- "bh-types",
- "blake3",
-]
-
-[[package]]
-name = "bh-lang-java"
-version = "0.1.0"
-dependencies = [
- "bh-lang",
- "bh-types",
- "blake3",
- "tree-sitter",
- "tree-sitter-java",
-]
-
-[[package]]
-name = "bh-lang-ts"
-version = "0.1.0"
-dependencies = [
- "bh-lang",
- "bh-types",
- "blake3",
- "tree-sitter",
- "tree-sitter-typescript",
-]
-
-[[package]]
-name = "bh-mcp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bh-core",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "bh-store"
-version = "0.1.0"
-dependencies = [
- "bh-types",
- "rusqlite",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "bh-types"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "bh-vcs"
-version = "0.1.0"
-dependencies = [
- "git2",
- "thiserror",
-]
-
-[[package]]
 name = "bitflags"
 version = "2.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -875,6 +764,117 @@ name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
+name = "nexus-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "nexus-core",
+ "nexus-mcp",
+ "nexus-types",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "nexus-core"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "ignore",
+ "nexus-lang",
+ "nexus-lang-graphql",
+ "nexus-lang-java",
+ "nexus-lang-ts",
+ "nexus-store",
+ "nexus-types",
+ "nexus-vcs",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "nexus-lang"
+version = "0.1.0"
+dependencies = [
+ "nexus-types",
+ "thiserror",
+]
+
+[[package]]
+name = "nexus-lang-graphql"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "nexus-lang",
+ "nexus-types",
+]
+
+[[package]]
+name = "nexus-lang-java"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "nexus-lang",
+ "nexus-types",
+ "tree-sitter",
+ "tree-sitter-java",
+]
+
+[[package]]
+name = "nexus-lang-ts"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "nexus-lang",
+ "nexus-types",
+ "tree-sitter",
+ "tree-sitter-typescript",
+]
+
+[[package]]
+name = "nexus-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "nexus-core",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "nexus-store"
+version = "0.1.0"
+dependencies = [
+ "nexus-types",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "nexus-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "nexus-vcs"
+version = "0.1.0"
+dependencies = [
+ "git2",
+ "thiserror",
+]
 
 [[package]]
 name = "num-traits"

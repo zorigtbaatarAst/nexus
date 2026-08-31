@@ -1,0 +1,24 @@
+[package]
+name = "nexus-cli"
+description = "The bughunter binary: CLI and (from V1) MCP server. Composition root."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "bughunter"
+path = "src/main.rs"
+
+[dependencies]
+nexus-core.workspace = true
+nexus-mcp.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread"] }
+nexus-types.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

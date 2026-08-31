@@ -17,7 +17,7 @@ user asked for it.
    1. PLAN      ReproductionPlan { hypothesis, target, preconditions,
         │                          expected_failure, isolation, repetitions }
         ▼
-   2. EMIT      test written under .bughunter/generated-tests/BUG-104/
+   2. EMIT      test written under .nexus/generated-tests/BUG-104/
         │       through SafeWriter — production code is unreachable
         ▼
    3. RUN NOW   current revision, in the sandbox
@@ -65,10 +65,10 @@ writing a test with a syntax error.
 
 ## 3. Emit
 
-The generated test is written **only** under `.bughunter/generated-tests/BUG-<uid>/`:
+The generated test is written **only** under `.nexus/generated-tests/BUG-<uid>/`:
 
 ```
-.bughunter/generated-tests/BUG-104/
+.nexus/generated-tests/BUG-104/
 ├── BugHunter_BUG104_DuplicatePaymentTest.java
 ├── plan.json          # the ReproductionPlan that produced it
 └── README.md          # what this is, why it exists, how to delete it
@@ -125,7 +125,7 @@ run_baseline = execute(test, revision = baseline.commit)   # detached worktree, 
 ```
 
 The baseline run happens in a **detached git worktree** under
-`.bughunter/cache/worktrees/<sha>/`, created with `git worktree add --detach`, with the
+`.nexus/cache/worktrees/<sha>/`, created with `git worktree add --detach`, with the
 generated test copied in. The primary working tree is never checked out, stashed, or
 otherwise touched — a verification run that disturbs uncommitted work would be an
 unforgivable thing for a tool to do to a developer.
@@ -188,7 +188,7 @@ policy.execute = "none"      → generate the test, never run it (default until 
 ```
 
 Container defaults: repository mounted **read-only**, a writable overlay for
-`.bughunter/generated-tests` and the build cache, `--network=none` unless
+`.nexus/generated-tests` and the build cache, `--network=none` unless
 `allow_network = true`, memory and CPU caps, and a wall-clock timeout (default 600 s) after
 which the container is killed and the outcome is `inconclusive`.
 
@@ -235,7 +235,7 @@ detector: ai:agent  ·  anchor: mn.pay.PaymentService#createPayment
             isolation: Slice (@DataJpaTest + testcontainers postgres)
             repetitions: 3
 
-  emit      .bughunter/generated-tests/BUG-104/
+  emit      .nexus/generated-tests/BUG-104/
             BugHunter_BUG104_DuplicatePaymentTest.java
 
   run now   ./gradlew test --tests '*BugHunter_BUG104*'   → FAIL 3/3

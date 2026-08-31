@@ -55,7 +55,7 @@ back to a full ignore-aware walk and records `kind='full'` on the scan. Detectin
 silently producing a wrong diff would be far worse than a slow scan.
 
 With no git, or with `--paranoid`, the candidate set is the full walk: `ignore`-crate
-traversal honouring `.gitignore`, `.bughunterignore` and `config.toml` `include`/`exclude`.
+traversal honouring `.gitignore`, `.nexusignore` and `config.toml` `include`/`exclude`.
 
 **Verification.** For each candidate, cheapest test first:
 

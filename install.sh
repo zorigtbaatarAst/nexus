@@ -109,7 +109,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
 	done
 	[ "$found" -eq 1 ] || say "No bughunter installation found."
 	say ""
-	dim "Project data lives in each repository's .bughunter/ directory and was left alone."
+	dim "Project data lives in each repository's .nexus/ directory and was left alone."
 	exit 0
 fi
 

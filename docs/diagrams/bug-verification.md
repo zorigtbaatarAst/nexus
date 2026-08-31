@@ -11,7 +11,7 @@ flowchart TD
     POL -->|docker / host| PLAN
 
     PLAN["1 · PLAN<br/>hypothesis · target · preconditions<br/>trigger · expected_failure · isolation · repetitions"]
-    PLAN --> EMIT["2 · EMIT<br/>SafeWriter jail:<br/>.bughunter/generated-tests/BUG-104/<br/>production code unreachable"]
+    PLAN --> EMIT["2 · EMIT<br/>SafeWriter jail:<br/>.nexus/generated-tests/BUG-104/<br/>production code unreachable"]
 
     EMIT --> RUNNOW["3 · RUN NOW<br/>current revision, in the sandbox"]
     RUNNOW --> RUNBASE["4 · RUN BEFORE<br/>same test, baseline revision<br/>detached read-only git worktree"]

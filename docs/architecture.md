@@ -242,17 +242,17 @@ than good intentions.
 5. **`bh-lang-*` must not depend on `bh-store` or `bh-core`.** An analyzer takes source text
    and returns a `ParsedFile`; it never learns about scans or baselines.
    *Constraint 12: no language-specific logic in the core.*
-6. **`bh-verify` writes through `SafeWriter` only**, rooted at `.bughunter/generated-tests/`.
+6. **`bh-verify` writes through `SafeWriter` only**, rooted at `.nexus/generated-tests/`.
    *Constraint 10: never modify production code during verification.*
 
 ### On-disk layout
 
 ```
-<repo>/.bughunter/
+<repo>/.nexus/
 ├── config.toml          # committed — what to scan, language/framework overrides
 ├── policy.toml          # committed — permissions, sandbox, redaction rules
-├── bughunter.db         # local  — the knowledge store (SQLite, WAL)
-├── bughunter.db-wal
+├── nexus.db         # local  — the knowledge store (SQLite, WAL)
+├── nexus.db-wal
 ├── cache/               # local  — parse caches keyed by content hash
 ├── generated-tests/     # local  — the only path bh-verify may write to
 │   └── BUG-104/
@@ -287,7 +287,7 @@ writes. Readers (`impact`, `bugs`, `status`) never block.
 ```
 bughunter init
    detect() → project_profile          (language, framework, build, DB, containers)
-   create .bughunter/, migrate DB
+   create .nexus/, migrate DB
 
 bughunter scan                          [full]
    walk() → hash all files
@@ -409,7 +409,7 @@ that enforces it.
 | 3 | AI optional for deterministic functionality | `NullProvider` default; `bh-ai` default-features off |
 | 4 | First scan creates the baseline | `baselines` pointer table written by `scan` |
 | 5 | Rescans are incremental | Tiered cascade, [change-analysis.md](change-analysis.md) §2 |
-| 6 | Memory persists locally | SQLite at `.bughunter/bughunter.db` |
+| 6 | Memory persists locally | SQLite at `.nexus/nexus.db` |
 | 7 | Fingerprints prevent duplicates | `UNIQUE(project_id, fingerprint)` + alias resolution |
 | 8 | AI findings verified where possible | [verification-engine.md](verification-engine.md) |
 | 9 | Never send the whole repo to an LLM | `ContextBuilder` token budget; agent-as-provider default |

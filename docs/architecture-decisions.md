@@ -66,7 +66,7 @@ Project memory must survive scans, sessions and machines; be queryable with join
 and transactions; and add zero operational burden to a developer tool.
 
 ### Decision
-One SQLite file per project at `.bughunter/bughunter.db`, WAL mode. `bh-store` is the only
+One SQLite file per project at `.nexus/nexus.db`, WAL mode. `bh-store` is the only
 crate containing SQL.
 
 ### Alternatives considered

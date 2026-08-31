@@ -1,6 +1,6 @@
 # BugHunter — Data Model
 
-Storage is a single SQLite file per project at `.bughunter/bughunter.db`.
+Storage is a single SQLite file per project at `.nexus/nexus.db`.
 Rationale: [ADR-002](architecture-decisions.md#adr-002-sqlite-as-the-knowledge-store).
 
 ---
@@ -505,7 +505,7 @@ CREATE TABLE audit_events (
 
 `audit_events` stores a hash of any AI payload, never the payload itself. Storing the prompt
 would recreate, inside BugHunter's own database, exactly the secret-leak risk the redaction
-pass exists to prevent. Rows are mirrored to `.bughunter/audit.log` as JSONL so the log
+pass exists to prevent. Rows are mirrored to `.nexus/audit.log` as JSONL so the log
 survives a database reset and can be tailed.
 
 ---

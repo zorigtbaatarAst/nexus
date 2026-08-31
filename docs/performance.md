@@ -114,7 +114,7 @@ in the key the content hashes still match, nothing re-parses, and the index sile
 symbols the old grammar produced — with no error, indefinitely. `scans.tool_versions_json`
 makes the mismatch detectable and forces a re-parse of the affected language.
 
-Parse caches live in `.bughunter/cache/ast/<hash>.bin` as `bincode`, are content-addressed
+Parse caches live in `.nexus/cache/ast/<hash>.bin` as `bincode`, are content-addressed
 (so identical vendored files across modules parse once), and are pruned by LRU at a
 configurable cap (default 2 GB).
 

@@ -1,0 +1,22 @@
+[package]
+name = "nexus-core"
+description = "The Engine: all BugHunter business logic. Knows nothing of MCP, the CLI, or any AI provider."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nexus-types.workspace = true
+nexus-store.workspace = true
+nexus-vcs.workspace = true
+nexus-lang.workspace = true
+nexus-lang-java.workspace = true
+nexus-lang-ts.workspace = true
+nexus-lang-graphql.workspace = true
+blake3.workspace = true
+ignore.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

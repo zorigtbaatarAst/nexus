@@ -1,0 +1,12 @@
+[package]
+name = "nexus-lang-graphql"
+description = "Indexes .graphqls schema files. The schema is the contract both sides are generated from."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nexus-lang.workspace = true
+nexus-types.workspace = true
+blake3.workspace = true

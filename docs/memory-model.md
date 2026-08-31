@@ -1,7 +1,7 @@
 # BugHunter — Project Memory Model
 
 Memory is what makes the second scan cheaper than the first and the tenth scan smarter than
-the second. It lives in SQLite at `.bughunter/bughunter.db` and survives across scans,
+the second. It lives in SQLite at `.nexus/nexus.db` and survives across scans,
 sessions, agents and machines.
 
 **It is not conversation history.** A chat transcript is unqueryable, unbounded, unverifiable

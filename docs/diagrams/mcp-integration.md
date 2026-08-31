@@ -90,7 +90,7 @@ sequenceDiagram
     P-->>M: execute = "none"
     M->>M: write the test to disk anyway
     M->>M: append audit_events row
-    M-->>A: status permission_required<br/>requested_command · sandbox<br/>to_allow: set execute = "docker"<br/>test_written_to: .bughunter/generated-tests/BUG-104/
+    M-->>A: status permission_required<br/>requested_command · sandbox<br/>to_allow: set execute = "docker"<br/>test_written_to: .nexus/generated-tests/BUG-104/
     A->>H: "May I run this? Here is the exact command and the config line."
 ```
 

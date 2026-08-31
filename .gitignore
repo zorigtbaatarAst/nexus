@@ -3,12 +3,12 @@
 **/*.rs.bk
 
 # BugHunter's own local state, when it runs on itself
-.bughunter/bughunter.db
-.bughunter/bughunter.db-wal
-.bughunter/bughunter.db-shm
-.bughunter/cache/
-.bughunter/generated-tests/
-.bughunter/audit.log
+.nexus/bughunter.db
+.nexus/bughunter.db-wal
+.nexus/bughunter.db-shm
+.nexus/cache/
+.nexus/generated-tests/
+.nexus/audit.log
 
 # Editor and OS noise
 *.swp
