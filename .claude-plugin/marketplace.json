@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "nexus",
+  "description": "Nexus — persistent code intelligence, and the capabilities built on it",
+  "owner": {
+    "name": "Zorigtbaatar",
+    "url": "https://github.com/zorigtbaatarAst"
+  },
+  "plugins": [
+    {
+      "name": "nexus",
+      "source": "./",
+      "category": "development",
+      "description": "Persistent code intelligence: what changed, what it touches across the stack, and what is already known about this code.",
+      "homepage": "https://github.com/zorigtbaatarAst/nexus"
+    }
+  ]
+}

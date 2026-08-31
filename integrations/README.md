@@ -1,17 +1,34 @@
 # Integrations
 
+## Claude Code, as a plugin
+
+```
+/plugin marketplace add zorigtbaatarAst/nexus
+/plugin install nexus@nexus
+```
+
+That brings the MCP server, seven slash commands and a skill that tells the agent when to
+reach for Nexus unprompted. The manifest lives in [`.claude-plugin/`](../.claude-plugin/) at
+the repository root, with the commands in [`commands/`](../commands/) and the skill in
+[`skills/nexus/`](../skills/nexus/).
+
+Update it with `/plugin marketplace update nexus`, which is separate from updating the
+binary — the plugin carries prompts, the binary carries the intelligence.
+
+
+
 One MCP server, one tool set, every MCP-capable agent. There is **no per-agent code** here
 and none is planned — these are configuration snippets and prompt text.
 
 The test of whether this layer is thin enough: deleting this directory must cost no
 capability. Every tool stays callable; only the shorthand goes away.
 
-| Agent | File | Where it goes |
-|---|---|---|
-| Claude Code | [`claude-code/.mcp.json`](claude-code/.mcp.json) | your project root |
-| Codex | [`codex/config.toml`](codex/config.toml) | append to `~/.codex/config.toml` |
-| GitHub Copilot | [`copilot/mcp.json`](copilot/mcp.json) | `.vscode/mcp.json` |
-| Anything else | — | spawn `nexus mcp` and speak MCP over stdio |
+| Agent | How |
+|---|---|
+| **Claude Code** | install the plugin — see below — or `claude mcp add --scope user nexus -- nexus mcp` |
+| Codex | append [`codex/config.toml`](codex/config.toml) to `~/.codex/config.toml` |
+| GitHub Copilot | copy [`copilot/mcp.json`](copilot/mcp.json) to `.vscode/mcp.json` |
+| Anything else | spawn `nexus mcp` and speak MCP over stdio |
 
 ## What the agent gets
 

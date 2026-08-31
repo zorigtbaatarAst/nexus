@@ -1,0 +1,23 @@
+{
+  "name": "nexus",
+  "version": "0.2.0",
+  "description": "Persistent code intelligence. Nexus indexes a project once and remembers its structure, its history and what has gone wrong in it — then answers what changed, what that touches across the frontend/backend seam, and what is already known about the code you are about to edit. BugHunter, its first capability, finds Spring proxy mistakes, GraphQL fields no resolver serves, and credentials in source.",
+  "author": {
+    "name": "Zorigtbaatar"
+  },
+  "homepage": "https://github.com/zorigtbaatarAst/nexus",
+  "repository": "https://github.com/zorigtbaatarAst/nexus",
+  "license": "MIT",
+  "keywords": [
+    "code-intelligence",
+    "static-analysis",
+    "impact-analysis",
+    "java",
+    "spring",
+    "typescript",
+    "graphql"
+  ],
+  "commands": "./commands/",
+  "skills": "./skills/",
+  "mcpServers": "./mcp.json"
+}

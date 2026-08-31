@@ -2,9 +2,7 @@
   "mcpServers": {
     "nexus": {
       "command": "nexus",
-      "args": [
-        "mcp"
-      ]
+      "args": ["mcp"]
     }
   }
 }
