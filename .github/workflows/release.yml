@@ -47,6 +47,21 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      # A tag that disagrees with the workspace version ships a binary that lies about
+      # itself, and `nexus --version` is exactly what someone checks to decide whether they
+      # need to update. v0.2.0 was published reporting 0.1.0 before this existed.
+      - name: The tag must match the workspace version
+        shell: bash
+        run: |
+          set -eu
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          manifest=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          if [ "$tag" != "v$manifest" ]; then
+            echo "tag $tag but Cargo.toml says $manifest — bump the workspace version first"
+            exit 1
+          fi
+          echo "tag $tag matches Cargo.toml $manifest"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
