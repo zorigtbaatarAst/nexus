@@ -132,6 +132,10 @@ impl Engine {
     fn impact(&self, q: ImpactQuery)             -> Result<ImpactReport>;
     fn tests_for(&self, sel: SymbolSelector)     -> Result<Page<TestRef>>;
 
+    // symptom-driven investigation — the second entry point
+    fn investigate(&self, r: SymptomReport)      -> Result<Investigation>;
+    fn answer(&self, id: InvestigationId, a: Vec<Answer>) -> Result<Investigation>;
+
     // bugs
     fn find_bugs(&self, q: HuntQuery)            -> Result<HuntResult>;
     fn record_bug(&self, c: BugCandidate)        -> Result<BugRef>;   // agent writes back
@@ -146,6 +150,12 @@ impl Engine {
     fn facts(&self, q: FactQuery)                -> Result<Page<Fact>>;
 }
 ```
+
+Several methods return a `Result<T>` whose `T` may be a `Clarification` rather than a
+finished answer — `investigate` most often, but the variant is general. BugHunter refuses
+ambiguity by describing what it needs; it never picks a candidate and sounds certain about
+it. See [investigation.md](investigation.md) §7 and
+[ADR-015](architecture-decisions.md#adr-015-structured-clarification-instead-of-guessing).
 
 `Engine::new(project_root, policy, store, analyzers, ai)` is constructed at the composition
 root — `bh-cli::main` or `bh-mcp::serve`. The `ai` argument is
@@ -162,6 +172,8 @@ root — `bh-cli::main` or `bh-mcp::serve`. The `ai` argument is
 | `diff` | the tiered change-detection cascade |
 | `impact` | weighted bidirectional BFS + test selection |
 | `hunt` | detector orchestration; builds evidence bundles |
+| `investigate` | symptom anchoring, cross-stack tracing, suspect ranking |
+| `clarify` | measures ambiguity and generates the questions that resolve it |
 | `fingerprint` | bug identity, alias resolution, near-duplicate linking |
 | `lifecycle` | the bug status machine |
 | `memory` | facts: record, supersede, retrieve by relevance |
@@ -297,6 +309,13 @@ bughunter rescan                        [incremental]
 
 bughunter verify <id>
    plan → emit test → run now → run on baseline revision → judge
+
+bughunter investigate                   [symptom-driven — the second entry point]
+   SymptomReport from the agent's reading of a screenshot
+   anchor() → route · visible text · network · console  →  candidate symbols
+   if ambiguous → clarification_required, with what is already resolved
+   trace() → forward across the calls_http seam into the backend
+   rank()  → on_trace × recency × prior_bugs × coverage_gap × contract_penalty
 ```
 
 At no point is the repository sent anywhere. The largest thing that ever leaves the machine
@@ -374,10 +393,14 @@ bughunter/
 | 20 | ADRs | [architecture-decisions.md](architecture-decisions.md) |
 | 21 | Repository structure | this document, §7 |
 | 22 | MVP → V1 → V2 roadmap | [roadmap.md](roadmap.md) |
+| + | Symptom-driven investigation | [investigation.md](investigation.md) |
+| + | Cross-stack tracing and contract mismatch | [investigation.md](investigation.md) §3, §6 |
+| + | Clarification protocol | [investigation.md](investigation.md) §7 |
 
 ## 9. Constraint traceability
 
-The brief's 15 hard constraints, each mapped to the mechanism that enforces it.
+The brief's 15 hard constraints plus the two added later, each mapped to the mechanism
+that enforces it.
 
 | # | Constraint | Enforced by |
 |---|---|---|
@@ -396,3 +419,5 @@ The brief's 15 hard constraints, each mapped to the mechanism that enforces it.
 | 13 | SQLite as initial store | [ADR-002](architecture-decisions.md#adr-002-sqlite-as-the-knowledge-store) |
 | 14 | Deterministic evidence over AI assumptions | `BugCandidate` without `CodeRef` evidence is rejected at the boundary |
 | 15 | Professional DX, not a research prototype | [cli-spec.md](cli-spec.md), `doctor`, `--json`, exit codes |
+| 16 | A screenshot plus a description finds bugs across front and back | [investigation.md](investigation.md); the `calls_http` seam |
+| 17 | Ask when a task is incomplete or under-specified | `clarification_required`; never a silent guess |

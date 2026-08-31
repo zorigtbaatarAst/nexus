@@ -29,11 +29,18 @@ the evidence is deterministic, BugHunter is still a useful tool with the AI swit
 ## How it works
 
 ```
-bughunter init      detect language, framework, build system, databases, containers
-bughunter scan      index files, symbols, dependencies, tests → establish a baseline
-bughunter rescan    diff against the baseline → changed symbols → impact → hunt
-bughunter verify    generate a reproduction test, run it, run it on the baseline, judge
+bughunter init         detect language, framework, build system, databases, containers
+bughunter scan         index files, symbols, dependencies, tests → establish a baseline
+bughunter rescan       diff against the baseline → changed symbols → impact → hunt
+bughunter investigate  a described screenshot → UI anchor → across the seam → suspects
+bughunter verify       generate a reproduction test, run it, run it on the baseline, judge
 ```
+
+There are two entry points. `rescan` answers *what did this commit break*. `investigate`
+answers the way bugs actually arrive — someone points at a screen and says *this number is
+wrong* — by anchoring the symptom to a component, crossing the frontend/backend seam at the
+HTTP contract, and ranking suspects down to the repository method. The agent reads the
+screenshot; BugHunter never receives it.
 
 The first scan is the only one that reads the whole repository. A rescan costs what changed,
 not what exists: a no-op rescan on a 5 MLOC monorepo targets under two seconds.
@@ -115,6 +122,9 @@ args    = ["mcp"]
    truncated results say so; an unreachable baseline triggers a full scan *and says it did*.
 6. **`FIXED` requires evidence.** A bug not seen in an incremental scan was not examined —
    it is not fixed.
+7. **Ask, do not guess.** When a request is under-specified, any tool returns concrete
+   questions — each with the reason it is being asked — instead of picking a candidate and
+   sounding certain about it.
 
 ---
 
@@ -127,6 +137,7 @@ args    = ["mcp"]
 | [data-model.md](docs/data-model.md) | entities, the immutability doctrine, full SQLite DDL, indexes |
 | [memory-model.md](docs/memory-model.md) | project / code / historical / bug memory, and facts |
 | [change-analysis.md](docs/change-analysis.md) | change detection, impact analysis, bug fingerprinting |
+| [investigation.md](docs/investigation.md) | screenshot to suspect: UI anchoring, the cross-stack seam, the clarification protocol |
 | [verification-engine.md](docs/verification-engine.md) | plan → emit → run → run baseline → judge |
 | [mcp-api.md](docs/mcp-api.md) | tool contracts, budgeting, permission gating, client config |
 | [ai-integration.md](docs/ai-integration.md) | `AiProvider`, agent-as-provider, redaction, Claude Code integration |

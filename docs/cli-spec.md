@@ -19,6 +19,7 @@ bughunter bugs                    # list findings
 bughunter bug <id>                # one finding in full
 bughunter verify <id>             # generate + run a reproduction test
 bughunter history                 # scan and bug history
+bughunter investigate             # symptom-driven: from a described screenshot to suspects
 bughunter doctor                  # environment and configuration diagnosis
 bughunter mcp                     # run as an MCP server on stdio
 ```
@@ -42,6 +43,34 @@ bughunter changes --since a81f92c --entity symbol --type modified
 bughunter bugs --status VERIFIED --severity critical --component PaymentService
 bughunter verify BUG-104 --repetitions 5 --sandbox docker --promote
 ```
+
+### Investigating a symptom
+
+```bash
+bughunter investigate \
+  --description "cart total shows 0 but 3 items are listed" \
+  --expected    "total should be 45,000" \
+  --route       /checkout \
+  --text        "Нийт дүн" --text "0 ₮" \
+  --network     "GET /api/cart 200" \
+  --since       yesterday
+```
+
+On a TTY this prompts interactively when the symptom is ambiguous. Under `--json` it returns
+the same structured clarification an MCP client would receive, and `--answers` supplies the
+replies non-interactively:
+
+```bash
+bughunter investigate --json --answers which_area=TotalsPanel
+```
+
+One mechanism, two presentations. The CLI therefore cannot drift into asking something the
+MCP path silently assumes — a class of divergence that is otherwise discovered only when a
+user reports different answers from the two surfaces.
+
+There is no `--screenshot` flag that analyzes an image. `--screenshot <path>` records the
+file's path and hash as provenance on any resulting bug, and nothing opens it: the agent
+reads the image, BugHunter reads the index.
 
 ---
 
@@ -78,6 +107,7 @@ becomes an incident.
 | 3 | **findings at or above `--fail-on <severity>`** — the CI gate |
 | 4 | policy denied the requested action |
 | 5 | no baseline; run `bughunter scan` first |
+| 6 | clarification required and none supplied — see the printed questions, or pass `--answers` |
 
 Code 3 is what makes BugHunter usable in a pipeline:
 

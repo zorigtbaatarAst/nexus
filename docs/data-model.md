@@ -22,7 +22,7 @@ projects ─┬─ project_profile        detected language / framework / build 
           └─ audit_events           every exec and every AI call
 ```
 
-20 tables. `changes` hangs off `scans` rather than `projects` — a change is only meaningful
+21 tables plus one FTS5 virtual table. `changes` hangs off `scans` rather than `projects` — a change is only meaningful
 relative to the scan that observed it.
 
 ---
@@ -61,9 +61,9 @@ reference them and history must not develop holes. A file removed from the repo 
 
 ### 2c. Derived cache — droppable and recomputable
 
-`symbol_edges` · `test_coverage`
+`symbol_edges` · `test_coverage` · `ui_strings` (+ its FTS index)
 
-Both are functions of (source, index, analyzer version). `bughunter rescan --rebuild-graph`
+All three are functions of (source, index, analyzer version). `bughunter rescan --rebuild-graph`
 truncates and recomputes them. They are stored rather than computed on demand purely for
 query speed, and nothing in the ledger depends on them.
 
@@ -233,14 +233,21 @@ CREATE TABLE symbol_edges (             -- the dependency graph
   dst_fqn_hint      TEXT,                -- kept when unresolved, re-resolved later
   edge_type         TEXT    NOT NULL CHECK (edge_type IN
                       ('calls','implements','extends','injects','routes',
-                       'persists','reads','writes','emits','imports','tests')),
+                       'persists','reads','writes','emits','imports','tests',
+                       'calls_http','renders')),
   resolution        TEXT    NOT NULL CHECK (resolution IN
-                      ('exact','framework','heuristic','unresolved')),
+                      ('exact','framework','heuristic','contract','unresolved')),
   confidence        REAL    NOT NULL CHECK (confidence BETWEEN 0 AND 1),
   site_line         INTEGER,
   last_seen_scan_id INTEGER NOT NULL REFERENCES scans(id)
 );                                                        -- DERIVED
 ```
+
+`calls_http` is the edge that crosses the frontend/backend seam, and `resolution='contract'`
+marks an edge produced by matching a canonical `METHOD /path/:p` on both sides. It needs no
+table of its own: a backend route is already a symbol with `kind='route'`, so a frontend call
+site emits an edge with `dst_fqn_hint = 'GET /api/cart/:p'` and the existing Tier-3
+unresolved sweep matches it. See [investigation.md](investigation.md) §3.
 
 Carrying `resolution` and `confidence` on every edge is what lets an impact result explain
 *why* it believes something is affected, and lets a calling agent discount a chain that
@@ -341,7 +348,39 @@ CREATE TABLE test_runs (
 parsed) beats `static` (the test calls the symbol through the graph) beats `naming`
 (`PaymentServiceTest` → `PaymentService`). Ranked test selection needs to know which it has.
 
-### 3.6 Bug intelligence
+### 3.6 UI surface index
+
+```sql
+CREATE TABLE ui_strings (
+  id          INTEGER PRIMARY KEY,
+  project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+  symbol_id   INTEGER REFERENCES symbols(id) ON DELETE SET NULL,
+  text        TEXT    NOT NULL,
+  kind        TEXT    NOT NULL CHECK (kind IN
+                ('literal','i18n_key','i18n_value','test_id','aria_label','placeholder')),
+  locale      TEXT,                    -- for i18n_value rows
+  line        INTEGER,
+  last_seen_scan_id INTEGER NOT NULL REFERENCES scans(id)
+);                                                        -- DERIVED
+
+CREATE VIRTUAL TABLE ui_strings_fts USING fts5(
+  text, content='ui_strings', content_rowid='id', tokenize='unicode61'
+);
+```
+
+Every user-visible string in the frontend: JSX text nodes, `aria-label`, `data-testid`,
+`placeholder`, and i18n keys with their values in **every** locale. This is what turns a
+label read off a screenshot into a component anchor.
+
+Indexing every locale is the point, not thoroughness for its own sake: the screenshot may be
+in Mongolian while the source holds an English i18n key. Matching the *value* reaches the
+key, and the key reaches the component. Without the locale rows, a non-English UI is
+unanchorable by text and the investigation entry point loses its strongest signal.
+
+The table is `DERIVED` — droppable and rebuilt from source, like `symbol_edges`.
+
+### 3.7 Bug intelligence
 
 ```sql
 CREATE TABLE bugs (
@@ -354,7 +393,7 @@ CREATE TABLE bugs (
   bug_type           TEXT    NOT NULL CHECK (bug_type IN
                        ('concurrency','transaction','null-safety','security','logic',
                         'performance','error-handling','data-consistency','api-contract',
-                        'resource-leak','regression')),
+                        'resource-leak','regression','ui-state')),
   component          TEXT,                   -- 'PaymentService'
   severity           TEXT    NOT NULL CHECK (severity IN ('critical','high','medium','low','info')),
   confidence         REAL    NOT NULL CHECK (confidence BETWEEN 0 AND 1),
@@ -430,7 +469,7 @@ CREATE TABLE bug_relations (
 );                                                        -- MUTABLE
 ```
 
-### 3.7 Memory and audit
+### 3.8 Memory and audit
 
 ```sql
 CREATE TABLE facts (
@@ -503,6 +542,11 @@ CREATE INDEX idx_bugs_component      ON bugs(project_id, component);
 CREATE INDEX idx_occ_scan            ON bug_occurrences(scan_id);
 CREATE INDEX idx_occ_bug             ON bug_occurrences(bug_id, scan_id DESC);
 CREATE INDEX idx_verif_bug           ON bug_verifications(bug_id, attempt DESC);
+
+-- ui surface
+CREATE INDEX idx_ui_strings_file    ON ui_strings(file_id);
+CREATE INDEX idx_ui_strings_symbol  ON ui_strings(symbol_id);
+CREATE INDEX idx_ui_strings_kind    ON ui_strings(project_id, kind);
 
 -- memory
 CREATE INDEX idx_facts_subject       ON facts(project_id, subject) WHERE invalidated_at IS NULL;

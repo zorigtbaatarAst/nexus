@@ -534,3 +534,204 @@ If packs end up as thin annotation lookups in practice, collapse them into the a
 instead they grow to carry real semantics — full Spring context resolution, ORM query
 analysis — promote them to first-class plugins with their own versioning, and consider
 loading them dynamically so a pack can ship without a BugHunter release.
+
+---
+
+## ADR-013 — Symptom-driven investigation as a second entry point
+
+### Why it is needed
+Everything designed so far starts from a change: *what did this commit break*. That is not
+how bugs arrive. They arrive as a person pointing at a screen saying "this number is wrong",
+often long after the commit that caused it, and frequently with no idea which side of the
+stack is at fault.
+
+### Decision
+A second entry point, `investigate`, seeded by a `SymptomReport` — a description plus
+observations the agent read off a screenshot — which is anchored to symbols deterministically,
+traced across the frontend/backend seam, and ranked into suspects. It converges with the
+change-driven path: same fingerprinting, same lifecycle, same verification.
+
+### Alternatives considered
+
+**Leave it to the agent.** An agent with file access can already grep for a label and read
+components. Rejected because it cannot cross the seam: nothing in the source text connects
+`fetch('/api/cart')` in one repository to `@GetMapping` in another, and reconstructing that
+by reading files costs an enormous amount of context to get a graph BugHunter already has.
+
+**A separate tool.** Clean, and it would duplicate the index, the fingerprints and the
+verification engine — and produce a second bug database that disagrees with the first.
+
+**Extend `impact` with a UI target.** Tempting, and wrong: `impact` answers "what does
+changing X affect", which is forward reasoning from a known symbol. Investigation is
+*backward* reasoning from an unknown one, and the hard part is the anchoring, which `impact`
+has no concept of.
+
+### Advantages
+Uses the index the product already builds, so the marginal cost is one table and one edge
+type. Reaches bugs the change-driven path structurally cannot — anything older than the
+baseline, or introduced by data rather than code. Makes the whole index pay off for the
+person who has a screenshot and no commit to blame. Converges into the existing lifecycle
+rather than forking it.
+
+### Disadvantages
+Anchoring is heuristic and will sometimes point at the wrong component — mitigated by the
+clarification protocol rather than by pretending to precision. Requires frontend framework
+packs, which are a real body of work. The trace is only as good as the seam resolution, which
+degrades on dynamically constructed URLs. A second entry point is a second set of failure
+modes to explain.
+
+### When to change it
+If anchoring accuracy on the golden fixtures cannot be pushed past roughly 70 % without a
+clarifying question, invert the interaction: lead with the questions instead of attempting
+an anchor first. If cross-repo estates dominate, the seam becomes a service-graph problem and
+this merges into the V2 cross-repo work.
+
+---
+
+## ADR-014 — Join the stack at the HTTP contract
+
+### Why it is needed
+The dependency graph stops at every language boundary. A TypeScript `fetch()` and a Java
+`@PostMapping` are unrelated symbols, so no traversal can get from a UI symptom to a
+repository method. Something has to join them.
+
+### Decision
+Join at the HTTP contract. Both framework packs already extract route data; a resolution tier
+canonicalizes both sides to `METHOD /path/:p` and emits a `calls_http` edge with
+`resolution = 'contract'`. A backend route is already a symbol with `kind='route'`, so the
+existing unresolved-edge sweep does the matching with no new tables.
+
+### Alternatives considered
+
+**A shared schema or IDL as the source of truth.** Correct where one exists, and most
+codebases do not have one, or have one that has drifted. OpenAPI is therefore used as a
+*third source of evidence* — and a spec disagreeing with its handler is itself a finding —
+never as the join mechanism.
+
+**Runtime tracing / OpenTelemetry.** Perfectly accurate, and it requires the system to be
+running, instrumented and reproducing the bug. A static tool that only works on a live
+system is not a static tool.
+
+**Name-based heuristics** (`CartService` ↔ `useCart`). Cheap, and wrong often enough to be
+worse than nothing, since a false seam edge produces a confidently wrong trace.
+
+**Do not cross the seam; report the two sides separately.** Honest, and it abandons the
+question the user actually asked, which is *why is this number wrong* — an answer that stops
+at the network boundary is not an answer.
+
+### Advantages
+Works on any codebase that speaks HTTP, with no instrumentation and nothing running. Reuses
+the existing `kind='route'` symbol, `dst_fqn_hint` and the Tier-3 sweep, so the marginal
+schema cost is zero. Unlocks the contract-mismatch detector, which finds a large and very
+common bug class with no model at all. Path canonicalization is positional, so the two sides
+need not agree on parameter names.
+
+### Disadvantages
+Dynamically constructed URLs (`fetch(base + path)` where `path` is computed) will not
+resolve. Gateway rewrites must be configured in `config.toml` or the join silently misses —
+mitigated by reporting unmatched calls rather than dropping them. GraphQL, gRPC and message
+queues are not covered by this mechanism at all.
+
+### When to change it
+Add per-protocol join tiers when a target codebase is GraphQL-first (join on operation name
+and selection set) or gRPC-first (join on the `.proto` service and method — considerably
+easier, since there genuinely is a shared IDL). The `calls_http` edge type becomes
+`calls_rpc` alongside it; nothing else moves.
+
+---
+
+## ADR-015 — Structured clarification instead of guessing
+
+### Why it is needed
+A symptom report is often under-specified. Four components on a route render a total; the
+description does not say which. BugHunter must do something, and picking one silently is the
+worst available option — it produces a confident wrong answer that nobody can identify as a
+guess.
+
+### Decision
+Any tool may return `clarification_required` instead of a result: what is already resolved,
+concrete questions each carrying a `why` and file-path options, and `can_proceed_without`
+with the confidence that proceeding would yield. Answers resume the investigation by id.
+
+### Alternatives considered
+
+**Guess the most likely candidate and report low confidence.** Standard practice, and it
+relies on a human noticing a number. In practice the headline is read and the confidence is
+not, so a 0.35 guess gets acted on as a finding.
+
+**Return an error.** Honest and useless: it discards the anchoring work already done and
+tells the caller nothing about what would help.
+
+**Return all candidates and let the agent choose.** Reasonable, and it makes the agent guess
+instead — with less information than BugHunter has, since BugHunter measured the ambiguity.
+Retained as the `can_proceed_without: true` path, where the caller may explicitly accept the
+lower confidence.
+
+**Free-text "please clarify".** The agent must then invent what to ask, and the answer comes
+back in a shape nothing can consume.
+
+### Advantages
+Ambiguity is refused rather than guessed at. The `why` on each question means the human
+learns what evidence matters — a Network tab status, say — and supplies it unprompted next
+time. Resolved state is returned with the question, so no work is thrown away.
+`can_proceed_without` keeps soft ambiguity from becoming a hard block. It is the same
+structured-refusal shape as `permission_required`, so it is one mechanism to learn.
+
+### Disadvantages
+Questions generated from a template rather than from measured ambiguity would train people to
+ignore them — the rule against that is a rule, and rules erode. A round trip costs latency.
+Non-interactive callers (CI) need a policy for what to do with a question, which is
+`--answers` or accept the degraded confidence.
+
+### When to change it
+If telemetry-free observation shows users habitually accepting `can_proceed_without` rather
+than answering, the questions are not earning their round trip: either the anchoring must
+improve or the questions must get sharper. If a question is answered the same way nine times
+out of ten, it should become a configuration default instead.
+
+---
+
+## ADR-016 — The agent reads the image; BugHunter never receives it
+
+### Why it is needed
+The investigation entry point starts from a screenshot. Something must turn pixels into
+observations, and where that happens determines what BugHunter becomes.
+
+### Decision
+The calling agent reads the image and passes a structured `SymptomReport`. BugHunter accepts
+an optional path and hash for the screenshot purely as provenance on the bug record, and
+never opens it.
+
+### Alternatives considered
+
+**Embed a vision model.** Hundreds of megabytes, a GPU expectation, and a hard dependency in
+a tool whose distribution story is "one 12 MB static binary you can scp".
+
+**Bundle an OCR engine (Tesseract or similar).** Lighter, and it reads text without
+understanding a screen — it cannot tell that the number next to the total is the wrong one,
+which is the entire content of the user's complaint.
+
+**Accept the image and forward it to a configured AI provider.** Coherent with the direct
+provider path, and it makes BugHunter responsible for transmitting a screenshot that may
+contain customer data, production identifiers or credentials, from a component whose redaction
+pass works on text.
+
+### Advantages
+Consistent with [ADR-005](#adr-005-agent-as-ai-provider-by-default): the reasoning lives with
+the agent that already has a model and a paying user. Keeps the binary small and the
+dependency tree clean. Keeps a whole class of sensitive data out of BugHunter's
+responsibility. Works identically with any agent that can read an image, and degrades
+gracefully to a text-only report for one that cannot — a description plus a route is still a
+usable seed.
+
+### Disadvantages
+Observation quality varies by agent, and BugHunter cannot verify that the reported visible
+text actually appears in the screenshot. The CLI has no image path at all, so a terminal user
+must type observations themselves. A mis-transcribed label produces a confidently wrong
+anchor — mitigated by requiring anchors to converge before proceeding without a question.
+
+### When to change it
+If agents prove unreliable at transcription in practice, add a *verification* step rather
+than a vision stack: ask the agent for the label's bounding box or surrounding text and check
+that the combination exists in `ui_strings`. That keeps the vision outside and adds a
+deterministic cross-check inside, which is the shape the rest of the product already uses.

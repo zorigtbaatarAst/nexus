@@ -77,6 +77,13 @@ The full loop. This is the release the product is designed around.
 - Redaction pass and the audit log.
 - `ClaudeProvider` and `OpenAIProvider` behind features, for headless CLI and CI.
 
+**Symptom-driven investigation** — the second entry point, [investigation.md](investigation.md)
+- Frontend framework packs: Next.js, React Router, Angular, Vue route tables.
+- `ui_strings` + FTS5 over labels, `aria-label`, `data-testid` and i18n values in every locale.
+- HTTP call-site extraction (`fetch`, `axios`, generated clients) and the `calls_http` seam.
+- Cross-stack contract mismatch detection — deterministic, no model.
+- The clarification protocol, surfaced identically over MCP and the CLI.
+
 **Languages** — Python and Rust analyzers, with Django/FastAPI and axum/sqlx packs.
 
 **CLI** — `bugs` `bug` `verify` `history` `hunt` `explain` `ignore` `fact` `export` `import`
@@ -92,8 +99,14 @@ config snippets for Codex and Copilot.
 - The rename commit does not duplicate the bug found before it.
 - A candidate with fabricated evidence is rejected and counted.
 - `policy.execute = "none"` yields `permission_required` over MCP, never an execution.
-- Every one of the brief's 15 constraints has a passing test, per the traceability table in
+- Every one of the brief's constraints has a passing test, per the traceability table in
   [architecture.md](architecture.md) §9.
+- On a `next-storefront` fixture whose backend renames a DTO field, `investigate` with the
+  visible label and the route reaches the contract mismatch **without a model**, and reaches
+  it from a Mongolian label through the i18n value index.
+- When two components on a route both render the reported label, `investigate` returns a
+  question rather than a candidate — asserted, because a template-generated question would
+  pass a looser test.
 
 ---
 
@@ -113,7 +126,8 @@ first**. Each item names its trigger.
 | Monorepo sharding, per-module databases | full scan > 30 min, or CI write contention |
 | CI mode: PR annotations, GitHub/GitLab output | adoption in pipelines |
 | Team-shared bug database (server-backed store) | more than one developer maintaining the same findings |
-| Cross-repo service graph | microservice estates where impact crosses repositories |
+| Cross-repo service graph | microservice estates where the seam crosses repositories |
+| GraphQL and gRPC join tiers | a target codebase is GraphQL- or gRPC-first rather than REST |
 | Archival of aged ledger rows | database growth becomes a real complaint |
 | Additional languages (Go, C#, Kotlin, PHP) | user demand; each is one crate behind `LanguageAnalyzer` |
 | HTTP/SSE MCP transport | a hosted or multi-client deployment |

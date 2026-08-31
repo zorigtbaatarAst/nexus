@@ -9,6 +9,12 @@ A change-aware software intelligence system: index a codebase once, keep a basel
 what changed on rescan, compute the blast radius, find bugs in the affected region, and prove
 them by generating and running a reproduction test.
 
+It has **two entry points**, and confusing them is the fastest way to design something wrong.
+`rescan` is change-driven — forward from a known changed symbol. `investigate` is
+symptom-driven — backward from an unknown one, seeded by what an agent read off a screenshot.
+The hard part of the second is *anchoring*, which the first has no concept of. See
+[`docs/investigation.md`](docs/investigation.md).
+
 **Status: architecture only.** `docs/` is complete; no code exists. Do not start implementing
 outside the MVP scope in [`docs/roadmap.md`](docs/roadmap.md) — the design deliberately
 defers things that look easy and are not.
@@ -74,7 +80,18 @@ that is hard to attribute.
   means the region was not examined. Treating absence as a fix silently closes real bugs.
 
 - **Confidence from a model is clamped at 0.75.** Only the verification engine can go higher,
-  and only by reproducing the bug.
+  and only by reproducing the bug. Note that a **contract-mismatch finding is not clamped**:
+  it scores 0.90 because no model was asked — both sides are indexed and comparing them is a
+  join.
+
+- **BugHunter never opens the screenshot.** `SymptomReport.screenshot` is a path and a hash
+  recorded as provenance on the bug. Adding an OCR or vision dependency to read it would put
+  a whole class of sensitive data inside a component whose redaction pass works on text.
+
+- **`clarification_required` is a result, not an error.** It carries what is already
+  resolved, so no work is discarded, and `can_proceed_without` separates "cannot proceed"
+  from "can proceed at 0.35". Collapsing those two turns every soft ambiguity into a hard
+  block, and a tool that blocks constantly gets scripted around.
 
 - **A `BugCandidate` with empty `evidence` is rejected, not down-ranked.** Rejections are
   counted and reported, because a silently discarded finding is indistinguishable from a
@@ -104,6 +121,20 @@ that is hard to attribute.
 
 - **stdout is results, stderr is everything else.** `--json | jq` must work with `-v` on.
 
+- **Never generate a clarifying question from a template.** Ask only when the ambiguity was
+  actually measured — one anchor candidate means no question. Asking something BugHunter
+  already knows is how a tool teaches people to ignore its questions, and once that happens
+  the mechanism is dead.
+
+- **`ui_strings` must index every locale's i18n values, not just keys.** The screenshot may
+  be in Mongolian while the source holds an English key. Matching the value reaches the key,
+  and the key reaches the component. Index keys only and a non-English UI becomes
+  unanchorable by text, which removes the strongest investigation signal.
+
+- **An unmatched `calls_http` edge is reported, never dropped.** It means a dead endpoint, an
+  unconfigured gateway rewrite, or a service outside the repo — all three worth knowing. A
+  silently dropped seam edge makes the trace lie by omission.
+
 ## Where to look
 
 | Question | Document |
@@ -113,6 +144,7 @@ that is hard to attribute.
 | what does the schema look like | [data-model.md](docs/data-model.md) |
 | how does rescan avoid re-parsing | [change-analysis.md](docs/change-analysis.md) §2 |
 | how is a bug proven | [verification-engine.md](docs/verification-engine.md) |
+| screenshot → suspect, and the seam | [investigation.md](docs/investigation.md) |
 | what can an agent call | [mcp-api.md](docs/mcp-api.md) |
 | what is safe to execute | [security.md](docs/security.md) §3–4 |
 | what should I build first | [roadmap.md](docs/roadmap.md) |

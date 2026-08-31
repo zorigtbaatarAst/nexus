@@ -52,8 +52,15 @@ form of the brief's "do not implement important functionality only inside MCP ha
 | `bughunter_get_bug_history` | read | `bug_history` |
 | `bughunter_get_regressions` | read | `regressions` |
 | `bughunter_record_fact` | write | `record_fact` |
+| `bughunter_investigate` | read+ai | `investigate` |
+| `bughunter_answer` | read+ai | `answer` |
 
-The eleven tools named in the brief, plus five: `get_symbol` and `get_tests_for` (agents ask
+`bughunter_investigate` is the symptom-driven entry point: the agent reads a screenshot,
+passes what it observed, and gets back a cross-stack trace with ranked suspects — or a
+question. `bughunter_answer` resumes an investigation by id.
+See [investigation.md](investigation.md).
+
+The eleven tools named in the brief, plus seven: `get_symbol` and `get_tests_for` (agents ask
 for these constantly and would otherwise re-derive them from `get_impact`), `scan_status`
 (long operations, §4), `record_bug` and `record_fact` (the agent-as-provider write-back path
 — without them an agent's reasoning evaporates when the session ends).
@@ -157,7 +164,54 @@ actor (`mcp:claude-code`), whether or not it was permitted.
 
 ---
 
-## 6. Errors
+## 6. Clarification
+
+BugHunter must ask when a request is under-specified rather than pick a candidate and sound
+certain about it. Any tool may return this in place of a result — `bughunter_investigate`
+most often, but the variant is general.
+
+```json
+{
+  "status": "clarification_required",
+  "investigation_id": "inv-0142",
+  "reason": "the symptom anchors to four components on this route",
+  "resolved_so_far": {
+    "route": "/checkout",
+    "backend_reachable": ["CartController#get", "PricingService#totals"],
+    "candidates": ["CartSummary", "CartLineItems", "PromoBanner", "TotalsPanel"]
+  },
+  "questions": [
+    { "id": "which_area",
+      "ask": "Which part of the page shows the wrong number — the line items, or the summary panel?",
+      "options": ["CartLineItems  src/checkout/CartLineItems.tsx",
+                  "TotalsPanel    src/checkout/TotalsPanel.tsx"],
+      "why": "Both render a total, and they call different endpoints — /api/cart and /api/pricing.",
+      "required": true }
+  ],
+  "can_proceed_without": true,
+  "confidence_if_proceeding": 0.35
+}
+```
+
+Five rules keep this useful rather than irritating:
+
+- **Questions come from measured ambiguity, never a template.** One candidate means no
+  question. Asking something BugHunter already knows is how a tool teaches people to ignore
+  its questions.
+- **Every question carries `why`**, so the agent can relay what would actually help instead
+  of the human guessing at what the tool wants.
+- **Options are concrete**, with file paths — an answer is a selection, not an essay.
+- **`can_proceed_without` separates two situations**: cannot proceed at all, versus can
+  proceed at confidence 0.35. Collapsing them turns every soft ambiguity into a hard block,
+  and a tool that blocks constantly gets scripted around.
+- **Resolved state comes back with the question**, so no work is discarded and the caller can
+  see the tool is not starting from nothing.
+
+The shape deliberately mirrors `permission_required` in §5. Both say the same thing: when
+BugHunter must not proceed on its own, it returns a structured description of what it needs —
+not an error, and not a guess.
+
+## 7. Errors
 
 Domain failures are results, not protocol errors. An agent can act on a result; a JSON-RPC
 error just makes it retry.
@@ -176,7 +230,7 @@ Kinds: `no_project`, `no_baseline`, `scan_in_progress`, `unknown_symbol`, `unkno
 
 ---
 
-## 7. Client configuration
+## 8. Client configuration
 
 The same server, four ways of pointing at it.
 
@@ -204,7 +258,7 @@ snippets and prompt text only. If a new agent supports MCP, it is already suppor
 
 ---
 
-## 8. A typical agent session
+## 9. A typical agent session
 
 ```
 agent → bughunter_get_project_context          "what am I looking at"
@@ -231,3 +285,31 @@ agent → bughunter_verify_bug { id: "BUG-104" }
 Note what never happens: no file is uploaded, no repository is traversed by the agent, and
 no model is called by BugHunter. The agent brought the reasoning; BugHunter brought the
 evidence, the history and the proof.
+
+## 10. A screenshot session
+
+```
+  human → agent   [screenshot] "the cart total shows 0, but there are 3 items"
+
+agent → bughunter_investigate { description, route: "/checkout",
+                                visible_text: ["Нийт дүн","0 ₮"],
+                                network: [{method:"GET",path:"/api/cart",status:200}] }
+      ← clarification_required · 4 candidate components · 2 questions with `why`
+        can_proceed_without: true, confidence_if_proceeding 0.35
+
+agent → human    "Which part — the line items, or the summary panel at the bottom?
+                  They call different endpoints."
+human → agent    "the summary panel"
+
+agent → bughunter_answer { investigation_id: "inv-0142", answers: [...] }
+      ← trace   TotalsPanel → useCart → [calls_http GET /api/cart/:p]
+                → CartController#get → CartService#totals → CartRepository → cart_items
+        suspects  CartService#totals 0.81  (changed yesterday, no covering test)
+                  CartDto.totalAmount 0.74  CONTRACT MISMATCH
+        finding   BUG-118 · api-contract · detector: contract · confidence 0.90
+                  backend serializes `total_amount`; TotalsPanel.tsx:34 reads `totalAmount`
+```
+
+The agent read the image; BugHunter never received it. And the finding that explains the
+symptom was produced by a join between two indexed sides, with **no model involved** — which
+left the agent's reasoning free for the part that genuinely needs judgement.
