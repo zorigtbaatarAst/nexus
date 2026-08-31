@@ -106,11 +106,18 @@ jobs:
         run: |
           set -eu
           version="${{ github.event.inputs.tag || github.ref_name }}"
+
+          # Anything below 1.0 is published as a pre-release. Bug detection, verification
+          # and the MCP server are still V1, and a plain "release" would overstate that to
+          # anyone who finds the repository.
+          prerelease=""
+          case "$version" in v0.*) prerelease="--prerelease" ;; esac
+
           # Re-running a release must update its assets rather than fail.
           if gh release view "$version" >/dev/null 2>&1; then
             gh release upload "$version" dist/* --clobber
           else
-            gh release create "$version" dist/* \
+            gh release create "$version" dist/* $prerelease \
               --title "BugHunter $version" \
               --notes "Install:
 
@@ -118,7 +125,22 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh
           \`\`\`
 
+          Then:
+
+          \`\`\`
+          cd /path/to/your/project
+          bughunter scan       # index it and set a baseline
+          bughunter rescan     # what changed, and what it touches
+          bughunter impact <symbol>
+          \`\`\`
+
           Linux binaries are statically linked against musl and run on any distribution.
           Every asset's SHA-256 is in \`checksums.txt\`; the installer refuses to install
-          a binary whose checksum does not match."
+          a binary whose checksum does not match.
+
+          **Working:** \`scan\` \`rescan\` \`status\` \`changes\` \`impact\` \`graph\` \`doctor\`;
+          Java and TypeScript; the dependency graph and the GraphQL cross-stack seam.
+
+          **Not yet:** bug detection, the verification engine, and the MCP server — see
+          [docs/roadmap.md](docs/roadmap.md)."
           fi
