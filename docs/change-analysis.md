@@ -75,8 +75,20 @@ symbol children; `changes` records `change_type='renamed'`; `symbol_aliases` get
 symbol mapping old FQN → symbol id. Without this, every package refactor invents a repo full
 of "new" bugs.
 
-Near-renames (same path, ≥ 90 % content similarity via a rolling-hash chunk comparison) are
-detected in Tier 2 at symbol granularity instead, where the signal is better.
+**Symbol-level renames are resolved globally, not per file.** File-level hashing only catches
+a move whose content is byte-identical, which a package rename never is — the package
+declaration changes with it. So appearances and disappearances are buffered across every
+changed file and matched at the end on `(name, sig_hash, body_hash)`: the tuple that survives
+a move and changes for anything else.
+
+Two rules keep it honest. A symbol whose body also changed does not match, because attaching
+an old bug history to code that is no longer the same code is worse than losing the link. And
+only unambiguous 1:1 matches count — generated accessors and `equals`/`hashCode` collide on
+that key constantly, and carrying identity to an arbitrary one of five candidates is worse
+than reporting a delete and an add.
+
+Measured on a 27-file package rename in a real Spring project: 137 aliases recorded, and the
+report reads as renames rather than 274 unrelated deletions and additions.
 
 **Working tree hash.** A merkle root over sorted `(path, content_hash)` of every indexed
 file, one `blake3` over the concatenation. It is the `working_tree_hash` in the baseline and

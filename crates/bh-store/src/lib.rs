@@ -930,6 +930,79 @@ impl Store {
         Ok(rows)
     }
 
+    // ── aliases ──────────────────────────────────────────────
+
+    /// Record that `old_fqn` now lives at `symbol_id`.
+    ///
+    /// Without this a package rename reads as every symbol in it being deleted and a set of
+    /// unrelated ones appearing — which, once bug detection exists, duplicates every finding
+    /// in the moved package. That is the failure ADR-007 was written to prevent.
+    pub fn record_alias(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        old_fqn: &str,
+        symbol_id: SymbolId,
+        scan_id: ScanId,
+    ) -> Result<()> {
+        tx.execute(
+            "INSERT INTO symbol_aliases (project_id, old_fqn, symbol_id, scan_id)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(project_id, old_fqn) DO UPDATE SET
+               symbol_id = excluded.symbol_id, scan_id = excluded.scan_id",
+            params![project_id, old_fqn, symbol_id, scan_id],
+        )?;
+        Ok(())
+    }
+
+    /// Follow an old name to the symbol it became, if it moved.
+    ///
+    /// Consulted before a name is declared unknown, so a bug found under the old FQN and one
+    /// found under the new one land on the same identity.
+    pub fn resolve_alias(&self, project_id: ProjectId, fqn: &str) -> Result<Option<SymbolRef>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT s.id, s.fqn, s.kind, f.path, s.start_line
+                 FROM symbol_aliases a
+                 JOIN symbols s ON s.id = a.symbol_id AND s.deleted = 0
+                 JOIN files   f ON f.id = s.file_id
+                 WHERE a.project_id = ?1 AND a.old_fqn = ?2",
+                params![project_id, fqn],
+                |r| {
+                    Ok(SymbolRef {
+                        id: r.get(0)?,
+                        fqn: r.get(1)?,
+                        kind: r.get(2)?,
+                        file_path: r.get(3)?,
+                        start_line: r.get(4)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    pub fn symbol_id_by_fqn(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        fqn: &str,
+    ) -> Result<Option<SymbolId>> {
+        Ok(tx
+            .query_row(
+                "SELECT id FROM symbols WHERE project_id = ?1 AND fqn = ?2 AND deleted = 0",
+                params![project_id, fqn],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn alias_count(&self, project_id: ProjectId) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM symbol_aliases WHERE project_id = ?1",
+            params![project_id],
+            |r| r.get(0),
+        )?)
+    }
+
     // ── changes ──────────────────────────────────────────────
 
     pub fn insert_change(tx: &Transaction<'_>, scan_id: ScanId, c: &ChangeRecord) -> Result<()> {

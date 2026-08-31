@@ -197,9 +197,20 @@ pub fn rescan(w: &mut impl Write, st: &Style, r: &RescanReport) -> std::io::Resu
             "CONTRACT_CHANGED" => st.warn(kind),
             "DELETED" => st.bad(kind),
             "ADDED" => st.good(kind),
+            "RENAMED" => st.dim(kind),
             _ => st.dim(kind),
         };
-        writeln!(w, "  {tag:<28} {}", item.fqn.as_deref().unwrap_or("-"))?;
+        match &item.from_fqn {
+            // A rename is one fact about one symbol, so it prints as one line.
+            Some(from) => writeln!(
+                w,
+                "  {tag:<28} {}\n  {:<28} {}",
+                item.fqn.as_deref().unwrap_or("-"),
+                "",
+                st.dim(&format!("was {from}"))
+            )?,
+            None => writeln!(w, "  {tag:<28} {}", item.fqn.as_deref().unwrap_or("-"))?,
+        }
         shown += 1;
     }
     if shown > 0 {

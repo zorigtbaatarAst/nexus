@@ -104,6 +104,12 @@ fn main() -> ExitCode {
     match run(&cli) {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
+            // `bughunter rescan | head` closes stdout early. That is a normal way to use a
+            // terminal tool, not a failure, so it exits quietly like every other Unix
+            // command rather than printing an error the user did not cause.
+            if is_broken_pipe(e.as_ref()) {
+                return ExitCode::from(exit::OK);
+            }
             // Diagnostics on stderr, always, so `--json | jq` never sees them.
             eprintln!("bughunter: {e}");
             let mut src = std::error::Error::source(&*e);
@@ -307,6 +313,20 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
         }
     }
     Ok(exit::OK)
+}
+
+/// Walks the source chain: the io::Error is wrapped by the time it reaches main.
+fn is_broken_pipe(e: &(dyn std::error::Error + 'static)) -> bool {
+    let mut cur = Some(e);
+    while let Some(err) = cur {
+        if let Some(io) = err.downcast_ref::<std::io::Error>() {
+            if io.kind() == std::io::ErrorKind::BrokenPipe {
+                return true;
+            }
+        }
+        cur = err.source();
+    }
+    false
 }
 
 fn open(root: &std::path::Path) -> Result<Engine, EngineError> {

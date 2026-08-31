@@ -137,6 +137,13 @@ that is hard to attribute.
   equal `@PreAuthorize("x")`. `canonical_annotation` concatenates with no separator, which
   is safe only because annotation arguments are constant expressions.
 
+- **Renames are resolved after every changed file has been seen, never per file.** The two
+  halves of a package move live in different files, so appearances and disappearances are
+  buffered and matched at the end on `(name, sig_hash, body_hash)` — the tuple that survives
+  a move and nothing else. Only unambiguous 1:1 matches count: generated accessors collide
+  on that key constantly, and carrying identity to an arbitrary candidate is worse than
+  reporting a delete and an add.
+
 - **A static import is not a call on the enclosing class.** `import static
   org.mockito.Mockito.when;` makes `when(...)` a call on Mockito. Attributing unqualified
   calls to the enclosing type without checking static imports invented ~600 edges to methods

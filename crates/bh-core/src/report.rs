@@ -68,6 +68,10 @@ pub struct ChangeItem {
     pub kind: Option<&'static str>,
     pub path: Option<String>,
     pub fqn: Option<String>,
+    /// For a rename, the name this symbol had before. The durable old→new record lives in
+    /// `symbol_aliases`; this is what a reader needs in the report itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_fqn: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

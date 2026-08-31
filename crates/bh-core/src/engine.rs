@@ -501,6 +501,11 @@ impl Engine {
         let mut items = Vec::new();
         let mut failed = 0usize;
         let mut symbols_changed = 0usize;
+        // Appearances and disappearances are held until every changed file has been seen:
+        // a rename is only visible from both halves at once, and they can be in different
+        // files — which is exactly what a package move is.
+        let mut appeared: Vec<SymbolDelta> = Vec::new();
+        let mut vanished: Vec<SymbolDelta> = Vec::new();
 
         // Read every symbol set we will need *before* opening the transaction: rusqlite's
         // Transaction holds a mutable borrow of the connection for its entire lifetime.
@@ -528,29 +533,16 @@ impl Engine {
                     .unwrap_or_default()
                     .into_values()
                 {
-                    Store::insert_change(
-                        &tx,
-                        scan_id,
-                        &ChangeRecord {
-                            entity: "symbol",
-                            entity_id: Some(s.id),
-                            path: Some(path.clone()),
-                            fqn: Some(s.fqn.clone()),
-                            change_type: ChangeType::Deleted,
-                            detail: None,
-                            before_hash: Some(s.body_hash.clone()),
-                            after_hash: None,
-                            commit_sha: commit.clone(),
-                        },
-                    )?;
-                    items.push(ChangeItem {
-                        entity: "symbol",
-                        change_type: "deleted",
-                        kind: Some(ChangeKind::Deleted.as_str()),
-                        path: Some(path.clone()),
-                        fqn: Some(s.fqn),
+                    // A file that disappeared is the commonest source of a rename, so its
+                    // symbols are held back with the rest rather than reported as deleted.
+                    vanished.push(SymbolDelta {
+                        fqn: s.fqn.clone(),
+                        path: path.clone(),
+                        name: s.name.clone(),
+                        sig_hash: s.sig_hash.clone(),
+                        body_hash: s.body_hash.clone(),
+                        old_id: Some(s.id),
                     });
-                    symbols_changed += 1;
                 }
             }
             let ct = if renames.contains_key(path) {
@@ -579,6 +571,7 @@ impl Engine {
                 kind: None,
                 path: Some(path.clone()),
                 fqn: None,
+                from_fqn: None,
             });
             Store::mark_file_deleted(&tx, self.project_id, path, scan_id)?;
         }
@@ -643,13 +636,27 @@ impl Engine {
                 kind: None,
                 path: Some(file.path.clone()),
                 fqn: None,
+                from_fqn: None,
             });
 
             // ── Tier 2: symbol-level diff ──
             if let Some(new_symbols) = symbols {
                 for s in &new_symbols {
                     let kind = match old_symbols.get(&s.fqn) {
-                        None => Some(ChangeKind::Added),
+                        None => {
+                            // Held back: this may be half of a rename, and that can only be
+                            // decided once every changed file has been seen — the other half
+                            // is usually in a different file.
+                            appeared.push(SymbolDelta {
+                                fqn: s.fqn.clone(),
+                                path: file.path.clone(),
+                                name: s.name.clone(),
+                                sig_hash: s.sig_hash.clone(),
+                                body_hash: s.body_hash.clone(),
+                                old_id: None,
+                            });
+                            continue;
+                        }
                         Some(old) => symbol_change(old, s),
                     };
                     let Some(kind) = kind else { continue };
@@ -674,6 +681,7 @@ impl Engine {
                         kind: Some(kind.as_str()),
                         path: Some(file.path.clone()),
                         fqn: Some(s.fqn.clone()),
+                        from_fqn: None,
                     });
                     symbols_changed += 1;
                 }
@@ -682,29 +690,14 @@ impl Engine {
                     if new_fqns.contains(fqn.as_str()) {
                         continue;
                     }
-                    Store::insert_change(
-                        &tx,
-                        scan_id,
-                        &ChangeRecord {
-                            entity: "symbol",
-                            entity_id: Some(old.id),
-                            path: Some(file.path.clone()),
-                            fqn: Some(fqn.clone()),
-                            change_type: ChangeType::Deleted,
-                            detail: None,
-                            before_hash: Some(old.body_hash.clone()),
-                            after_hash: None,
-                            commit_sha: commit.clone(),
-                        },
-                    )?;
-                    items.push(ChangeItem {
-                        entity: "symbol",
-                        change_type: "deleted",
-                        kind: Some(ChangeKind::Deleted.as_str()),
-                        path: Some(file.path.clone()),
-                        fqn: Some(fqn.clone()),
+                    vanished.push(SymbolDelta {
+                        fqn: fqn.clone(),
+                        path: file.path.clone(),
+                        name: old.name.clone(),
+                        sig_hash: old.sig_hash.clone(),
+                        body_hash: old.body_hash.clone(),
+                        old_id: Some(old.id),
                     });
-                    symbols_changed += 1;
                 }
                 Store::replace_symbols(&tx, self.project_id, file_id, scan_id, &new_symbols)?;
             }
@@ -714,6 +707,108 @@ impl Engine {
                 }
             }
         }
+        // ── rename resolution ──
+        //
+        // Every symbol is now written, so an appearance can be matched to a disappearance
+        // and the pair collapsed into one rename. Matching on (name, sig_hash, body_hash)
+        // is what survives a package move: the FQN changes and nothing else does.
+        let renamed = resolve_symbol_renames(&appeared, &vanished);
+
+        for (old_idx, new_idx) in &renamed {
+            let old = &vanished[*old_idx];
+            let new = &appeared[*new_idx];
+            if let Some(id) = Store::symbol_id_by_fqn(&tx, self.project_id, &new.fqn)? {
+                Store::record_alias(&tx, self.project_id, &old.fqn, id, scan_id)?;
+            }
+            Store::insert_change(
+                &tx,
+                scan_id,
+                &ChangeRecord {
+                    entity: "symbol",
+                    entity_id: None,
+                    path: Some(new.path.clone()),
+                    fqn: Some(new.fqn.clone()),
+                    change_type: ChangeType::Renamed,
+                    detail: None,
+                    before_hash: Some(old.body_hash.clone()),
+                    after_hash: Some(new.body_hash.clone()),
+                    commit_sha: commit.clone(),
+                },
+            )?;
+            items.push(ChangeItem {
+                entity: "symbol",
+                change_type: "renamed",
+                kind: Some(ChangeKind::Renamed.as_str()),
+                path: Some(new.path.clone()),
+                fqn: Some(new.fqn.clone()),
+                from_fqn: Some(old.fqn.clone()),
+            });
+            symbols_changed += 1;
+        }
+
+        let matched_old: BTreeSet<usize> = renamed.iter().map(|(o, _)| *o).collect();
+        let matched_new: BTreeSet<usize> = renamed.iter().map(|(_, n)| *n).collect();
+
+        for (i, d) in vanished.iter().enumerate() {
+            if matched_old.contains(&i) {
+                continue;
+            }
+            Store::insert_change(
+                &tx,
+                scan_id,
+                &ChangeRecord {
+                    entity: "symbol",
+                    entity_id: d.old_id,
+                    path: Some(d.path.clone()),
+                    fqn: Some(d.fqn.clone()),
+                    change_type: ChangeType::Deleted,
+                    detail: None,
+                    before_hash: Some(d.body_hash.clone()),
+                    after_hash: None,
+                    commit_sha: commit.clone(),
+                },
+            )?;
+            items.push(ChangeItem {
+                entity: "symbol",
+                change_type: "deleted",
+                kind: Some(ChangeKind::Deleted.as_str()),
+                path: Some(d.path.clone()),
+                fqn: Some(d.fqn.clone()),
+                from_fqn: None,
+            });
+            symbols_changed += 1;
+        }
+
+        for (i, d) in appeared.iter().enumerate() {
+            if matched_new.contains(&i) {
+                continue;
+            }
+            Store::insert_change(
+                &tx,
+                scan_id,
+                &ChangeRecord {
+                    entity: "symbol",
+                    entity_id: None,
+                    path: Some(d.path.clone()),
+                    fqn: Some(d.fqn.clone()),
+                    change_type: ChangeType::Added,
+                    detail: None,
+                    before_hash: None,
+                    after_hash: Some(d.body_hash.clone()),
+                    commit_sha: commit.clone(),
+                },
+            )?;
+            items.push(ChangeItem {
+                entity: "symbol",
+                change_type: "added",
+                kind: Some(ChangeKind::Added.as_str()),
+                path: Some(d.path.clone()),
+                fqn: Some(d.fqn.clone()),
+                from_fqn: None,
+            });
+            symbols_changed += 1;
+        }
+
         for (file_id, edges) in &pending_edges {
             if *file_id != 0 {
                 Store::replace_edges_for_file(&tx, self.project_id, *file_id, scan_id, edges)?;
@@ -1104,6 +1199,57 @@ fn symbol_change(old: &bh_store::SymbolRow, new: &NewSymbol) -> Option<ChangeKin
         (false, true, _) => Some(ChangeKind::ContractChanged),
         (false, false, true) => Some(ChangeKind::BodyChanged),
     }
+}
+
+/// One symbol that appeared or disappeared during a rescan.
+#[derive(Debug, Clone)]
+struct SymbolDelta {
+    fqn: String,
+    path: String,
+    name: String,
+    sig_hash: String,
+    body_hash: String,
+    old_id: Option<SymbolId>,
+}
+
+/// Pair disappearances with appearances that are the same symbol under a new name.
+///
+/// The key is `(name, sig_hash, body_hash)`: a package move, a class move or a directory
+/// rename changes the FQN and nothing else, so all three survive. A method whose body also
+/// changed in the same commit will not match, which is the right call — that is a delete
+/// and an add as far as identity goes, and guessing otherwise would attach an old bug
+/// history to code that is no longer the same code.
+///
+/// Only unambiguous 1:1 matches count. Boilerplate accessors and generated equals/hashCode
+/// collide on this key constantly, and carrying identity to an arbitrary one of five
+/// candidates is worse than reporting a delete and an add.
+fn resolve_symbol_renames(
+    appeared: &[SymbolDelta],
+    vanished: &[SymbolDelta],
+) -> Vec<(usize, usize)> {
+    let key = |d: &SymbolDelta| (d.name.clone(), d.sig_hash.clone(), d.body_hash.clone());
+
+    let mut new_by_key: BTreeMap<(String, String, String), Vec<usize>> = BTreeMap::new();
+    for (i, d) in appeared.iter().enumerate() {
+        new_by_key.entry(key(d)).or_default().push(i);
+    }
+    let mut old_by_key: BTreeMap<(String, String, String), Vec<usize>> = BTreeMap::new();
+    for (i, d) in vanished.iter().enumerate() {
+        old_by_key.entry(key(d)).or_default().push(i);
+    }
+
+    let mut out = Vec::new();
+    for (k, olds) in &old_by_key {
+        if olds.len() != 1 {
+            continue;
+        }
+        if let Some(news) = new_by_key.get(k) {
+            if news.len() == 1 && appeared[news[0]].fqn != vanished[olds[0]].fqn {
+                out.push((olds[0], news[0]));
+            }
+        }
+    }
+    out
 }
 
 fn detect_renames(
