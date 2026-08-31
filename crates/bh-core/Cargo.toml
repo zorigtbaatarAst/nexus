@@ -1,0 +1,20 @@
+[package]
+name = "bh-core"
+description = "The Engine: all BugHunter business logic. Knows nothing of MCP, the CLI, or any AI provider."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bh-types.workspace = true
+bh-store.workspace = true
+bh-vcs.workspace = true
+bh-lang.workspace = true
+bh-lang-java.workspace = true
+blake3.workspace = true
+ignore.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

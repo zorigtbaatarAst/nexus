@@ -1,0 +1,10 @@
+[package]
+name = "bh-types"
+description = "Shared identifiers, enums and DTOs. Depends on nothing but serde."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true

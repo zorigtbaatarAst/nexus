@@ -1,0 +1,243 @@
+//! `bughunter` — the composition root.
+//!
+//! Parse flags, open the store, build the analyzer registry, construct the `Engine`,
+//! dispatch. This is the only place in the workspace that knows about all of those at once,
+//! and the only place `anyhow` is used: a library that returns `anyhow::Error` has told its
+//! caller nothing.
+
+#![forbid(unsafe_code)]
+
+mod render;
+
+use bh_core::{Engine, EngineError};
+use clap::{Parser, Subcommand};
+use render::Style;
+use serde::Serialize;
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+#[derive(Parser)]
+#[command(
+    name = "bughunter",
+    version,
+    about = "Change-aware code intelligence: what changed, what it touches, and what broke",
+    disable_help_subcommand = true
+)]
+struct Cli {
+    /// Machine-readable output on stdout, and nothing else on stdout.
+    #[arg(long, global = true)]
+    json: bool,
+    /// Errors only; the exit code carries the result.
+    #[arg(long, global = true)]
+    quiet: bool,
+    /// Progress and timings to stderr.
+    #[arg(long, short, global = true, action = clap::ArgAction::Count)]
+    verbose: u8,
+    /// Operate on a project other than the working directory.
+    #[arg(long, global = true, value_name = "PATH")]
+    project: Option<PathBuf>,
+    #[arg(long, global = true)]
+    no_color: bool,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Detect the project, create .bughunter/, migrate the database
+    Init,
+    /// Full scan: index files and symbols, and establish the baseline
+    Scan,
+    /// Incremental: diff against the baseline down to changed symbols
+    Rescan,
+    /// Baseline, drift and index size
+    Status,
+    /// What changed in the current baseline scan
+    Changes {
+        /// file | symbol | dependency | config | test
+        #[arg(long)]
+        entity: Option<String>,
+    },
+    /// Diagnose the environment and configuration
+    Doctor,
+}
+
+/// Exit codes are part of the interface. Discovering a change is a success, not an error —
+/// a tool that exits non-zero for doing its job gets removed from the pipeline in a week.
+mod exit {
+    pub const OK: u8 = 0;
+    pub const RUNTIME: u8 = 1;
+    pub const NO_BASELINE: u8 = 5;
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match run(&cli) {
+        Ok(code) => ExitCode::from(code),
+        Err(e) => {
+            // Diagnostics on stderr, always, so `--json | jq` never sees them.
+            eprintln!("bughunter: {e}");
+            let mut src = std::error::Error::source(&*e);
+            while let Some(s) = src {
+                eprintln!("  caused by: {s}");
+                src = s.source();
+            }
+            ExitCode::from(exit::RUNTIME)
+        }
+    }
+}
+
+fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
+    let root = cli.project.clone().unwrap_or(std::env::current_dir()?);
+    let st = Style::detect(cli.no_color || cli.json);
+    let mut out = std::io::stdout().lock();
+
+    macro_rules! emit {
+        ($value:expr, $render:expr) => {{
+            if cli.json {
+                writeln!(out, "{}", envelope(cli, $value)?)?;
+            } else if !cli.quiet {
+                $render;
+            }
+        }};
+    }
+
+    match &cli.command {
+        Command::Init => {
+            let (_engine, profile) = Engine::init(&root)?;
+            emit!(&profile, {
+                render::banner(&mut out, &st)?;
+                render::profile(&mut out, &st, &profile)?;
+                writeln!(out)?;
+                writeln!(out, "Initialized {}/.bughunter", root.display())?;
+                writeln!(out, "  next: bughunter scan")?;
+            });
+        }
+
+        Command::Scan => {
+            let mut engine = open(&root)?;
+            if cli.verbose > 0 {
+                eprintln!("scanning {}", engine.root().display());
+            }
+            let report = engine.scan()?;
+            emit!(&report, {
+                render::banner(&mut out, &st)?;
+                render::scan(&mut out, &st, &report)?;
+            });
+        }
+
+        Command::Rescan => {
+            let mut engine = open(&root)?;
+            match engine.rescan() {
+                Ok(report) => {
+                    emit!(&report, {
+                        render::banner(&mut out, &st)?;
+                        render::rescan(&mut out, &st, &report)?;
+                    });
+                }
+                Err(EngineError::NoBaseline) => {
+                    eprintln!("bughunter: no baseline for this project");
+                    eprintln!("  run: bughunter scan");
+                    return Ok(exit::NO_BASELINE);
+                }
+                Err(e) => return Err(Box::new(e)),
+            }
+        }
+
+        Command::Status => {
+            let engine = open(&root)?;
+            let report = engine.status()?;
+            emit!(&report, {
+                render::banner(&mut out, &st)?;
+                render::status(&mut out, &st, &report)?;
+            });
+        }
+
+        Command::Changes { entity } => {
+            let engine = open(&root)?;
+            match engine.changes(entity.as_deref()) {
+                Ok(rows) => {
+                    let items: Vec<ChangeOut> = rows
+                        .iter()
+                        .map(|(e, c, t, d)| ChangeOut {
+                            entity: e.clone(),
+                            change_type: c.clone(),
+                            target: t.clone(),
+                            detail: d.clone(),
+                        })
+                        .collect();
+                    emit!(&items, {
+                        render::banner(&mut out, &st)?;
+                        render::changes(&mut out, &st, &rows)?;
+                    });
+                }
+                Err(EngineError::NoBaseline) => {
+                    eprintln!("bughunter: no baseline for this project");
+                    eprintln!("  run: bughunter scan");
+                    return Ok(exit::NO_BASELINE);
+                }
+                Err(e) => return Err(Box::new(e)),
+            }
+        }
+
+        Command::Doctor => {
+            let engine = open(&root)?;
+            let checks = engine.doctor()?;
+            let worst = checks.iter().any(|c| c.level == "error");
+            emit!(&checks, {
+                writeln!(out, "{}", st.head("BugHunter doctor"))?;
+                writeln!(
+                    out,
+                    "{}",
+                    st.dim("────────────────────────────────────────")
+                )?;
+                render::doctor(&mut out, &st, &checks)?;
+            });
+            if worst {
+                return Ok(exit::RUNTIME);
+            }
+        }
+    }
+    Ok(exit::OK)
+}
+
+fn open(root: &std::path::Path) -> Result<Engine, EngineError> {
+    Engine::open(root)
+}
+
+#[derive(Serialize)]
+struct ChangeOut {
+    entity: String,
+    change_type: String,
+    target: Option<String>,
+    detail: Option<String>,
+}
+
+/// One versioned envelope for every command, so a script written today keeps working.
+/// `warnings` is always present: a consumer must never have to tell "no warnings" apart
+/// from "an older version that did not report them".
+#[derive(Serialize)]
+struct Envelope<'a, T: Serialize> {
+    bughunter: &'a str,
+    schema: u32,
+    command: &'a str,
+    result: T,
+}
+
+fn envelope<T: Serialize>(cli: &Cli, value: T) -> Result<String, serde_json::Error> {
+    serde_json::to_string_pretty(&Envelope {
+        bughunter: env!("CARGO_PKG_VERSION"),
+        schema: 1,
+        command: match &cli.command {
+            Command::Init => "init",
+            Command::Scan => "scan",
+            Command::Rescan => "rescan",
+            Command::Status => "status",
+            Command::Changes { .. } => "changes",
+            Command::Doctor => "doctor",
+        },
+        result: value,
+    })
+}

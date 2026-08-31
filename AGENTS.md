@@ -126,6 +126,22 @@ that is hard to attribute.
   already knows is how a tool teaches people to ignore its questions, and once that happens
   the mechanism is dead.
 
+- **Comments are part of the `modifiers` node.** Commenting out `@Transactional` puts a
+  comment where the annotation was, and `modifier_words` must skip it — otherwise the
+  signature changes and the edit reports `API_CHANGED` instead of `CONTRACT_CHANGED`. Found
+  by running the scanner on a real Spring repository, not by reading the code; pinned by
+  `a_comment_among_the_modifiers_does_not_touch_the_signature`.
+
+- **Annotations get their own canonical form**, not `normalize_body`. Token-stream
+  normalization joins with a space, so a line-wrapped `@PreAuthorize(\n  "x"\n)` would not
+  equal `@PreAuthorize("x")`. `canonical_annotation` concatenates with no separator, which
+  is safe only because annotation arguments are constant expressions.
+
+- **`.bughunter/` must be excluded wherever candidates come from.** The walker filters it
+  structurally, but Tier 1 candidates also come from `git diff`, which knows nothing about
+  that filter — so `walk::is_excluded` exists for both paths to consult. Without it
+  BugHunter indexes its own config files.
+
 - **`ui_strings` must index every locale's i18n values, not just keys.** The screenshot may
   be in Mongolian while the source holds an English key. Matching the value reaches the key,
   and the key reaches the component. Index keys only and a non-English UI becomes

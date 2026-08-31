@@ -7,8 +7,13 @@ its structure and its history of bugs, detects what changed between scans, analy
 impact of those changes, finds potential bugs — and verifies them by reproducing them with
 a test.
 
-> **Status: architecture design. No implementation exists yet.**
-> Start at [`docs/architecture.md`](docs/architecture.md).
+> **Status: MVP in progress.** The architecture is complete
+> ([`docs/architecture.md`](docs/architecture.md)); the walking skeleton —
+> `init`, `scan`, `rescan`, `status`, `changes`, `doctor` over Java — builds and runs.
+>
+> ```
+> cargo build --release && make demo REPO=/path/to/a/spring/project
+> ```
 
 ---
 
@@ -149,6 +154,20 @@ args    = ["mcp"]
 | [diagrams/](docs/diagrams/) | system architecture, scan, rescan, verification, MCP |
 
 ---
+
+## Built so far
+
+| Crate | State |
+|---|---|
+| `bh-types` · `bh-store` · `bh-vcs` · `bh-lang` · `bh-lang-java` · `bh-core` · `bh-cli` | working |
+| `bh-lang-ts` · `bh-lang-python` · `bh-lang-rust` · `bh-verify` · `bh-ai` · `bh-mcp` | V1 |
+
+The store carries the **full 21-table schema** from day one — adding the bug and
+verification tables later would mean migrating a populated database for no reason.
+
+Measured on a 109-file Spring Boot repository: full scan 32 ms / 939 symbols, no-op rescan
+3 ms, one edited method body 5 ms. Reformatting all 109 files — 14,000 changed lines on
+disk — produces **zero** symbol changes.
 
 ## Planned stack
 

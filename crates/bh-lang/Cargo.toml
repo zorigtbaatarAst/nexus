@@ -1,0 +1,11 @@
+[package]
+name = "bh-lang"
+description = "LanguageAnalyzer and FrameworkPack traits plus the analyzer registry."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bh-types.workspace = true
+thiserror.workspace = true
