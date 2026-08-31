@@ -20,7 +20,7 @@
 ## Суулгах
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zorigtbaatarAst/bughunter/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zorigtbaatarAst/nexus/main/install.sh | sh
 ```
 
 Ганц файл татаж, checksum-ыг шалгаад суулгана. Өөр юу ч хэрэггүй — Java, Node, Docker
@@ -46,7 +46,7 @@ nexus ask next       # юуг эхэлж харах нь зүйтэй вэ
 
 ```bash
 # эх кодоос нь өөрөө build хийх (Rust хэрэгтэй)
-curl -fsSL https://raw.githubusercontent.com/zorigtbaatarAst/bughunter/main/install.sh | sh -s -- --from-source
+curl -fsSL https://raw.githubusercontent.com/zorigtbaatarAst/nexus/main/install.sh | sh -s -- --from-source
 
 # тодорхой хувилбар, эсвэл өөр хавтас
 ... | sh -s -- --version v0.1.0 --dir ~/bin

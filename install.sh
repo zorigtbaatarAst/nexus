@@ -2,7 +2,7 @@
 #
 # BugHunter installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/zorigtbaatarAst/bughunter/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/zorigtbaatarAst/nexus/main/install.sh | sh
 #
 # Downloads the release binary for this machine, verifies its checksum, and
 # installs it. Nothing is installed if the checksum does not match. With no
@@ -30,7 +30,7 @@
 
 set -eu
 
-REPO="zorigtbaatarAst/bughunter"
+REPO="zorigtbaatarAst/nexus"
 BINARY="nexus"
 # BugHunter ships alongside the platform: the same image under a second name, so the
 # capability stays usable on its own.

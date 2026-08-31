@@ -21,7 +21,7 @@ findings, get identity, lifecycle and history for free.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zorigtbaatarAst/bughunter/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/zorigtbaatarAst/nexus/main/install.sh | sh
 ```
 
 One static binary, checksum-verified. No Java, no Node, no Docker, no runtime of any kind.
