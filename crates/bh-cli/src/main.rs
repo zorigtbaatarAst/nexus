@@ -9,6 +9,8 @@
 
 mod render;
 
+use bh_core::impact::{Direction, ImpactQuery};
+use bh_core::report::Resolved;
 use bh_core::{Engine, EngineError};
 use clap::{Parser, Subcommand};
 use render::Style;
@@ -60,6 +62,28 @@ enum Command {
         #[arg(long)]
         entity: Option<String>,
     },
+    /// Blast radius of a symbol, a file or a name
+    Impact {
+        /// An FQN, an FQN suffix, a bare name, or a repo-relative file path
+        target: String,
+        /// What this reaches, instead of who depends on it
+        #[arg(long)]
+        forward: bool,
+        #[arg(long, default_value_t = 5)]
+        depth: usize,
+        #[arg(long, default_value_t = 0.15)]
+        min_score: f64,
+        /// Only follow edges a body-only change can travel along
+        #[arg(long)]
+        body_only: bool,
+        /// Show the edge chain that reached each symbol
+        #[arg(long)]
+        paths: bool,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Dependency graph size and how much of it resolved
+    Graph,
     /// Diagnose the environment and configuration
     Doctor,
 }
@@ -69,7 +93,10 @@ enum Command {
 mod exit {
     pub const OK: u8 = 0;
     pub const RUNTIME: u8 = 1;
+    pub const USAGE: u8 = 2;
     pub const NO_BASELINE: u8 = 5;
+    /// The target matched several symbols. The caller chooses; BugHunter does not guess.
+    pub const AMBIGUOUS: u8 = 6;
 }
 
 fn main() -> ExitCode {
@@ -182,6 +209,69 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             }
         }
 
+        Command::Impact {
+            target,
+            forward,
+            depth,
+            min_score,
+            body_only,
+            paths,
+            limit,
+        } => {
+            let engine = open(&root)?;
+            let q = ImpactQuery {
+                target: target.clone(),
+                direction: if *forward {
+                    Direction::Forward
+                } else {
+                    Direction::Reverse
+                },
+                max_depth: *depth,
+                min_score: *min_score,
+                body_only: *body_only,
+                limit: *limit,
+                ..Default::default()
+            };
+            match engine.impact(&q)? {
+                Resolved::One(report) => {
+                    emit!(&Resolved::One(report.clone()), {
+                        render::banner(&mut out, &st)?;
+                        render::impact(&mut out, &st, &report, *paths)?;
+                    });
+                }
+                r @ Resolved::Ambiguous(_) => {
+                    // Not an error and not a guess: hand back the candidates so the caller
+                    // can choose. The CLI's form of `clarification_required`.
+                    let Resolved::Ambiguous(cands) = &r else {
+                        unreachable!()
+                    };
+                    emit!(&r, {
+                        render::banner(&mut out, &st)?;
+                        render::ambiguous(&mut out, &st, target, cands)?;
+                    });
+                    return Ok(exit::AMBIGUOUS);
+                }
+                r @ Resolved::NotFound(_) => {
+                    emit!(&r, {
+                        eprintln!("bughunter: no symbol matches '{target}'");
+                        eprintln!(
+                            "  try a fully-qualified name, a bare method name, or a file path"
+                        );
+                    });
+                    return Ok(exit::USAGE);
+                }
+            }
+        }
+
+        Command::Graph => {
+            let engine = open(&root)?;
+            let report = engine.graph()?;
+            emit!(&report, {
+                render::banner(&mut out, &st)?;
+                render::graph(&mut out, &st, &report)?;
+            });
+        }
+
         Command::Doctor => {
             let engine = open(&root)?;
             let checks = engine.doctor()?;
@@ -236,6 +326,8 @@ fn envelope<T: Serialize>(cli: &Cli, value: T) -> Result<String, serde_json::Err
             Command::Rescan => "rescan",
             Command::Status => "status",
             Command::Changes { .. } => "changes",
+            Command::Impact { .. } => "impact",
+            Command::Graph => "graph",
             Command::Doctor => "doctor",
         },
         result: value,

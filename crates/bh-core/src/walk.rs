@@ -31,10 +31,29 @@ pub struct HashedFile {
 /// `git diff`, which knows nothing about the walker's filter — so the rule has to live
 /// somewhere both paths consult, or BugHunter ends up indexing its own state.
 pub fn is_excluded(path: &str) -> bool {
-    path == ".bughunter"
-        || path.starts_with(".bughunter/")
-        || path == ".git"
-        || path.starts_with(".git/")
+    const DIRS: &[&str] = &[
+        ".bughunter",
+        ".git",
+        "node_modules",
+        "build",
+        "dist",
+        ".next",
+        "target",
+        "playwright-report",
+        "test-results",
+        ".gradle",
+        "bin",
+        "out",
+        "coverage",
+    ];
+    // A generated file is not source: indexing graphql-generated.ts would fill the graph
+    // with symbols nobody wrote and nobody can change.
+    const GENERATED: &[&str] = &["graphql-generated.ts", ".generated.ts", "next-env.d.ts"];
+
+    if GENERATED.iter().any(|g| path.ends_with(g)) {
+        return true;
+    }
+    path.split('/').any(|seg| DIRS.contains(&seg))
 }
 
 /// Ignore-aware traversal. `.gitignore`, `.ignore` and `.bughunterignore` are honoured, and
@@ -47,7 +66,17 @@ pub fn walk(root: &Path, extra_excludes: &[String]) -> Vec<WalkedFile> {
         .git_global(true)
         .git_exclude(true)
         .add_custom_ignore_filename(".bughunterignore")
-        .filter_entry(|e| e.file_name() != ".git" && e.file_name() != ".bughunter");
+        .filter_entry(|e| {
+            e.path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_none_or(|n| {
+                    !matches!(
+                        n,
+                        ".git" | ".bughunter" | "node_modules" | ".next" | "target"
+                    )
+                })
+        });
 
     let mut out = Vec::new();
     for entry in builder.build().flatten() {
@@ -58,7 +87,7 @@ pub fn walk(root: &Path, extra_excludes: &[String]) -> Vec<WalkedFile> {
             continue;
         };
         let path = rel.to_string_lossy().replace('\\', "/");
-        if extra_excludes.iter().any(|e| path.starts_with(e.as_str())) {
+        if is_excluded(&path) || extra_excludes.iter().any(|e| path.starts_with(e.as_str())) {
             continue;
         }
         let (size_bytes, mtime_ns) = match entry.metadata() {

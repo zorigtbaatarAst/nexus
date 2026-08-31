@@ -10,7 +10,7 @@
 // an assertion that cannot unwrap is not an assertion.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-use bh_types::{Language, SymbolKind};
+use bh_types::{EdgeType, Language, SymbolKind};
 use std::collections::BTreeMap;
 
 #[derive(Debug, thiserror::Error)]
@@ -42,9 +42,23 @@ pub struct RawSymbol {
     pub annotations: Vec<String>,
 }
 
+/// A dependency as an analyzer sees it: two names and a kind. Turning `dst_hint` into a
+/// real symbol id is resolution's job, in `bh-core`, once every symbol in the project is
+/// known — an analyzer cannot do it because it only ever sees one file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawEdge {
+    pub src_fqn: String,
+    /// A fully-qualified name when the analyzer could produce one, otherwise the best
+    /// available shape: `PaymentRepository#save`, or `graphql:Query.vehicles` for a seam.
+    pub dst_hint: String,
+    pub edge_type: EdgeType,
+    pub site_line: u32,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ParsedFile {
     pub symbols: Vec<RawSymbol>,
+    pub edges: Vec<RawEdge>,
     pub imports: Vec<String>,
     pub package: Option<String>,
     /// Non-fatal problems. A file that partly parsed still contributes what it has, and

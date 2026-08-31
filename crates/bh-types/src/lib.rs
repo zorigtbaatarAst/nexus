@@ -112,6 +112,145 @@ impl SymbolKind {
     }
 }
 
+// ─────────────────────────── edges ───────────────────────────
+
+/// How one symbol depends on another. The type decides how much of an upstream change
+/// survives the hop — see `weight`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeType {
+    Calls,
+    Implements,
+    Extends,
+    Injects,
+    Routes,
+    Persists,
+    Reads,
+    Writes,
+    Emits,
+    Imports,
+    Tests,
+    CallsHttp,
+    CallsGraphql,
+    Renders,
+}
+
+impl EdgeType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EdgeType::Calls => "calls",
+            EdgeType::Implements => "implements",
+            EdgeType::Extends => "extends",
+            EdgeType::Injects => "injects",
+            EdgeType::Routes => "routes",
+            EdgeType::Persists => "persists",
+            EdgeType::Reads => "reads",
+            EdgeType::Writes => "writes",
+            EdgeType::Emits => "emits",
+            EdgeType::Imports => "imports",
+            EdgeType::Tests => "tests",
+            EdgeType::CallsHttp => "calls_http",
+            EdgeType::CallsGraphql => "calls_graphql",
+            EdgeType::Renders => "renders",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "calls" => EdgeType::Calls,
+            "implements" => EdgeType::Implements,
+            "extends" => EdgeType::Extends,
+            "injects" => EdgeType::Injects,
+            "routes" => EdgeType::Routes,
+            "persists" => EdgeType::Persists,
+            "reads" => EdgeType::Reads,
+            "writes" => EdgeType::Writes,
+            "emits" => EdgeType::Emits,
+            "imports" => EdgeType::Imports,
+            "tests" => EdgeType::Tests,
+            "calls_http" => EdgeType::CallsHttp,
+            "calls_graphql" => EdgeType::CallsGraphql,
+            "renders" => EdgeType::Renders,
+            _ => return None,
+        })
+    }
+
+    /// How much of an upstream change survives one hop. docs/change-analysis.md §6.
+    pub fn weight(self) -> f64 {
+        match self {
+            EdgeType::Calls => 0.90,
+            EdgeType::Implements | EdgeType::Extends => 0.85,
+            EdgeType::Injects => 0.80,
+            // The seam. A change behind a GraphQL field reaches every caller of that field,
+            // and it is an exact join rather than a guess, so it is not discounted further.
+            EdgeType::CallsGraphql | EdgeType::CallsHttp => 0.85,
+            EdgeType::Routes | EdgeType::Persists => 0.70,
+            EdgeType::Renders => 0.65,
+            EdgeType::Reads | EdgeType::Writes | EdgeType::Emits => 0.60,
+            EdgeType::Tests => 0.50,
+            EdgeType::Imports => 0.30,
+        }
+    }
+
+    /// Whether a body-only change can reach a dependant through this edge.
+    ///
+    /// A body edit does not break a caller's compilation; it can only reach one through
+    /// shared state or an observable effect. Filtering here is what keeps a one-line change
+    /// from reporting four hundred affected symbols.
+    pub fn carries_body_change(self) -> bool {
+        matches!(
+            self,
+            EdgeType::Reads
+                | EdgeType::Writes
+                | EdgeType::Persists
+                | EdgeType::Emits
+                | EdgeType::Calls
+                | EdgeType::CallsGraphql
+                | EdgeType::CallsHttp
+        )
+    }
+}
+
+/// Which tier of the resolution cascade produced an edge. Reported with every impact
+/// result so a three-hop heuristic chain is visibly a guess, not a compiler fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Resolution {
+    Exact,
+    Framework,
+    Contract,
+    Heuristic,
+    /// The target is genuinely outside the indexed project — a third-party library, or a
+    /// sibling module that was not scanned. Distinct from `Unresolved`, which means
+    /// BugHunter looked and failed. Conflating them makes the resolution rate a lie.
+    External,
+    Unresolved,
+}
+
+impl Resolution {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Resolution::Exact => "exact",
+            Resolution::Framework => "framework",
+            Resolution::Contract => "contract",
+            Resolution::Heuristic => "heuristic",
+            Resolution::External => "external",
+            Resolution::Unresolved => "unresolved",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "exact" => Resolution::Exact,
+            "framework" => Resolution::Framework,
+            "contract" => Resolution::Contract,
+            "heuristic" => Resolution::Heuristic,
+            "external" => Resolution::External,
+            "unresolved" => Resolution::Unresolved,
+            _ => return None,
+        })
+    }
+}
+
 // ─────────────────────────── scans ───────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

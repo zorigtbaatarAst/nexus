@@ -14,6 +14,9 @@ a test.
 > ```
 > cargo build --release && make demo REPO=/path/to/a/spring/project
 > ```
+>
+> Cross-stack tracing works today on Spring for GraphQL + Apollo: a change to a backend
+> service method reaches the React components that render it.
 
 ---
 
@@ -37,6 +40,8 @@ the evidence is deterministic, BugHunter is still a useful tool with the AI swit
 bughunter init         detect language, framework, build system, databases, containers
 bughunter scan         index files, symbols, dependencies, tests → establish a baseline
 bughunter rescan       diff against the baseline → changed symbols → impact → hunt
+bughunter impact       blast radius of a symbol, a file or a name — across the stack
+bughunter graph        dependency graph size and how much of it resolved
 bughunter investigate  a described screenshot → UI anchor → across the seam → suspects
 bughunter verify       generate a reproduction test, run it, run it on the baseline, judge
 ```
@@ -159,15 +164,28 @@ args    = ["mcp"]
 
 | Crate | State |
 |---|---|
-| `bh-types` · `bh-store` · `bh-vcs` · `bh-lang` · `bh-lang-java` · `bh-core` · `bh-cli` | working |
-| `bh-lang-ts` · `bh-lang-python` · `bh-lang-rust` · `bh-verify` · `bh-ai` · `bh-mcp` | V1 |
+| `bh-types` · `bh-store` · `bh-vcs` · `bh-lang` · `bh-lang-java` · `bh-lang-ts` · `bh-core` · `bh-cli` | working |
+| `bh-lang-python` · `bh-lang-rust` · `bh-verify` · `bh-ai` · `bh-mcp` | V1 |
 
 The store carries the **full 21-table schema** from day one — adding the bug and
 verification tables later would mean migrating a populated database for no reason.
 
-Measured on a 109-file Spring Boot repository: full scan 32 ms / 939 symbols, no-op rescan
-3 ms, one edited method body 5 ms. Reformatting all 109 files — 14,000 changed lines on
-disk — produces **zero** symbol changes.
+Measured on a real 880-file Spring + Next.js project: 5,665 symbols and **96 % of
+in-project edges resolved** in 641 ms, including 402 contract edges across the GraphQL seam.
+On a 109-file Spring Boot repository: full scan 32 ms, no-op rescan 3 ms, one edited method
+body 5 ms — and reformatting all 109 files (14,000 changed lines) produces **zero** symbol
+changes.
+
+```
+$ bughunter impact 'mn.autoland.sales.vehicle.service.VehicleService#list' --paths
+
+  0.81  VehicleGraphQLController#vehicles(...)
+  0.57  graphql:Query.vehicles
+  0.46  graphql:op:Vehicles
+  0.37  frontend/src/app/(sales)/vehicles/page#VehiclesPage
+        VehicleService#list --calls--> Controller#vehicles --routes-->
+        graphql:Query.vehicles --calls_graphql--> graphql:op:Vehicles --calls_graphql-->
+```
 
 ## Planned stack
 

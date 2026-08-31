@@ -46,6 +46,9 @@ pub struct ScanReport {
     pub files_failed: usize,
     pub files_skipped: usize,
     pub symbols_indexed: usize,
+    pub edges_total: usize,
+    pub edges_resolved: usize,
+    pub edges_external: usize,
     pub health: Health,
     pub warnings: Vec<String>,
     pub duration_ms: u128,
@@ -103,4 +106,74 @@ pub struct Check {
     pub level: &'static str, // ok | warn | error
     pub detail: String,
     pub remedy: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SeedRef {
+    pub fqn: String,
+    pub kind: String,
+    pub file: String,
+    pub line: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Hop {
+    pub from: String,
+    pub edge: &'static str,
+    pub resolution: &'static str,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImpactItem {
+    pub fqn: String,
+    pub kind: String,
+    pub file: String,
+    pub line: i64,
+    pub score: f64,
+    /// The weakest link in the chain that reached this symbol. A three-hop heuristic path
+    /// scoring 0.4 with `min_confidence` 0.55 is honestly labelled a guess.
+    pub min_confidence: f64,
+    pub depth: usize,
+    pub path: Vec<Hop>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImpactReport {
+    pub target: String,
+    pub direction: &'static str,
+    pub seeds: Vec<SeedRef>,
+    pub items: Vec<ImpactItem>,
+    pub tests: Vec<ImpactItem>,
+    pub crossed_seam: usize,
+    /// Nodes whose fan-out exceeded the cap. Reported, never silently dropped: returning
+    /// 200 of 3,000 and calling it the impact set is the quiet lie that makes a tool
+    /// untrustworthy.
+    pub truncated_at: Vec<String>,
+    pub visited: usize,
+    pub duration_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphReport {
+    pub edges_total: i64,
+    pub edges_resolved: i64,
+    /// Pointing at a library or an unscanned sibling module. Correctly outside the index.
+    pub edges_external: i64,
+    pub by_resolution: Vec<(String, i64)>,
+}
+
+/// A result that may not be one thing.
+///
+/// `Ambiguous` is not an error and not a guess: it hands back the candidates so the caller
+/// can choose, which is the CLI's form of `clarification_required`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Resolved<T> {
+    #[serde(rename = "ok")]
+    One(T),
+    #[serde(rename = "ambiguous")]
+    Ambiguous(Vec<SeedRef>),
+    #[serde(rename = "not_found")]
+    NotFound(String),
 }

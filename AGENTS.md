@@ -137,6 +137,25 @@ that is hard to attribute.
   equal `@PreAuthorize("x")`. `canonical_annotation` concatenates with no separator, which
   is safe only because annotation arguments are constant expressions.
 
+- **A static import is not a call on the enclosing class.** `import static
+  org.mockito.Mockito.when;` makes `when(...)` a call on Mockito. Attributing unqualified
+  calls to the enclosing type without checking static imports invented ~600 edges to methods
+  that do not exist, in test files alone. A *wildcard* static import makes the name
+  genuinely undecidable from one file, so nothing is emitted.
+
+- **Record components are methods.** `record SaleDto(String orderStatus)` implies
+  `orderStatus()`. Without emitting those accessors, every `dto.orderStatus()` in the
+  codebase is an unresolvable call — this alone was most of the gap between 68 % and 96 %
+  resolution on a real project.
+
+- **Codegen output must not be indexed.** `graphql-generated.ts` is thousands of symbols
+  nobody wrote and nobody can change. `walk::is_excluded` drops it, along with
+  `node_modules`, `build`, `.next` and `target`.
+
+- **`external` is not `unresolved`.** An edge to `org.springframework` is correctly outside
+  the index; counting it as a failure hides real bugs inside a large constant. See
+  [ADR-017](docs/architecture-decisions.md#adr-017-external-is-a-resolution-outcome-not-a-failure).
+
 - **`.bughunter/` must be excluded wherever candidates come from.** The walker filters it
   structurally, but Tier 1 candidates also come from `git diff`, which knows nothing about
   that filter — so `walk::is_excluded` exists for both paths to consult. Without it
@@ -161,6 +180,7 @@ that is hard to attribute.
 | how does rescan avoid re-parsing | [change-analysis.md](docs/change-analysis.md) §2 |
 | how is a bug proven | [verification-engine.md](docs/verification-engine.md) |
 | screenshot → suspect, and the seam | [investigation.md](docs/investigation.md) |
+| how the GraphQL seam actually works | [ADR-014 revision](docs/architecture-decisions.md#adr-014-join-the-stack-at-the-http-contract) |
 | what can an agent call | [mcp-api.md](docs/mcp-api.md) |
 | what is safe to execute | [security.md](docs/security.md) §3–4 |
 | what should I build first | [roadmap.md](docs/roadmap.md) |

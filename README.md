@@ -13,6 +13,9 @@
 > ```
 > cargo build --release && make demo REPO=/аль нэг/spring/төсөл
 > ```
+>
+> Давхаргууд хоорондын мөшгөлт аль хэдийн ажиллаж байна (Spring for GraphQL + Apollo):
+> backend сервисийн метод өөрчлөгдөхөд түүнийг харуулдаг React компонентууд хүртэл хүрнэ.
 
 ---
 
@@ -37,6 +40,8 @@
 bughunter init         хэл, framework, build систем, өгөгдлийн сан, контейнерийг илрүүлнэ
 bughunter scan         файл, симбол, хамаарал, тестийг индексжүүлж → суурь тогтооно
 bughunter rescan       суурьтай харьцуулж → өөрчлөгдсөн симбол → нөлөө → алдаа хайх
+bughunter impact       симбол/файл/нэрийн нөлөөллийн хүрээ — давхаргууд дамжина
+bughunter graph        хамаарлын графын хэмжээ ба хэдэн хувь нь тодорхойлогдсон
 bughunter investigate  дэлгэцийн зураг → UI холбоос → давхаргын заагийг давж → сэжигтнүүд
 bughunter verify       давтан үүсгэх тест бичиж, ажиллуулж, суурь дээр дахин шалгаж дүгнэнэ
 ```
@@ -210,15 +215,29 @@ args    = ["mcp"]
 
 | Crate | Төлөв |
 |---|---|
-| `bh-types` · `bh-store` · `bh-vcs` · `bh-lang` · `bh-lang-java` · `bh-core` · `bh-cli` | ажиллаж байна |
-| `bh-lang-ts` · `bh-lang-python` · `bh-lang-rust` · `bh-verify` · `bh-ai` · `bh-mcp` | V1 |
+| `bh-types` · `bh-store` · `bh-vcs` · `bh-lang` · `bh-lang-java` · `bh-lang-ts` · `bh-core` · `bh-cli` | ажиллаж байна |
+| `bh-lang-python` · `bh-lang-rust` · `bh-verify` · `bh-ai` · `bh-mcp` | V1 |
 
 Өгөгдлийн сан нь эхний өдрөөс **бүрэн 21 хүснэгтийн схемтэй**. Алдаа болон
 баталгаажуулалтын хүснэгтүүдийг дараа нэмбэл дүүрсэн сан дээр migration хийх шаардлагатай
 болох тул шууд бүтнээр нь тавьсан.
 
-109 файлтай жинхэнэ Spring Boot төсөл дээр хэмжсэн үзүүлэлт: бүтэн скан 32 мс / 939 симбол,
-өөрчлөлтгүй `rescan` 3 мс, нэг методын бие засварласан тохиолдолд 5 мс.
+Жинхэнэ 880 файлтай Spring + Next.js төсөл дээр: 5,665 симбол, төслийн дотоод хамаарлын
+**96% нь тодорхойлогдсон**, 641 мс. Үүний 402 нь GraphQL заагийг давсан `contract` ирмэг.
+
+109 файлтай Spring Boot төсөл дээр: бүтэн скан 32 мс / 939 симбол, өөрчлөлтгүй `rescan`
+3 мс, нэг методын бие засварласан тохиолдолд 5 мс.
+
+```
+$ bughunter impact 'mn.autoland.sales.vehicle.service.VehicleService#list' --paths
+
+  0.81  VehicleGraphQLController#vehicles(...)
+  0.57  graphql:Query.vehicles
+  0.46  graphql:op:Vehicles
+  0.37  frontend/src/app/(sales)/vehicles/page#VehiclesPage
+```
+
+Java методын нэг мөр өөрчлөхөд ямар React компонентууд эвдэрч болохыг харуулж байна.
 
 **Хамгийн чухал баталгаа:** бүх 109 файлыг дахин форматласны дараа (диск дээр 14,000 мөр
 өөрчлөгдсөн) `rescan` нь **0 симбол өөрчлөгдсөн** гэж хариулна. Ингэснээр `spotlessApply`

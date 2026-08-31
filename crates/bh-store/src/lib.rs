@@ -17,8 +17,11 @@ use bh_types::*;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::Path;
 
-pub const SCHEMA_VERSION: u32 = 1;
-const MIGRATIONS: &[(u32, &str)] = &[(1, include_str!("../migrations/0001_init.sql"))];
+pub const SCHEMA_VERSION: u32 = 2;
+const MIGRATIONS: &[(u32, &str)] = &[
+    (1, include_str!("../migrations/0001_init.sql")),
+    (2, include_str!("../migrations/0002_graphql_seam.sql")),
+];
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -91,6 +94,61 @@ pub struct NewSymbol {
     pub sig_hash: String,
     pub body_hash: String,
     pub annotations: Vec<String>,
+}
+
+/// An edge as an analyzer produced it, before resolution.
+#[derive(Debug, Clone)]
+pub struct NewEdge {
+    pub src_fqn: String,
+    pub dst_hint: String,
+    pub edge_type: EdgeType,
+    pub site_line: u32,
+}
+
+/// One step of a graph traversal, with everything an impact report needs to explain itself.
+#[derive(Debug, Clone)]
+pub struct Neighbour {
+    pub symbol_id: SymbolId,
+    pub fqn: String,
+    pub kind: String,
+    pub file_path: String,
+    pub start_line: i64,
+    pub edge_type: EdgeType,
+    pub resolution: Resolution,
+    pub confidence: f64,
+    pub site_line: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ResolveStats {
+    pub total: usize,
+    pub exact: usize,
+    pub contract: usize,
+    pub heuristic: usize,
+    pub ambiguous: usize,
+    /// Genuinely outside the index: a library, or a sibling module that was not scanned.
+    /// Not a failure — counting it as one makes the resolution rate a lie.
+    pub external: usize,
+    pub unresolved: usize,
+}
+
+impl ResolveStats {
+    /// Edges that could in principle have resolved, i.e. excluding external targets.
+    pub fn in_scope(&self) -> usize {
+        self.total - self.external
+    }
+    pub fn resolved(&self) -> usize {
+        self.exact + self.contract + self.heuristic + self.ambiguous
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SymbolRef {
+    pub id: SymbolId,
+    pub fqn: String,
+    pub kind: String,
+    pub file_path: String,
+    pub start_line: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -572,6 +630,306 @@ impl Store {
         Ok(symbols.len())
     }
 
+    // ── edges ────────────────────────────────────────────────
+
+    /// Replace the outgoing edges of every symbol defined in one file.
+    ///
+    /// Edges are `DERIVED` (docs/data-model.md §2c): dropping and recomputing them is
+    /// always safe, which is why an analyzer upgrade needs no data migration.
+    pub fn replace_edges_for_file(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        file_id: FileId,
+        scan_id: ScanId,
+        edges: &[NewEdge],
+    ) -> Result<usize> {
+        tx.execute(
+            "DELETE FROM symbol_edges
+             WHERE src_symbol_id IN (SELECT id FROM symbols WHERE file_id = ?1)",
+            params![file_id],
+        )?;
+        let mut written = 0usize;
+        for e in edges {
+            let src: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM symbols WHERE project_id = ?1 AND fqn = ?2 AND deleted = 0",
+                    params![project_id, e.src_fqn],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(src) = src else { continue };
+            tx.execute(
+                "INSERT INTO symbol_edges (project_id, src_symbol_id, dst_symbol_id, dst_fqn_hint,
+                                           edge_type, resolution, confidence, site_line, last_seen_scan_id)
+                 VALUES (?1, ?2, NULL, ?3, ?4, 'unresolved', 0.0, ?5, ?6)",
+                params![project_id, src, e.dst_hint, e.edge_type.as_str(), e.site_line as i64, scan_id],
+            )?;
+            written += 1;
+        }
+        Ok(written)
+    }
+
+    /// Turn `dst_fqn_hint` into a symbol id.
+    ///
+    /// Runs once per scan, after every symbol is written — an analyzer cannot do this
+    /// because it only ever sees one file. Each edge records which tier resolved it, so a
+    /// three-hop heuristic chain is visibly a guess rather than silently a compiler fact.
+    pub fn resolve_edges(tx: &Transaction<'_>, project_id: ProjectId) -> Result<ResolveStats> {
+        let mut by_fqn: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+        let mut by_prefix: std::collections::HashMap<String, Vec<i64>> =
+            std::collections::HashMap::new();
+        // Simple `Type#member` and bare `Type`, for the last-resort tier below.
+        let mut by_simple: std::collections::HashMap<String, Vec<i64>> =
+            std::collections::HashMap::new();
+        {
+            let mut stmt = tx.prepare("SELECT id, fqn FROM live_symbols WHERE project_id = ?1")?;
+            let rows = stmt.query_map(params![project_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (id, fqn) = row?;
+                // A method FQN carries its parameter types; a call site does not know them,
+                // so both a full key and a `owner#name` key are needed.
+                if let Some(paren) = fqn.find('(') {
+                    by_prefix
+                        .entry(fqn[..paren].to_string())
+                        .or_default()
+                        .push(id);
+                }
+                by_simple.entry(simple_key(&fqn)).or_default().push(id);
+                by_fqn.insert(fqn, id);
+            }
+        }
+
+        let unresolved: Vec<(i64, String, String)> = {
+            let mut stmt = tx.prepare(
+                "SELECT id, dst_fqn_hint, edge_type FROM symbol_edges
+                 WHERE project_id = ?1 AND dst_symbol_id IS NULL AND dst_fqn_hint IS NOT NULL",
+            )?;
+            let rows = stmt
+                .query_map(params![project_id], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
+
+        // Packages this project actually defines. A hint outside all of them points at a
+        // library or an unscanned sibling module, which is a different thing from a hint
+        // BugHunter looked for and could not find.
+        let mut project_packages: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for fqn in by_fqn.keys() {
+            let type_part = fqn.split('#').next().unwrap_or(fqn);
+            if let Some((pkg, _)) = type_part.rsplit_once('.') {
+                project_packages.insert(pkg.to_string());
+            }
+        }
+
+        let mut stats = ResolveStats {
+            total: unresolved.len(),
+            ..Default::default()
+        };
+        for (edge_id, hint, edge_type) in unresolved {
+            if let Some(&dst) = by_fqn.get(&hint) {
+                // A GraphQL field is a real contract that both sides name identically —
+                // an exact join, not a guess, so it is labelled `contract`.
+                let (res, conf) = if hint.starts_with("graphql:") {
+                    stats.contract += 1;
+                    (Resolution::Contract, 0.95)
+                } else {
+                    stats.exact += 1;
+                    (Resolution::Exact, 1.0)
+                };
+                tx.execute(
+                    "UPDATE symbol_edges SET dst_symbol_id = ?2, resolution = ?3, confidence = ?4 WHERE id = ?1",
+                    params![edge_id, dst, res.as_str(), conf],
+                )?;
+                continue;
+            }
+
+            match by_prefix.get(&hint).map(Vec::as_slice) {
+                Some([only]) => {
+                    stats.heuristic += 1;
+                    tx.execute(
+                        "UPDATE symbol_edges SET dst_symbol_id = ?2, resolution = 'heuristic', confidence = 0.9
+                         WHERE id = ?1",
+                        params![edge_id, only],
+                    )?;
+                }
+                // Overloads. Every candidate gets an edge at reduced confidence: dropping
+                // them costs recall, and picking one silently would be a confident guess.
+                Some(many) if many.len() <= 4 => {
+                    stats.ambiguous += 1;
+                    let conf = 0.9 / many.len() as f64;
+                    tx.execute(
+                        "UPDATE symbol_edges SET dst_symbol_id = ?2, resolution = 'heuristic', confidence = ?3
+                         WHERE id = ?1",
+                        params![edge_id, many[0], conf],
+                    )?;
+                    for dst in &many[1..] {
+                        tx.execute(
+                            "INSERT INTO symbol_edges (project_id, src_symbol_id, dst_symbol_id, dst_fqn_hint,
+                                                       edge_type, resolution, confidence, site_line, last_seen_scan_id)
+                             SELECT project_id, src_symbol_id, ?2, dst_fqn_hint, ?3, 'heuristic', ?4,
+                                    site_line, last_seen_scan_id
+                             FROM symbol_edges WHERE id = ?1",
+                            params![edge_id, dst, edge_type, conf],
+                        )?;
+                    }
+                }
+                _ => {
+                    // Last resort: match on the simple name alone, and only when it is
+                    // unique across the project. A wildcard import or a nested type means
+                    // the package qualification guessed wrong, but the simple name is still
+                    // right — and if it is not unique, this tier declines rather than picks.
+                    if let Some([only]) = by_simple.get(&simple_key(&hint)).map(Vec::as_slice) {
+                        stats.heuristic += 1;
+                        tx.execute(
+                            "UPDATE symbol_edges SET dst_symbol_id = ?2, resolution = 'heuristic', confidence = 0.7
+                             WHERE id = ?1",
+                            params![edge_id, only],
+                        )?;
+                        continue;
+                    }
+                    let type_part = hint.split('#').next().unwrap_or(&hint);
+                    let pkg = type_part.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
+                    if !pkg.is_empty() && !project_packages.contains(pkg) {
+                        stats.external += 1;
+                        tx.execute(
+                            "UPDATE symbol_edges SET resolution = 'external' WHERE id = ?1",
+                            params![edge_id],
+                        )?;
+                    } else {
+                        // In a project package but no such symbol: BugHunter looked and
+                        // failed. The hint is kept so a later scan can resolve it once the
+                        // ambiguity goes away.
+                        stats.unresolved += 1;
+                    }
+                }
+            }
+        }
+        Ok(stats)
+    }
+
+    pub fn edge_counts(&self, project_id: ProjectId) -> Result<(i64, i64, i64)> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+               COUNT(*),
+               SUM(dst_symbol_id IS NOT NULL),
+               SUM(resolution = 'external')
+             FROM symbol_edges WHERE project_id = ?1",
+        )?;
+        let row = stmt.query_row(params![project_id], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+            ))
+        })?;
+        Ok(row)
+    }
+
+    pub fn edges_by_resolution(&self, project_id: ProjectId) -> Result<Vec<(String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT resolution, COUNT(*) FROM symbol_edges WHERE project_id = ?1
+             GROUP BY resolution ORDER BY 2 DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    // ── graph traversal ──────────────────────────────────────
+
+    /// Who depends on this symbol. One indexed seek on `idx_edges_dst` per frontier node —
+    /// this query is why that index exists.
+    pub fn edges_into(&self, symbol_id: SymbolId) -> Result<Vec<Neighbour>> {
+        self.neighbours(
+            "SELECT s.id, s.fqn, s.kind, f.path, s.start_line,
+                    e.edge_type, e.resolution, e.confidence, e.site_line
+             FROM symbol_edges e
+             JOIN symbols s ON s.id = e.src_symbol_id AND s.deleted = 0
+             JOIN files   f ON f.id = s.file_id
+             WHERE e.dst_symbol_id = ?1",
+            symbol_id,
+        )
+    }
+
+    /// What this symbol reaches.
+    pub fn edges_out(&self, symbol_id: SymbolId) -> Result<Vec<Neighbour>> {
+        self.neighbours(
+            "SELECT s.id, s.fqn, s.kind, f.path, s.start_line,
+                    e.edge_type, e.resolution, e.confidence, e.site_line
+             FROM symbol_edges e
+             JOIN symbols s ON s.id = e.dst_symbol_id AND s.deleted = 0
+             JOIN files   f ON f.id = s.file_id
+             WHERE e.src_symbol_id = ?1",
+            symbol_id,
+        )
+    }
+
+    fn neighbours(&self, sql: &str, symbol_id: SymbolId) -> Result<Vec<Neighbour>> {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt
+            .query_map(params![symbol_id], |r| {
+                let edge_type: String = r.get(5)?;
+                let resolution: String = r.get(6)?;
+                Ok(Neighbour {
+                    symbol_id: r.get(0)?,
+                    fqn: r.get(1)?,
+                    kind: r.get(2)?,
+                    file_path: r.get(3)?,
+                    start_line: r.get(4)?,
+                    edge_type: EdgeType::parse(&edge_type).unwrap_or(EdgeType::Calls),
+                    resolution: Resolution::parse(&resolution).unwrap_or(Resolution::Heuristic),
+                    confidence: r.get(7)?,
+                    site_line: r.get(8)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Find the symbols a user's target string refers to: an exact FQN, an FQN suffix, a
+    /// bare name, or every symbol defined in a file.
+    pub fn find_symbols(
+        &self,
+        project_id: ProjectId,
+        target: &str,
+        limit: usize,
+    ) -> Result<Vec<SymbolRef>> {
+        let looks_like_path =
+            target.contains('/') || target.ends_with(".java") || target.ends_with(".ts");
+        let sql = if looks_like_path {
+            "SELECT s.id, s.fqn, s.kind, f.path, s.start_line
+             FROM live_symbols s JOIN files f ON f.id = s.file_id
+             WHERE s.project_id = ?1 AND f.path = ?2
+             ORDER BY s.start_line LIMIT ?3"
+        } else {
+            "SELECT s.id, s.fqn, s.kind, f.path, s.start_line
+             FROM live_symbols s JOIN files f ON f.id = s.file_id
+             WHERE s.project_id = ?1
+               AND (s.fqn = ?2 OR s.fqn LIKE '%' || ?2 OR s.fqn LIKE '%' || ?2 || '(%'
+                    OR s.name = ?2)
+             ORDER BY LENGTH(s.fqn) LIMIT ?3"
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt
+            .query_map(params![project_id, target, limit as i64], |r| {
+                Ok(SymbolRef {
+                    id: r.get(0)?,
+                    fqn: r.get(1)?,
+                    kind: r.get(2)?,
+                    file_path: r.get(3)?,
+                    start_line: r.get(4)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     // ── changes ──────────────────────────────────────────────
 
     pub fn insert_change(tx: &Transaction<'_>, scan_id: ScanId, c: &ChangeRecord) -> Result<()> {
@@ -642,6 +1000,19 @@ impl Store {
             |r| r.get(0),
         )?;
         Ok((files, symbols))
+    }
+}
+
+/// `mn.pay.PaymentService#createPayment(String)` -> `PaymentService#createPayment`.
+fn simple_key(fqn: &str) -> String {
+    let (type_part, member) = match fqn.split_once('#') {
+        Some((t, m)) => (t, Some(m)),
+        None => (fqn, None),
+    };
+    let simple_type = type_part.rsplit('.').next().unwrap_or(type_part);
+    match member {
+        Some(m) => format!("{simple_type}#{}", m.split('(').next().unwrap_or(m)),
+        None => simple_type.to_string(),
     }
 }
 

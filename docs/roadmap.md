@@ -15,6 +15,11 @@ network connection.
 
 ### Scope
 
+**Delivered so far** — `init` `scan` `rescan` `status` `changes` `impact` `graph` `doctor`;
+Java and TypeScript analyzers; the dependency graph with four resolution tiers; the GraphQL
+seam. Measured on a 880-file Spring + Next.js project: 5,665 symbols and 96 % of in-project
+edges resolved in 641 ms.
+
 | Area | In | Out |
 |---|---|---|
 | Languages | Java (+Spring pack), TypeScript | Python, Rust |

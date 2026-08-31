@@ -116,6 +116,25 @@ pub fn scan(w: &mut impl Write, st: &Style, r: &ScanReport) -> std::io::Result<(
     }
     writeln!(w, "  files        {}", r.files_scanned)?;
     writeln!(w, "  symbols      {}", r.symbols_indexed)?;
+    if r.edges_total > 0 {
+        // The honest denominator excludes edges pointing outside the project: an edge to
+        // org.springframework is correctly not in this index, not a resolution failure.
+        let in_scope = r.edges_total.saturating_sub(r.edges_external);
+        let pct = if in_scope > 0 {
+            (r.edges_resolved as f64 / in_scope as f64) * 100.0
+        } else {
+            100.0
+        };
+        writeln!(
+            w,
+            "  edges        {} {}",
+            r.edges_total,
+            st.dim(&format!(
+                "({pct:.0}% of {in_scope} in-project resolved, {} external)",
+                r.edges_external
+            ))
+        )?;
+    }
     if r.files_skipped > 0 {
         writeln!(
             w,
@@ -328,6 +347,151 @@ fn health(
             "  {}",
             st.dim(&format!("… and {} more (use --json)", warnings.len() - 5))
         )?;
+    }
+    Ok(())
+}
+
+pub fn impact(
+    w: &mut impl Write,
+    st: &Style,
+    r: &ImpactReport,
+    show_paths: bool,
+) -> std::io::Result<()> {
+    let arrow = if r.direction == "reverse" {
+        "depends on"
+    } else {
+        "reaches"
+    };
+    writeln!(w, "{} {}", st.head("Impact"), st.dim(&format!("({arrow})")))?;
+    for s in &r.seeds {
+        writeln!(
+            w,
+            "  {} {}",
+            st.head(&s.fqn),
+            st.dim(&format!("{}:{}", s.file, s.line))
+        )?;
+    }
+    writeln!(w)?;
+
+    if r.items.is_empty() && r.tests.is_empty() {
+        writeln!(w, "{}", st.dim("Nothing else is affected."))?;
+        return Ok(());
+    }
+
+    writeln!(w, "  {} affected symbols", r.items.len())?;
+    writeln!(w, "  {} related tests", r.tests.len())?;
+    if r.crossed_seam > 0 {
+        writeln!(
+            w,
+            "  {} crossing the frontend/backend seam",
+            st.good(&r.crossed_seam.to_string())
+        )?;
+    }
+    writeln!(w)?;
+
+    for item in &r.items {
+        let score = format!("{:.2}", item.score);
+        // A path whose weakest link is a heuristic guess is shown as one, never as a fact.
+        let conf = if item.min_confidence >= 0.95 {
+            st.good("exact")
+        } else if item.min_confidence >= 0.7 {
+            st.dim("likely")
+        } else {
+            st.warn("guess")
+        };
+        writeln!(w, "  {score:>5}  {conf:<14} {}", item.fqn)?;
+        if show_paths {
+            for hop in &item.path {
+                writeln!(
+                    w,
+                    "         {}",
+                    st.dim(&format!("{} --{}--> ", hop.from, hop.edge))
+                )?;
+            }
+        }
+    }
+
+    if !r.tests.is_empty() {
+        writeln!(w)?;
+        writeln!(w, "{}", st.head("Related tests"))?;
+        for t in r.tests.iter().take(10) {
+            writeln!(w, "  {:>5}  {}", format!("{:.2}", t.score), t.fqn)?;
+        }
+    }
+
+    if !r.truncated_at.is_empty() {
+        writeln!(w)?;
+        writeln!(w, "{} fan-out capped at:", st.warn("Truncated:"))?;
+        for t in &r.truncated_at {
+            writeln!(w, "  {t}")?;
+        }
+    }
+    writeln!(w)?;
+    writeln!(
+        w,
+        "{}",
+        st.dim(&format!("  {} visited · {} ms", r.visited, r.duration_ms))
+    )
+}
+
+pub fn ambiguous(
+    w: &mut impl Write,
+    st: &Style,
+    target: &str,
+    cands: &[SeedRef],
+) -> std::io::Result<()> {
+    writeln!(
+        w,
+        "{} '{target}' matches {} symbols.",
+        st.warn("Ambiguous:"),
+        cands.len()
+    )?;
+    writeln!(
+        w,
+        "{}",
+        st.dim("  Pick one — BugHunter will not guess which you meant.")
+    )?;
+    writeln!(w)?;
+    for c in cands.iter().take(15) {
+        writeln!(w, "  {}", c.fqn)?;
+        writeln!(w, "    {}", st.dim(&format!("{}:{}", c.file, c.line)))?;
+    }
+    if cands.len() > 15 {
+        writeln!(
+            w,
+            "  {}",
+            st.dim(&format!("… and {} more", cands.len() - 15))
+        )?;
+    }
+    Ok(())
+}
+
+pub fn graph(w: &mut impl Write, st: &Style, g: &GraphReport) -> std::io::Result<()> {
+    writeln!(w, "{}", st.head("Dependency graph"))?;
+    writeln!(w, "  {} edges total", g.edges_total)?;
+    let in_scope = g.edges_total - g.edges_external;
+    let pct = if in_scope > 0 {
+        (g.edges_resolved as f64 / in_scope as f64) * 100.0
+    } else {
+        100.0
+    };
+    writeln!(
+        w,
+        "  {in_scope} in-project · {} resolved {}",
+        g.edges_resolved,
+        st.good(&format!("({pct:.0}%)"))
+    )?;
+    writeln!(
+        w,
+        "  {} external {}",
+        g.edges_external,
+        st.dim("(libraries, unscanned sibling modules)")
+    )?;
+    if !g.by_resolution.is_empty() {
+        writeln!(w)?;
+        for (res, n) in &g.by_resolution {
+            writeln!(w, "  {:<12} {n}", st.dim(res))?;
+        }
     }
     Ok(())
 }

@@ -12,6 +12,7 @@
 
 pub mod detect;
 pub mod engine;
+pub mod impact;
 pub mod report;
 pub mod walk;
 

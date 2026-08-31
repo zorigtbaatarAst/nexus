@@ -5,11 +5,13 @@
 //! `tests/boundaries.rs` fails the build otherwise.
 
 use crate::detect::Detector;
+use crate::impact::{self, ImpactQuery};
 use crate::report::*;
 use crate::walk::{self, HashedFile};
 use bh_lang::{ParsedFile, Registry, SourceFile};
 use bh_lang_java::JavaAnalyzer;
-use bh_store::{ChangeRecord, NewSymbol, Store};
+use bh_lang_ts::TypeScriptAnalyzer;
+use bh_store::{ChangeRecord, NewEdge, NewSymbol, Store, SymbolRef};
 use bh_types::*;
 use bh_vcs::{Repo, VcsError};
 use rayon::prelude::*;
@@ -93,7 +95,9 @@ impl Engine {
         let project_id = store.ensure_project(&root.display().to_string(), &name, vcs)?;
 
         let mut registry = Registry::new();
-        registry.register(Box::new(JavaAnalyzer::new()));
+        registry
+            .register(Box::new(JavaAnalyzer::new()))
+            .register(Box::new(TypeScriptAnalyzer::new()));
 
         Ok(Engine {
             root: root.to_path_buf(),
@@ -120,7 +124,7 @@ impl Engine {
     pub fn detect(&self) -> Result<Profile> {
         let files = walk::walk(&self.root, &[]);
         let paths: Vec<String> = files.into_iter().map(|f| f.path).collect();
-        let analyzed: Vec<&str> = ["java"].to_vec();
+        let analyzed: Vec<&str> = vec!["java", "typescript"];
         Ok(Detector {
             root: &self.root,
             paths: &paths,
@@ -215,8 +219,9 @@ impl Engine {
         let mut symbols_indexed = 0usize;
 
         let tx = self.store.transaction()?;
+        let mut pending_edges: Vec<(FileId, Vec<NewEdge>)> = Vec::new();
         for (file, outcome) in &parsed {
-            let (status, error, symbols) = classify(outcome);
+            let (status, error, symbols, edges) = classify(outcome);
             match status {
                 ParseStatus::Failed => failed += 1,
                 ParseStatus::Skipped => skipped += 1,
@@ -246,11 +251,27 @@ impl Engine {
                 symbols_indexed +=
                     Store::replace_symbols(&tx, self.project_id, file_id, scan_id, &syms)?;
             }
+            if !edges.is_empty() {
+                pending_edges.push((file_id, edges));
+            }
         }
         for gone in existing.difference(&seen) {
             Store::mark_file_deleted(&tx, self.project_id, gone, scan_id)?;
         }
+        // Edges are written only after every symbol exists: an edge's source must be
+        // resolvable, and resolution needs the complete symbol table — which is precisely
+        // why an analyzer cannot do this itself.
+        for (file_id, edges) in &pending_edges {
+            Store::replace_edges_for_file(&tx, self.project_id, *file_id, scan_id, edges)?;
+        }
+        let resolve = Store::resolve_edges(&tx, self.project_id)?;
         tx.commit().map_err(bh_store::StoreError::from)?;
+        if resolve.unresolved > 0 {
+            warnings.push(format!(
+                "{} edges point inside the project but matched no symbol (overloads, inherited methods)",
+                resolve.unresolved
+            ));
+        }
 
         let health = if failed > 0 {
             Health::Degraded
@@ -276,6 +297,9 @@ impl Engine {
             files_failed: failed,
             files_skipped: skipped,
             symbols_indexed,
+            edges_resolved: resolve.resolved(),
+            edges_total: resolve.total,
+            edges_external: resolve.external,
             health,
             warnings,
             duration_ms: started.elapsed().as_millis(),
@@ -543,8 +567,12 @@ impl Engine {
             Store::mark_file_deleted(&tx, self.project_id, path, scan_id)?;
         }
 
+        let mut pending_edges: Vec<(FileId, Vec<NewEdge>)> = Vec::new();
         for (file, outcome) in &parsed {
-            let (status, error, symbols) = classify(outcome);
+            let (status, error, symbols, edges) = classify(outcome);
+            if !edges.is_empty() {
+                pending_edges.push((0, edges));
+            }
             if status == ParseStatus::Failed {
                 failed += 1;
             }
@@ -664,7 +692,20 @@ impl Engine {
                 }
                 Store::replace_symbols(&tx, self.project_id, file_id, scan_id, &new_symbols)?;
             }
+            if let Some(last) = pending_edges.last_mut() {
+                if last.0 == 0 {
+                    last.0 = file_id;
+                }
+            }
         }
+        for (file_id, edges) in &pending_edges {
+            if *file_id != 0 {
+                Store::replace_edges_for_file(&tx, self.project_id, *file_id, scan_id, edges)?;
+            }
+        }
+        // Tier 3: an added or renamed symbol can resolve edges elsewhere without those
+        // files changing, so resolution re-runs over the unresolved set every scan.
+        Store::resolve_edges(&tx, self.project_id)?;
         tx.commit().map_err(bh_store::StoreError::from)?;
 
         let (files, symbols) = self.store.index_counts(self.project_id)?;
@@ -779,6 +820,63 @@ impl Engine {
             return Err(EngineError::NoBaseline);
         };
         Ok(self.store.changes_for_scan(b.scan_id, entity)?)
+    }
+
+    // ── impact ───────────────────────────────────────────────
+
+    /// Blast radius of a symbol, a file, or a bare name.
+    ///
+    /// Returns `Ambiguous` rather than picking one of several matches: in the face of
+    /// ambiguity, refuse the temptation to guess. That is the same contract the
+    /// clarification protocol formalizes for the investigation entry point.
+    pub fn impact(&self, q: &ImpactQuery) -> Result<Resolved<ImpactReport>> {
+        let matches = self.store.find_symbols(self.project_id, &q.target, 25)?;
+        if matches.is_empty() {
+            return Ok(Resolved::NotFound(q.target.clone()));
+        }
+        // An exact FQN match, or every symbol in one file, is unambiguous.
+        let exact: Vec<SymbolRef> = matches
+            .iter()
+            .filter(|m| m.fqn == q.target)
+            .cloned()
+            .collect();
+        let same_file = matches.iter().all(|m| m.file_path == matches[0].file_path)
+            && (q.target.contains('/') || q.target.ends_with(".java"));
+
+        let seeds = if !exact.is_empty() {
+            exact
+        } else if matches.len() == 1 || same_file {
+            matches.clone()
+        } else {
+            return Ok(Resolved::Ambiguous(
+                matches
+                    .into_iter()
+                    .map(|m| SeedRef {
+                        fqn: m.fqn,
+                        kind: m.kind,
+                        file: m.file_path,
+                        line: m.start_line,
+                    })
+                    .collect(),
+            ));
+        };
+
+        Ok(Resolved::One(impact::run(
+            &self.store,
+            self.project_id,
+            &seeds,
+            q,
+        )?))
+    }
+
+    pub fn graph(&self) -> Result<GraphReport> {
+        let (total, resolved, external) = self.store.edge_counts(self.project_id)?;
+        Ok(GraphReport {
+            edges_total: total,
+            edges_resolved: resolved,
+            edges_external: external,
+            by_resolution: self.store.edges_by_resolution(self.project_id)?,
+        })
     }
 
     // ── doctor ───────────────────────────────────────────────
@@ -917,7 +1015,14 @@ enum Outcome {
     Skipped,
 }
 
-fn classify(o: &Outcome) -> (ParseStatus, Option<String>, Option<Vec<NewSymbol>>) {
+type Classified = (
+    ParseStatus,
+    Option<String>,
+    Option<Vec<NewSymbol>>,
+    Vec<NewEdge>,
+);
+
+fn classify(o: &Outcome) -> Classified {
     match o {
         // A file that partly parsed contributes what it has and says what it could not do.
         // Aborting the scan would make one bad file fatal; staying silent would make the
@@ -930,9 +1035,19 @@ fn classify(o: &Outcome) -> (ParseStatus, Option<String>, Option<Vec<NewSymbol>>
             },
             p.warnings.first().cloned(),
             Some(p.symbols.iter().map(to_new_symbol).collect()),
+            p.edges.iter().map(to_new_edge).collect(),
         ),
-        Outcome::Failed(e) => (ParseStatus::Failed, Some(e.clone()), None),
-        Outcome::Skipped => (ParseStatus::Skipped, None, None),
+        Outcome::Failed(e) => (ParseStatus::Failed, Some(e.clone()), None, Vec::new()),
+        Outcome::Skipped => (ParseStatus::Skipped, None, None, Vec::new()),
+    }
+}
+
+fn to_new_edge(e: &bh_lang::RawEdge) -> NewEdge {
+    NewEdge {
+        src_fqn: e.src_fqn.clone(),
+        dst_hint: e.dst_hint.clone(),
+        edge_type: e.edge_type,
+        site_line: e.site_line,
     }
 }
 

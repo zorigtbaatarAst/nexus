@@ -638,6 +638,33 @@ and selection set) or gRPC-first (join on the `.proto` service and method — co
 easier, since there genuinely is a shared IDL). The `calls_http` edge type becomes
 `calls_rpc` alongside it; nothing else moves.
 
+### Revision — 2026-08-31: the trigger fired immediately
+
+The first real target codebase (`autoland-management/sales`) is Spring for GraphQL on the
+backend and Apollo with `graphql-codegen` on the frontend: **27 GraphQL controllers against
+3 REST files.** The decision above still stands — join at the contract, statically, with
+nothing running — but for this stack the contract is a schema coordinate, not a URL path.
+
+What was added, as `EdgeType::CallsGraphql` alongside `CallsHttp`:
+
+| Side | Extracted | Emits |
+|---|---|---|
+| backend | `@QueryMapping` / `@MutationMapping` / `@SchemaMapping` | a `kind='route'` symbol `graphql:Query.vehicles`, and a `routes` edge to its handler |
+| frontend | `gql` documents | a `graphql:op:Vehicles` symbol, and a `calls_graphql` edge per root field |
+| frontend | `useQuery(VehiclesDocument)` | a `calls_graphql` edge to `graphql:op:Vehicles` |
+
+Two hops rather than one, because a component names an *operation* while a resolver serves a
+*field*, and neither file mentions the other. The `<Name>Document` suffix is graphql-codegen
+output, which is what makes the first hop a contract rather than a naming guess.
+
+This turned out **better** than the HTTP join, and the ADR's reasoning was wrong on one
+point: it argued that most codebases have no shared IDL, so the join could not rely on one.
+A GraphQL project does have one — the `.graphqls` schema — and both sides are generated from
+it. The join is exact, and `resolution='contract'` records that.
+
+Measured on the real project: 402 contract edges, and a reverse trace from
+`VehicleService#list` reaches six React components through the seam.
+
 ---
 
 ## ADR-015 — Structured clarification instead of guessing
@@ -735,3 +762,55 @@ If agents prove unreliable at transcription in practice, add a *verification* st
 than a vision stack: ask the agent for the label's bounding box or surrounding text and check
 that the combination exists in `ui_strings`. That keeps the vision outside and adds a
 deterministic cross-check inside, which is the shape the rest of the product already uses.
+
+
+---
+
+## ADR-017 — `external` is a resolution outcome, not a failure
+
+### Why it is needed
+The first real measurement of edge resolution reported **20 % resolved** and looked like a
+broken analyzer. It was not: 9,514 of 13,467 edges pointed at `org.springframework`,
+`org.mockito` and sibling Gradle modules that were never scanned. Those edges are *correctly*
+absent from the index. A denominator that includes them measures the size of the JDK, not
+the quality of resolution.
+
+### Decision
+A fifth resolution value, `external`, for an edge whose target lies outside every package the
+project defines. Resolution rate is reported over in-project edges only, with the external
+count shown alongside.
+
+```
+edges  13467  (96% of 4370 in-project resolved, 9514 external)
+```
+
+### Alternatives considered
+
+**Do not emit the edge at all.** Cheapest, and it discards real information: "this service
+calls Spring's `StringUtils`" matters for dependency-upgrade impact, and once a sibling
+module *is* scanned those edges resolve with no re-extraction.
+
+**Count them as unresolved.** What was happening. It makes the headline metric meaningless
+and, worse, hides genuine resolution bugs inside a large constant — the record-accessor and
+static-import bugs were both invisible at 20 % and obvious at 68 %.
+
+**Maintain a hard-coded list of external packages.** Brittle, and wrong for a monorepo where
+`mn.autoland.model` is external today and internal tomorrow. Deriving project packages from
+the indexed symbols themselves needs no configuration and self-corrects.
+
+### Advantages
+The metric means something, so it can be used as a regression signal. Diagnosing resolution
+becomes possible: `bughunter graph` breaks the count down by tier, which is how the two bugs
+above were found. External edges keep their hint, so widening the scan resolves them later
+with no re-parse.
+
+### Disadvantages
+"Project package" is inferred, so a project whose own code lives under a package it shares
+with a library would misclassify. A file in a package with no indexed types cannot be
+classified and falls back to unresolved. Two numbers to explain instead of one.
+
+### When to change it
+If monorepo users routinely scan one module at a time, promote external edges to a
+first-class *cross-module* view rather than a footnote — at that point the interesting
+question becomes which unscanned modules this one depends on, which is exactly the V2
+cross-repo service graph.
