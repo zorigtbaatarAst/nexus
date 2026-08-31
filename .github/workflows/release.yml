@@ -148,8 +148,14 @@ jobs:
           case "$version" in v0.*) prerelease="--prerelease" ;; esac
 
           # Re-running a release must update its assets rather than fail.
+          #
+          # A release whose tag was deleted becomes a draft, and a draft is invisible to the
+          # public releases API — which is what the installer resolves against. Uploading to
+          # it silently produces a release nobody can download, so the draft flag is cleared
+          # explicitly on every re-run rather than assumed.
           if gh release view "$version" >/dev/null 2>&1; then
             gh release upload "$version" dist/* --clobber
+            gh release edit "$version" --draft=false $prerelease
           else
             gh release create "$version" dist/* $prerelease \
               --title "Nexus $version" \

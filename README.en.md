@@ -41,6 +41,30 @@ There is no separate setup step — `scan` initializes the project if it has not
 because requiring `init` first is a step whose only outcome is the error "you forgot to run
 init".
 
+### Updating
+
+```bash
+# the binary — the intelligence
+curl -fsSL https://raw.githubusercontent.com/zorigtbaatarAst/nexus/main/install.sh | sh
+
+# the Claude Code plugin — the prompts
+/plugin marketplace update nexus
+```
+
+They are independent: updating one does not update the other. `nexus doctor` reports a
+database schema older than the binary, which a rescan fixes.
+
+### As a Claude Code plugin
+
+```
+/plugin marketplace add zorigtbaatarAst/nexus
+/plugin install nexus@nexus
+```
+
+That brings the MCP server, eight slash commands and a skill that tells the agent when to
+reach for Nexus unprompted — and how to read what it gets back. Or register the server
+alone: `claude mcp add --scope user nexus -- nexus mcp`.
+
 <details>
 <summary>Other ways</summary>
 

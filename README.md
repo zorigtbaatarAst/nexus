@@ -41,6 +41,30 @@ nexus ask next       # юуг эхэлж харах нь зүйтэй вэ
 
 `init` гэж тусад нь ажиллуулах шаардлагагүй — `scan` шаардлагатай бол өөрөө бэлдэнэ.
 
+### Шинэчлэх
+
+```bash
+# binary — оюун ухаан нь
+curl -fsSL https://raw.githubusercontent.com/zorigtbaatarAst/nexus/main/install.sh | sh
+
+# Claude Code plugin — prompt-ууд нь
+/plugin marketplace update nexus
+```
+
+Хоёулаа тусдаа: нэгийг нь шинэчлэхэд нөгөө нь шинэчлэгдэхгүй. Хэрэв өгөгдлийн сангийн схем
+binary-аасаа хуучин байвал `nexus doctor` хэлж өгнө — `nexus rescan` ажиллуулахад засагдана.
+
+### Claude Code plugin болгож ашиглах
+
+```
+/plugin marketplace add zorigtbaatarAst/nexus
+/plugin install nexus@nexus
+```
+
+Ингэснээр MCP сервер, найман slash команд, мөн агентад **хэзээ** Nexus рүү хандахыг —
+бас хариуг нь **хэрхэн уншихыг** — заасан skill суулгагдана. Зөвхөн MCP серверийг суулгах бол:
+`claude mcp add --scope user nexus -- nexus mcp`.
+
 <details>
 <summary>Бусад аргууд</summary>
 
