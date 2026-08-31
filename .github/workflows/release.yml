@@ -61,10 +61,17 @@ jobs:
           "$bin" --version
           file "$bin"
           if [ "${{ contains(matrix.target, 'musl') }}" = "true" ]; then
-            # A dynamically linked "static" build would work on the runner and fail on a
+            # A dynamically linked "static" build works on the runner and fails on a
             # user's machine, which is the worst possible time to find out.
-            ldd "$bin" 2>&1 | grep -q "not a dynamic executable" || {
-              echo "musl build is not static:"; ldd "$bin"; exit 1; }
+            #
+            # Assert on the absence of shared-library lines rather than on ldd's wording:
+            # it prints "not a dynamic executable" on some systems and "statically linked"
+            # on others for the very same static-PIE binary, so matching either string
+            # fails on whichever runner happens to disagree.
+            if ldd "$bin" 2>&1 | grep -q '=>'; then
+              echo "musl build links shared libraries:"; ldd "$bin"; exit 1
+            fi
+            echo "static: no shared library dependencies"
           fi
 
       - name: Stage the asset
