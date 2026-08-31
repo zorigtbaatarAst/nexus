@@ -5,9 +5,10 @@
 //! heuristic. It is the shape behind a typo in an operation, a field renamed on one side
 //! only, and an endpoint deleted while its caller stayed.
 
-use super::{DetectContext, Detector};
-use crate::bugs::{BugCandidate, CodeRef};
-use nexus_types::{BugType, Severity};
+use super::Detector;
+use nexus_core::findings::{CodeRef, Finding};
+use nexus_core::project::{ProjectContext, Scoped};
+use nexus_types::{FindingType, Severity};
 
 pub struct OrphanOperation;
 
@@ -20,7 +21,7 @@ impl Detector for OrphanOperation {
         "a frontend operation selecting a field no backend resolver serves"
     }
 
-    fn run(&self, ctx: &DetectContext<'_>) -> Vec<BugCandidate> {
+    fn run(&self, ctx: &ProjectContext<'_>, scoped: &Scoped<'_>) -> Vec<Finding> {
         // Guard: a frontend-only scan has no resolvers at all, and reporting every
         // operation as orphaned would be technically true and completely useless. The rule
         // only means something when both sides are in the index.
@@ -32,8 +33,13 @@ impl Detector for OrphanOperation {
         }
 
         let mut out = Vec::new();
+        let in_scope: std::collections::HashSet<&str> =
+            scoped.symbols.iter().map(|s| s.fqn.as_str()).collect();
         for e in ctx.edges {
-            if e.edge_type != "calls_graphql" || e.dst_fqn.is_some() {
+            if e.edge_type != "calls_graphql"
+                || e.dst_fqn.is_some()
+                || !in_scope.contains(e.src_fqn.as_str())
+            {
                 continue;
             }
             let Some(hint) = e.dst_hint.as_deref() else {
@@ -49,8 +55,8 @@ impl Detector for OrphanOperation {
             };
             let field = hint.trim_start_matches("graphql:");
 
-            out.push(BugCandidate {
-                bug_type: BugType::ApiContract,
+            out.push(Finding {
+                finding_type: FindingType::ApiContract,
                 title: format!(
                     "operation {} selects {field}, which no resolver serves",
                     src.name
@@ -80,7 +86,7 @@ impl Detector for OrphanOperation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::detectors::{EdgeFacts, FileFacts, SymbolFacts};
+    use nexus_core::project::{EdgeFacts, FileFacts, SymbolFacts};
     use std::path::Path;
 
     fn sym(fqn: &str, kind: &str) -> SymbolFacts {
@@ -111,10 +117,11 @@ mod tests {
         }
     }
 
-    fn run(symbols: Vec<SymbolFacts>, edges: Vec<EdgeFacts>) -> Vec<BugCandidate> {
+    fn run(symbols: Vec<SymbolFacts>, edges: Vec<EdgeFacts>) -> Vec<Finding> {
         let files: Vec<FileFacts> = vec![];
-        let ctx = DetectContext::new(Path::new("/"), &symbols, &edges, &files);
-        OrphanOperation.run(&ctx)
+        let ctx = ProjectContext::new(Path::new("/"), &symbols, &edges, &files);
+        let scoped = ctx.scoped(&nexus_core::capability::Scope::Everything);
+        OrphanOperation.run(&ctx, &scoped)
     }
 
     #[test]
@@ -127,7 +134,7 @@ mod tests {
             vec![edge("graphql:op:Vehicles", "graphql:Query.vehiclez", false)],
         );
         assert_eq!(found.len(), 1, "{found:?}");
-        assert_eq!(found[0].bug_type, BugType::ApiContract);
+        assert_eq!(found[0].finding_type, FindingType::ApiContract);
         assert!(found[0].evidence[0].note.contains("vehiclez"));
     }
 

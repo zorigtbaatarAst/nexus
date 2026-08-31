@@ -6,9 +6,10 @@
 //! cannot express that property, but a call graph can, which is exactly the division of
 //! labour the design argues for.
 
-use super::{DetectContext, Detector, SymbolFacts};
-use crate::bugs::{BugCandidate, CodeRef};
-use nexus_types::{BugType, Severity};
+use super::Detector;
+use nexus_core::findings::{CodeRef, Finding};
+use nexus_core::project::{ProjectContext, Scoped, SymbolFacts};
+use nexus_types::{FindingType, Severity};
 
 const TX: &str = "Transactional";
 
@@ -38,9 +39,9 @@ impl Detector for TransactionalNonPublic {
         "@Transactional on a method the proxy cannot intercept"
     }
 
-    fn run(&self, ctx: &DetectContext<'_>) -> Vec<BugCandidate> {
+    fn run(&self, ctx: &ProjectContext<'_>, scoped: &Scoped<'_>) -> Vec<Finding> {
         let mut out = Vec::new();
-        for s in ctx.symbols {
+        for s in &scoped.symbols {
             if s.kind != "method" || !s.has_annotation(TX) {
                 continue;
             }
@@ -52,8 +53,8 @@ impl Detector for TransactionalNonPublic {
             if !is_bean(owner) {
                 continue;
             }
-            out.push(BugCandidate {
-                bug_type: BugType::Transaction,
+            out.push(Finding {
+                finding_type: FindingType::Transaction,
                 title: format!(
                     "@Transactional on {visibility} method {} has no effect",
                     s.name
@@ -92,10 +93,13 @@ impl Detector for SelfInvocation {
         "an internal call bypassing the proxy that applies @Transactional"
     }
 
-    fn run(&self, ctx: &DetectContext<'_>) -> Vec<BugCandidate> {
+    fn run(&self, ctx: &ProjectContext<'_>, scoped: &Scoped<'_>) -> Vec<Finding> {
         let mut out = Vec::new();
+        // Edges whose *source* is in scope: the finding is anchored on the caller.
+        let in_scope: std::collections::HashSet<&str> =
+            scoped.symbols.iter().map(|s| s.fqn.as_str()).collect();
         for e in ctx.edges {
-            if e.edge_type != "calls" {
+            if e.edge_type != "calls" || !in_scope.contains(e.src_fqn.as_str()) {
                 continue;
             }
             let Some(dst_fqn) = e.dst_fqn.as_deref() else {
@@ -120,8 +124,8 @@ impl Detector for SelfInvocation {
             if !is_bean(owner) {
                 continue;
             }
-            out.push(BugCandidate {
-                bug_type: BugType::Transaction,
+            out.push(Finding {
+                finding_type: FindingType::Transaction,
                 title: format!(
                     "{} calls @Transactional {} internally, bypassing the proxy",
                     src.name, dst.name
@@ -176,7 +180,7 @@ fn slugify(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::detectors::{EdgeFacts, FileFacts};
+    use nexus_core::project::{EdgeFacts, FileFacts};
     use std::path::Path;
 
     fn sym(fqn: &str, kind: &str, vis: &str, parent: Option<&str>, anns: &[&str]) -> SymbolFacts {
@@ -192,14 +196,11 @@ mod tests {
         }
     }
 
-    fn run<D: Detector>(
-        d: D,
-        symbols: Vec<SymbolFacts>,
-        edges: Vec<EdgeFacts>,
-    ) -> Vec<BugCandidate> {
+    fn run<D: Detector>(d: D, symbols: Vec<SymbolFacts>, edges: Vec<EdgeFacts>) -> Vec<Finding> {
         let files: Vec<FileFacts> = vec![];
-        let ctx = DetectContext::new(Path::new("/"), &symbols, &edges, &files);
-        d.run(&ctx)
+        let ctx = ProjectContext::new(Path::new("/"), &symbols, &edges, &files);
+        let scoped = ctx.scoped(&nexus_core::capability::Scope::Everything);
+        d.run(&ctx, &scoped)
     }
 
     #[test]

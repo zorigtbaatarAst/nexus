@@ -518,7 +518,7 @@ fn severity_rank(s: &str) -> u8 {
 }
 
 /// Whether any open finding is at or above the gate.
-pub fn breaches(bugs: &[BugSummary], threshold: &str) -> bool {
+pub fn breaches(bugs: &[FindingSummary], threshold: &str) -> bool {
     let gate = severity_rank(threshold);
     bugs.iter()
         .filter(|b| b.status != "FIXED" && b.status != "IGNORED")
@@ -533,9 +533,10 @@ fn glyph(st: &Style, severity: &str) -> String {
     }
 }
 
-pub fn hunt(w: &mut impl Write, st: &Style, r: &HuntReport) -> std::io::Result<()> {
+pub fn analyze(w: &mut impl Write, st: &Style, r: &AnalyzeReport) -> std::io::Result<()> {
     writeln!(w, "{}", st.head("Analysis"))?;
-    writeln!(w, "  {} detectors", r.detectors_run.len())?;
+    writeln!(w, "  {} · {}", st.head(&r.capability), st.dim(&r.scope))?;
+    writeln!(w, "  {} symbols examined", r.symbols_examined)?;
     writeln!(
         w,
         "  {} findings  {}",
@@ -562,16 +563,16 @@ pub fn hunt(w: &mut impl Write, st: &Style, r: &HuntReport) -> std::io::Result<(
         )?;
     }
     writeln!(w, "{}", st.dim(&format!("  {} ms", r.duration_ms)))?;
-    if r.bugs.is_empty() {
+    if r.findings.is_empty() {
         writeln!(w)?;
         writeln!(w, "{}", st.good("Nothing found."))?;
         return Ok(());
     }
     writeln!(w)?;
-    bugs(w, st, &r.bugs)
+    findings(w, st, &r.findings)
 }
 
-pub fn bugs(w: &mut impl Write, st: &Style, list: &[BugSummary]) -> std::io::Result<()> {
+pub fn findings(w: &mut impl Write, st: &Style, list: &[FindingSummary]) -> std::io::Result<()> {
     if list.is_empty() {
         writeln!(
             w,
@@ -600,7 +601,7 @@ pub fn bugs(w: &mut impl Write, st: &Style, list: &[BugSummary]) -> std::io::Res
             b.severity,
             (b.confidence * 100.0).round() as u32,
             status,
-            st.dim(&b.bug_type)
+            st.dim(&b.finding_type)
         )?;
         if let (Some(f), Some(l)) = (&b.file, b.line) {
             writeln!(w, "     {}", st.dim(&format!("{f}:{l}")))?;
@@ -617,7 +618,7 @@ pub fn bugs(w: &mut impl Write, st: &Style, list: &[BugSummary]) -> std::io::Res
     )
 }
 
-pub fn bug(w: &mut impl Write, st: &Style, d: &BugDetail) -> std::io::Result<()> {
+pub fn finding(w: &mut impl Write, st: &Style, d: &FindingDetail) -> std::io::Result<()> {
     let b = &d.summary;
     writeln!(w, "{} {}", glyph(st, &b.severity), st.head(&b.uid))?;
     writeln!(w, "{}", b.title)?;
@@ -625,7 +626,7 @@ pub fn bug(w: &mut impl Write, st: &Style, d: &BugDetail) -> std::io::Result<()>
     writeln!(w, "Severity:   {}", b.severity)?;
     writeln!(w, "Confidence: {}%", (b.confidence * 100.0).round() as u32)?;
     writeln!(w, "Status:     {}", b.status)?;
-    writeln!(w, "Type:       {}", b.bug_type)?;
+    writeln!(w, "Type:       {}", b.finding_type)?;
     writeln!(w, "Detector:   {}", b.detector)?;
     if let Some(c) = &b.introduced_commit {
         writeln!(w, "Introduced: {}", &c[..7.min(c.len())])?;

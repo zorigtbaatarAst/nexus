@@ -1,8 +1,10 @@
-//! Bug identity and the lifecycle rules.
+//! Finding identity and the lifecycle rules.
 //!
-//! A finding is not a bug until it has an identity that survives the next scan. ADR-007.
+//! Platform machinery, not BugHunter's: a security vulnerability, a review comment and a
+//! bug all need an identity that survives the next scan, and none of them need anything
+//! more. ADR-007.
 
-use nexus_types::{BugStatus, BugType, Severity};
+use nexus_types::{FindingStatus, FindingType, Severity};
 use serde::{Deserialize, Serialize};
 
 /// A place in the source that supports a claim.
@@ -18,8 +20,8 @@ pub struct CodeRef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BugCandidate {
-    pub bug_type: BugType,
+pub struct Finding {
+    pub finding_type: FindingType,
     pub title: String,
     /// The class, module or component this belongs to. Part of the identity, so it must be
     /// stable across formatting — a class name, never a file path.
@@ -38,14 +40,14 @@ pub struct BugCandidate {
     pub evidence: Vec<CodeRef>,
 }
 
-impl BugCandidate {
+impl Finding {
     /// Deterministic detectors carry evidence by construction, so they open at
     /// `UNVERIFIED` rather than `SUSPECTED`: there is nothing left to attach.
-    pub fn initial_status(&self) -> BugStatus {
+    pub fn initial_status(&self) -> FindingStatus {
         if self.evidence.is_empty() {
-            BugStatus::Suspected
+            FindingStatus::Suspected
         } else {
-            BugStatus::Unverified
+            FindingStatus::Unverified
         }
     }
 
@@ -69,7 +71,7 @@ impl BugCandidate {
             .unwrap_or_default();
         let material = format!(
             "{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}",
-            self.bug_type.as_str(),
+            self.finding_type.as_str(),
             self.component,
             anchor,
             self.detector_family(),
@@ -119,9 +121,9 @@ pub fn deterministic_fix_confirmed(anchor_reexamined: bool, still_fires: bool) -
 mod tests {
     use super::*;
 
-    fn candidate(anchor: &str, key: &str) -> BugCandidate {
-        BugCandidate {
-            bug_type: BugType::Transaction,
+    fn candidate(anchor: &str, key: &str) -> Finding {
+        Finding {
+            finding_type: FindingType::Transaction,
             title: "whatever".into(),
             component: "PaymentService".into(),
             anchor_fqn: Some(anchor.into()),
@@ -187,10 +189,10 @@ mod tests {
     #[test]
     fn evidence_decides_the_opening_status() {
         let with = candidate("p.C#f()", "k");
-        assert_eq!(with.initial_status(), BugStatus::Unverified);
+        assert_eq!(with.initial_status(), FindingStatus::Unverified);
         let mut without = with.clone();
         without.evidence.clear();
-        assert_eq!(without.initial_status(), BugStatus::Suspected);
+        assert_eq!(without.initial_status(), FindingStatus::Suspected);
     }
 
     #[test]

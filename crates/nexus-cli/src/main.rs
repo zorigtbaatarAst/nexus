@@ -9,7 +9,9 @@
 
 mod render;
 
+use cap_bughunter::BugHunter;
 use clap::{Parser, Subcommand};
+use nexus_core::capability::Scope;
 use nexus_core::impact::{Direction, ImpactQuery};
 use nexus_core::report::Resolved;
 use nexus_core::{Engine, EngineError};
@@ -175,7 +177,7 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
         Command::Scan => {
             // `scan` on a fresh checkout should just work. Requiring `init` first is a step
             // whose only outcome is the error "you forgot to run init".
-            let (mut engine, initialized) = Engine::open_or_init(&root)?;
+            let (mut engine, initialized) = open_or_init(&root)?;
             if initialized && !cli.quiet && !cli.json {
                 eprintln!("initialized {}/{}", root.display(), nexus_core::NEXUS_DIR);
             }
@@ -190,7 +192,7 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
         }
 
         Command::Rescan => {
-            let (mut engine, initialized) = Engine::open_or_init(&root)?;
+            let (mut engine, initialized) = open_or_init(&root)?;
             if initialized {
                 // Nothing to diff against yet, so a rescan on a fresh project is a scan.
                 let report = engine.scan()?;
@@ -331,11 +333,11 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
 
         Command::Hunt => {
             let mut engine = open(&root)?;
-            match engine.hunt() {
+            match engine.analyze("bughunter", Scope::Everything) {
                 Ok(report) => {
                     emit!(&report, {
                         render::banner(&mut out, &st)?;
-                        render::hunt(&mut out, &st, &report)?;
+                        render::analyze(&mut out, &st, &report)?;
                     });
                 }
                 Err(EngineError::NoBaseline) => {
@@ -353,10 +355,11 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             fail_on,
         } => {
             let engine = open(&root)?;
-            let bugs = engine.bugs(status.as_deref(), severity.as_deref())?;
+            let bugs =
+                engine.findings(Some("bughunter"), status.as_deref(), severity.as_deref())?;
             emit!(&bugs, {
                 render::banner(&mut out, &st)?;
-                render::bugs(&mut out, &st, &bugs)?;
+                render::findings(&mut out, &st, &bugs)?;
             });
             if let Some(threshold) = fail_on {
                 // Discovering a bug is a success, not an error. Only an explicit gate makes
@@ -369,11 +372,11 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
 
         Command::Bug { id } => {
             let engine = open(&root)?;
-            match engine.bug(id)? {
+            match engine.finding(id)? {
                 Some(detail) => {
                     emit!(&detail, {
                         render::banner(&mut out, &st)?;
-                        render::bug(&mut out, &st, &detail)?;
+                        render::finding(&mut out, &st, &detail)?;
                     });
                 }
                 None => {
@@ -386,7 +389,7 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
 
         Command::Ignore { id } => {
             let engine = open(&root)?;
-            if engine.ignore_bug(id)? {
+            if engine.ignore_finding(id)? {
                 if !cli.quiet {
                     writeln!(
                         out,
@@ -434,8 +437,18 @@ fn is_broken_pipe(e: &(dyn std::error::Error + 'static)) -> bool {
     false
 }
 
+/// The composition root: this is the one place that knows both the platform and which
+/// capabilities exist. Nexus never compiles a capability in; it is handed them here.
 fn open(root: &std::path::Path) -> Result<Engine, EngineError> {
-    Engine::open(root)
+    let mut engine = Engine::open(root)?;
+    engine.register_capability(Box::new(BugHunter::new()));
+    Ok(engine)
+}
+
+fn open_or_init(root: &std::path::Path) -> Result<(Engine, bool), EngineError> {
+    let (mut engine, fresh) = Engine::open_or_init(root)?;
+    engine.register_capability(Box::new(BugHunter::new()));
+    Ok((engine, fresh))
 }
 
 #[derive(Serialize)]

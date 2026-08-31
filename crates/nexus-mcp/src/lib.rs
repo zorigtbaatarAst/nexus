@@ -13,6 +13,8 @@
 
 pub mod budget;
 
+use cap_bughunter::BugHunter as BugHunterCapability;
+use nexus_core::capability::Scope;
 use nexus_core::impact::{Direction, ImpactQuery};
 use nexus_core::Engine;
 use rmcp::handler::server::tool::ToolRouter;
@@ -84,7 +86,7 @@ pub struct ChangesArgs {
 // ─────────────────────────── server ───────────────────────────
 
 #[derive(Clone)]
-pub struct BugHunter {
+pub struct Nexus {
     root: PathBuf,
     // `Engine` owns a rusqlite Connection, which is Send but not Sync, so it is reached
     // through a mutex. No lock is ever held across an await: every Engine call is
@@ -92,12 +94,12 @@ pub struct BugHunter {
     engine: Arc<Mutex<Option<Engine>>>,
     // Read by the code `#[tool_handler]` generates, which dead-code analysis cannot see.
     #[allow(dead_code)]
-    tool_router: ToolRouter<BugHunter>,
+    tool_router: ToolRouter<Nexus>,
 }
 
-impl BugHunter {
+impl Nexus {
     pub fn new(root: PathBuf) -> Self {
-        BugHunter {
+        Nexus {
             root,
             engine: Arc::new(Mutex::new(None)),
             tool_router: Self::tool_router(),
@@ -123,7 +125,10 @@ impl BugHunter {
             if guard.is_none() {
                 // `scan` on a fresh checkout should just work over MCP too, so the project
                 // is initialized on first use rather than erroring.
-                let (e, _) = Engine::open_or_init(&root).map_err(|e| e.to_string())?;
+                let (mut e, _) = Engine::open_or_init(&root).map_err(|e| e.to_string())?;
+                // The composition root: Nexus is handed its capabilities here rather than
+                // compiling them in, which is what lets BugHunter ship separately.
+                e.register_capability(Box::new(BugHunterCapability::new()));
                 *guard = Some(e);
             }
             let e = guard
@@ -156,7 +161,7 @@ fn ok(value: Value) -> CallToolResult {
 }
 
 #[tool_router]
-impl BugHunter {
+impl Nexus {
     #[tool(
         description = "What kind of project this is: languages, frameworks, build system, \
                        databases, the current baseline, and how far it has drifted. Call this \
@@ -326,7 +331,10 @@ impl BugHunter {
         Parameters(_): Parameters<NoArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         match self
-            .with_engine(|e| e.hunt().map_err(|e| e.to_string()))
+            .with_engine(|e| {
+                e.analyze("bughunter", Scope::Everything)
+                    .map_err(|e| e.to_string())
+            })
             .await
         {
             Ok(r) => Ok(ok(budget::fit(
@@ -346,7 +354,7 @@ impl BugHunter {
         let (status, severity) = (a.status.clone(), a.severity.clone());
         match self
             .with_engine(move |e| {
-                e.bugs(status.as_deref(), severity.as_deref())
+                e.findings(None, status.as_deref(), severity.as_deref())
                     .map_err(|e| e.to_string())
             })
             .await
@@ -371,7 +379,7 @@ impl BugHunter {
     ) -> Result<CallToolResult, ErrorData> {
         let id = a.id.clone();
         match self
-            .with_engine(move |e| e.bug(&id).map_err(|e| e.to_string()))
+            .with_engine(move |e| e.finding(&id).map_err(|e| e.to_string()))
             .await
         {
             Ok(Some(d)) => Ok(ok(serde_json::to_value(&d).unwrap_or(json!({})))),
@@ -394,7 +402,7 @@ impl BugHunter {
     ) -> Result<CallToolResult, ErrorData> {
         let id = a.id.clone();
         match self
-            .with_engine(move |e| e.ignore_bug(&id).map_err(|e| e.to_string()))
+            .with_engine(move |e| e.ignore_finding(&id).map_err(|e| e.to_string()))
             .await
         {
             Ok(true) => Ok(ok(
@@ -445,7 +453,7 @@ impl BugHunter {
 }
 
 #[tool_handler]
-impl ServerHandler for BugHunter {
+impl ServerHandler for Nexus {
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::default();
         // Without this the server advertises no capabilities, and a client is entitled to
@@ -479,7 +487,7 @@ impl ServerHandler for BugHunter {
 
 /// Serve on stdio until the client disconnects.
 pub async fn serve(root: PathBuf) -> anyhow::Result<()> {
-    let server = BugHunter::new(root);
+    let server = Nexus::new(root);
     let running = server.serve(stdio()).await?;
     running.waiting().await?;
     Ok(())

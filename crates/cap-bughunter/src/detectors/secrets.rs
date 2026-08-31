@@ -8,9 +8,10 @@
 //! recreates, inside BugHunter's own database, exactly the exposure the redactor exists to
 //! prevent — and that database is not covered by the deny-list protecting the repository.
 
-use super::{DetectContext, Detector};
-use crate::bugs::{BugCandidate, CodeRef};
-use nexus_types::{BugType, Severity};
+use super::Detector;
+use nexus_core::findings::{CodeRef, Finding};
+use nexus_core::project::{ProjectContext, Scoped};
+use nexus_types::{FindingType, Severity};
 
 /// `(label, prefix)` — shapes specific enough that a match is a credential, not a word.
 const PREFIXES: &[(&str, &str)] = &[
@@ -52,9 +53,9 @@ impl Detector for HardcodedSecret {
         "a credential committed to source"
     }
 
-    fn run(&self, ctx: &DetectContext<'_>) -> Vec<BugCandidate> {
+    fn run(&self, ctx: &ProjectContext<'_>, scoped: &Scoped<'_>) -> Vec<Finding> {
         let mut out = Vec::new();
-        for f in ctx.files {
+        for f in &scoped.files {
             if !is_scannable(&f.path) {
                 continue;
             }
@@ -71,8 +72,8 @@ impl Detector for HardcodedSecret {
                     continue;
                 };
                 let component = f.path.rsplit('/').next().unwrap_or(&f.path).to_string();
-                out.push(BugCandidate {
-                    bug_type: BugType::Security,
+                out.push(Finding {
+                    finding_type: FindingType::Security,
                     title: format!("{label} committed to {component}"),
                     component: component.clone(),
                     anchor_fqn: None,

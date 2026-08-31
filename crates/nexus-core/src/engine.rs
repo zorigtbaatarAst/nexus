@@ -4,10 +4,11 @@
 //! rule: this crate must not depend on `nexus-mcp`, `nexus-cli`, or any concrete AI provider.
 //! `tests/boundaries.rs` fails the build otherwise.
 
-use crate::bugs::{BugCandidate, CodeRef};
+use crate::capability::{Registry as Capabilities, Scope};
 use crate::detect::Detector;
-use crate::detectors::{self, DetectContext, EdgeFacts, FileFacts, SymbolFacts};
+use crate::findings::CodeRef;
 use crate::impact::{self, ImpactQuery};
+use crate::project::{ChangedSymbol, EdgeFacts, FileFacts, ProjectContext, SymbolFacts};
 use crate::report::*;
 use crate::walk::{self, HashedFile};
 use nexus_lang::{ParsedFile, Registry, SourceFile};
@@ -38,8 +39,12 @@ pub enum EngineError {
     Json(#[from] serde_json::Error),
     #[error("not a BugHunter project: {0}\n  run `bughunter init` first")]
     NotInitialized(String),
-    #[error("no baseline for this project\n  run `bughunter scan` first")]
+    #[error("no baseline for this project\n  run `nexus scan` first")]
     NoBaseline,
+    #[error("unknown capability '{asked}'\n  available: {known}")]
+    UnknownCapability { asked: String, known: String },
+    #[error("capability failed: {0}")]
+    Capability(String),
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
@@ -61,6 +66,7 @@ pub struct Engine {
     store: Store,
     repo: Option<Repo>,
     registry: Registry,
+    capabilities: Capabilities,
     project_id: ProjectId,
 }
 
@@ -167,12 +173,23 @@ impl Engine {
             .register(Box::new(GraphQlSchemaAnalyzer::new()));
 
         Ok(Engine {
+            capabilities: Capabilities::new(),
             root: root.to_path_buf(),
             store,
             repo,
             registry,
             project_id,
         })
+    }
+
+    /// Make a capability available to this engine.
+    ///
+    /// Capabilities are registered by the composition root, never compiled into the core:
+    /// `nexus-core` depending on `cap-bughunter` would invert the whole point of the split,
+    /// and the boundary test forbids it.
+    pub fn register_capability(&mut self, c: Box<dyn crate::capability::Capability>) -> &mut Self {
+        self.capabilities.register(c);
+        self
     }
 
     pub fn root(&self) -> &Path {
@@ -997,20 +1014,30 @@ impl Engine {
     /// No model is asked here, so nothing this produces is subject to the 0.75 clamp that
     /// applies to a model's own confidence: both sides of every claim are in the index and
     /// comparing them is a query.
-    pub fn hunt(&mut self) -> Result<HuntReport> {
+    /// Run one capability over a scope and reconcile its findings with what is known.
+    ///
+    /// Nexus owns identity, lifecycle and storage; the capability only says what is wrong.
+    /// That split is what lets a second capability be a few hundred lines instead of a
+    /// re-argument about when a finding is new, recurring, fixed or regressed.
+    pub fn analyze(&mut self, capability_id: &str, scope: Scope) -> Result<AnalyzeReport> {
         let started = Instant::now();
         let (commit, _) = self.head();
 
-        let scan_uid = self
+        let capability =
+            self.capabilities
+                .get(capability_id)
+                .ok_or_else(|| EngineError::UnknownCapability {
+                    asked: capability_id.to_string(),
+                    known: self.capabilities.ids().join(", "),
+                })?;
+        let cap_id = capability.id().to_string();
+        let prefix = capability.finding_prefix().to_string();
+
+        let baseline = self
             .store
             .baseline(self.project_id)?
-            .map(|b| b.scan_uid)
             .ok_or(EngineError::NoBaseline)?;
-        let scan_id = self
-            .store
-            .baseline(self.project_id)?
-            .map(|b| b.scan_id)
-            .ok_or(EngineError::NoBaseline)?;
+        let (scan_uid, scan_id) = (baseline.scan_uid.clone(), baseline.scan_id);
 
         let symbols: Vec<SymbolFacts> = self
             .store
@@ -1054,24 +1081,42 @@ impl Engine {
             })
             .collect();
 
-        let ctx = DetectContext::new(&self.root, &symbols, &edges, &files);
-        let detectors = detectors::all();
-        let mut detectors_run = Vec::new();
-        let mut candidates: Vec<BugCandidate> = Vec::new();
-        for d in &detectors {
-            detectors_run.push(d.id());
-            candidates.extend(d.run(&ctx));
-        }
+        // What moved, so a `Changed` scope has something to narrow by. Read from the
+        // ledger rather than recomputed: the rescan cascade already worked this out.
+        let changed: Vec<ChangedSymbol> = match &scope {
+            Scope::Changed { since_scan } => self
+                .store
+                .changes_for_scan(*since_scan, Some("symbol"))?
+                .into_iter()
+                .filter_map(|(_, _, target, _)| target)
+                .map(|fqn| ChangedSymbol {
+                    path: symbols
+                        .iter()
+                        .find(|s| s.fqn == fqn)
+                        .map(|s| s.file.clone())
+                        .unwrap_or_default(),
+                    fqn,
+                    kind: ChangeKind::BodyChanged,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+
+        let ctx = ProjectContext::new(&self.root, &symbols, &edges, &files)
+            .with_changes(&changed, commit.as_deref());
+
+        let mut candidates = capability
+            .analyze(&ctx, &scope)
+            .map_err(|e| EngineError::Capability(e.to_string()))?;
+        let examined = ctx.in_scope(&scope).len();
 
         // A candidate with no checkable evidence is rejected at the boundary rather than
-        // down-ranked. An assertion nobody can verify is not a finding, and storing one lets
-        // the next reader mistake it for one.
+        // down-ranked, whether it came from a rule or from a model. An assertion nobody can
+        // verify is not a finding, and storing one lets the next reader mistake it for one.
         let before = candidates.len();
         candidates.retain(|c| !c.evidence.is_empty());
         let rejected = before - candidates.len();
 
-        // Alternates are resolved before the transaction opens: rusqlite's Transaction
-        // holds a mutable borrow of the connection for its whole lifetime.
         let mut alternates: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
         for c in &candidates {
@@ -1081,25 +1126,19 @@ impl Engine {
             if alternates.contains_key(anchor) {
                 continue;
             }
-            let olds = self.store.old_fqns_for(self.project_id, anchor)?;
-            alternates.insert(anchor.to_string(), olds);
+            alternates.insert(
+                anchor.to_string(),
+                self.store.old_fqns_for(self.project_id, anchor)?,
+            );
         }
 
-        let open_before = self.store.open_findings(self.project_id, "bughunter")?;
-
-        // Which bugs this pass actually touched, by id rather than by fingerprint. A
-        // fingerprint set would miss a bug matched through an alias — its stored fingerprint
-        // was the old one — and the sweep below would then close the very bug it just found.
+        let open_before = self.store.open_findings(self.project_id, &cap_id)?;
         let mut touched: std::collections::HashSet<i64> = std::collections::HashSet::new();
-        let mut new_count = 0usize;
-        let mut recurring = 0usize;
-        let mut regressed = 0usize;
+        let (mut new_count, mut recurring, mut regressed) = (0usize, 0usize, 0usize);
 
         let tx = self.store.transaction()?;
         for c in &candidates {
             let fingerprint = c.fingerprint();
-            // A symbol that moved keeps its findings: the fingerprints it would have had
-            // under its former names are offered as alternates.
             let alt_fingerprints: Vec<String> = c
                 .anchor_fqn
                 .as_deref()
@@ -1114,6 +1153,7 @@ impl Engine {
                         .collect()
                 })
                 .unwrap_or_default();
+
             let status = c.initial_status();
             let anchor_line = c.evidence.first().map(|e| e.line as i64);
             let anchor_file = c.evidence.first().map(|e| e.file.clone());
@@ -1123,13 +1163,13 @@ impl Engine {
                 self.project_id,
                 scan_id,
                 &nexus_store::NewFinding {
-                    capability: "bughunter".into(),
-                    uid_prefix: "BUG".into(),
+                    capability: cap_id.clone(),
+                    uid_prefix: prefix.clone(),
                     fingerprint,
                     alt_fingerprints,
                     slug: c.slug.clone(),
                     title: c.title.clone(),
-                    finding_type: c.bug_type.as_str().to_string(),
+                    finding_type: c.finding_type.as_str().to_string(),
                     component: c.component.clone(),
                     severity: c.severity.as_str().to_string(),
                     confidence: c.confidence,
@@ -1163,45 +1203,56 @@ impl Engine {
             )?;
         }
 
-        // Closing a bug needs evidence, and for a deterministic detector that evidence is:
-        // the rule ran again, over the same index, and did not fire. Absence *without* the
-        // detector having run is not the same thing, which is why the ran-set is consulted
-        // rather than just the seen-set.
-        let ran: std::collections::HashSet<&str> = detectors
-            .iter()
-            .map(|d| d.id().split(':').next().unwrap_or(""))
-            .collect();
+        // Closing a finding needs evidence. For a deterministic capability that evidence is:
+        // the rule ran again over the same index and did not fire. A narrowed scope did not
+        // look everywhere, so it may not close anything it did not examine.
         let mut fixed = 0usize;
-        for open in &open_before {
-            if touched.contains(&open.id) {
-                continue;
+        if scope == Scope::Everything {
+            for open in &open_before {
+                if touched.contains(&open.id) {
+                    continue;
+                }
+                Store::mark_fixed(&tx, open.id, scan_id, commit.as_deref())?;
+                fixed += 1;
             }
-            let family = open.detector.split(':').next().unwrap_or("");
-            if !ran.contains(family) {
-                // Nobody looked. Absence proves nothing.
-                continue;
-            }
-            Store::mark_fixed(&tx, open.id, scan_id, commit.as_deref())?;
-            fixed += 1;
         }
         tx.commit().map_err(nexus_store::StoreError::from)?;
 
-        let bugs = self.bugs(None, None)?;
-        Ok(HuntReport {
+        let findings = self.findings(Some(&cap_id), None, None)?;
+        Ok(AnalyzeReport {
+            capability: cap_id,
+            scope: scope.describe(),
             scan_uid: Some(scan_uid),
-            detectors_run,
+            symbols_examined: examined,
             found: candidates.len(),
             new: new_count,
             recurring,
             regressed,
             fixed,
             rejected,
-            bugs,
+            findings,
             duration_ms: started.elapsed().as_millis(),
         })
     }
 
-    pub fn bugs(&self, status: Option<&str>, severity: Option<&str>) -> Result<Vec<BugSummary>> {
+    pub fn capability_list(&self) -> Vec<CapabilityInfo> {
+        self.capabilities
+            .all()
+            .map(|c| CapabilityInfo {
+                id: c.id().to_string(),
+                finding_prefix: c.finding_prefix().to_string(),
+                describes: c.describe().to_string(),
+            })
+            .collect()
+    }
+
+    /// Findings, optionally narrowed to one capability.
+    pub fn findings(
+        &self,
+        capability: Option<&str>,
+        status: Option<&str>,
+        severity: Option<&str>,
+    ) -> Result<Vec<FindingSummary>> {
         Ok(self
             .store
             .findings(
@@ -1209,7 +1260,7 @@ impl Engine {
                 &nexus_store::FindingQuery {
                     status,
                     severity,
-                    capability: Some("bughunter"),
+                    capability,
                 },
             )?
             .into_iter()
@@ -1217,7 +1268,7 @@ impl Engine {
             .collect())
     }
 
-    pub fn bug(&self, uid: &str) -> Result<Option<BugDetail>> {
+    pub fn finding(&self, uid: &str) -> Result<Option<FindingDetail>> {
         let Some(row) = self
             .store
             .findings(
@@ -1243,14 +1294,14 @@ impl Engine {
             .store
             .finding_history(self.project_id, &row.uid)?
             .into_iter()
-            .map(|e| BugEvent {
+            .map(|e| FindingEvent {
                 scan_uid: e.scan_uid,
                 commit: e.commit,
                 status: e.status,
                 confidence: e.confidence,
             })
             .collect();
-        Ok(Some(BugDetail {
+        Ok(Some(FindingDetail {
             summary: to_summary(row),
             fingerprint,
             evidence,
@@ -1259,7 +1310,7 @@ impl Engine {
     }
 
     /// Dismiss a finding. A human decision is sticky: a later scan will not re-open it.
-    pub fn ignore_bug(&self, uid: &str) -> Result<bool> {
+    pub fn ignore_finding(&self, uid: &str) -> Result<bool> {
         Ok(self
             .store
             .set_finding_status(self.project_id, uid, "IGNORED")?)
@@ -1699,12 +1750,13 @@ fn detect_renames(
     renames
 }
 
-fn to_summary(r: nexus_store::FindingRow) -> BugSummary {
-    BugSummary {
+fn to_summary(r: nexus_store::FindingRow) -> FindingSummary {
+    FindingSummary {
+        capability: r.capability,
         uid: r.uid,
         slug: r.slug,
         title: r.title,
-        bug_type: r.finding_type,
+        finding_type: r.finding_type,
         component: r.component,
         severity: r.severity,
         confidence: r.confidence,

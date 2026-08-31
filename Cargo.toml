@@ -9,6 +9,7 @@ members = [
   "crates/nexus-lang-ts",
   "crates/nexus-lang-graphql",
   "crates/nexus-core",
+  "crates/cap-bughunter",
   "crates/nexus-mcp",
   "crates/nexus-cli",
 ]
@@ -29,6 +30,7 @@ nexus-lang-java = { path = "crates/nexus-lang-java" }
 nexus-lang-ts   = { path = "crates/nexus-lang-ts" }
 nexus-lang-graphql = { path = "crates/nexus-lang-graphql" }
 nexus-core      = { path = "crates/nexus-core" }
+cap-bughunter   = { path = "crates/cap-bughunter" }
 nexus-mcp       = { path = "crates/nexus-mcp" }
 
 anyhow    = "1"

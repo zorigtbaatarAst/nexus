@@ -206,12 +206,13 @@ pub struct SymbolDetail {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BugSummary {
+pub struct FindingSummary {
     pub uid: String,
     pub slug: String,
     pub title: String,
+    pub capability: String,
     #[serde(rename = "type")]
-    pub bug_type: String,
+    pub finding_type: String,
     pub component: Option<String>,
     pub severity: String,
     pub confidence: f64,
@@ -226,7 +227,7 @@ pub struct BugSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct BugEvent {
+pub struct FindingEvent {
     pub scan_uid: String,
     pub commit: Option<String>,
     pub status: String,
@@ -234,18 +235,30 @@ pub struct BugEvent {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct BugDetail {
+pub struct FindingDetail {
     #[serde(flatten)]
-    pub summary: BugSummary,
+    pub summary: FindingSummary,
     pub fingerprint: String,
-    pub evidence: Vec<crate::bugs::CodeRef>,
-    pub history: Vec<BugEvent>,
+    pub evidence: Vec<crate::findings::CodeRef>,
+    pub history: Vec<FindingEvent>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct HuntReport {
+pub struct CapabilityInfo {
+    pub id: String,
+    pub finding_prefix: String,
+    pub describes: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AnalyzeReport {
+    pub capability: String,
+    /// What the capability was asked to look at, in words.
+    pub scope: String,
     pub scan_uid: Option<String>,
-    pub detectors_run: Vec<&'static str>,
+    /// How many symbols the scope actually admitted. The number that shows whether a
+    /// targeted analysis narrowed anything, rather than costing what a full one costs.
+    pub symbols_examined: usize,
     pub found: usize,
     pub new: usize,
     pub recurring: usize,
@@ -254,6 +267,6 @@ pub struct HuntReport {
     /// Rejected before storage for having no checkable evidence. Counted and reported,
     /// because a silently discarded finding is indistinguishable from finding nothing.
     pub rejected: usize,
-    pub bugs: Vec<BugSummary>,
+    pub findings: Vec<FindingSummary>,
     pub duration_ms: u128,
 }

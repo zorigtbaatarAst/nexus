@@ -399,7 +399,7 @@ impl ChangeKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum BugType {
+pub enum FindingType {
     Concurrency,
     Transaction,
     NullSafety,
@@ -414,37 +414,37 @@ pub enum BugType {
     UiState,
 }
 
-impl BugType {
+impl FindingType {
     pub fn as_str(self) -> &'static str {
         match self {
-            BugType::Concurrency => "concurrency",
-            BugType::Transaction => "transaction",
-            BugType::NullSafety => "null-safety",
-            BugType::Security => "security",
-            BugType::Logic => "logic",
-            BugType::Performance => "performance",
-            BugType::ErrorHandling => "error-handling",
-            BugType::DataConsistency => "data-consistency",
-            BugType::ApiContract => "api-contract",
-            BugType::ResourceLeak => "resource-leak",
-            BugType::Regression => "regression",
-            BugType::UiState => "ui-state",
+            FindingType::Concurrency => "concurrency",
+            FindingType::Transaction => "transaction",
+            FindingType::NullSafety => "null-safety",
+            FindingType::Security => "security",
+            FindingType::Logic => "logic",
+            FindingType::Performance => "performance",
+            FindingType::ErrorHandling => "error-handling",
+            FindingType::DataConsistency => "data-consistency",
+            FindingType::ApiContract => "api-contract",
+            FindingType::ResourceLeak => "resource-leak",
+            FindingType::Regression => "regression",
+            FindingType::UiState => "ui-state",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
         Some(match s {
-            "concurrency" => BugType::Concurrency,
-            "transaction" => BugType::Transaction,
-            "null-safety" => BugType::NullSafety,
-            "security" => BugType::Security,
-            "logic" => BugType::Logic,
-            "performance" => BugType::Performance,
-            "error-handling" => BugType::ErrorHandling,
-            "data-consistency" => BugType::DataConsistency,
-            "api-contract" => BugType::ApiContract,
-            "resource-leak" => BugType::ResourceLeak,
-            "regression" => BugType::Regression,
-            "ui-state" => BugType::UiState,
+            "concurrency" => FindingType::Concurrency,
+            "transaction" => FindingType::Transaction,
+            "null-safety" => FindingType::NullSafety,
+            "security" => FindingType::Security,
+            "logic" => FindingType::Logic,
+            "performance" => FindingType::Performance,
+            "error-handling" => FindingType::ErrorHandling,
+            "data-consistency" => FindingType::DataConsistency,
+            "api-contract" => FindingType::ApiContract,
+            "resource-leak" => FindingType::ResourceLeak,
+            "regression" => FindingType::Regression,
+            "ui-state" => FindingType::UiState,
             _ => return None,
         })
     }
@@ -486,7 +486,7 @@ impl Severity {
 /// evidence: `FIXED` is never reached by a bug merely not being seen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum BugStatus {
+pub enum FindingStatus {
     Suspected,
     Unverified,
     Verified,
@@ -495,25 +495,25 @@ pub enum BugStatus {
     Ignored,
 }
 
-impl BugStatus {
+impl FindingStatus {
     pub fn as_str(self) -> &'static str {
         match self {
-            BugStatus::Suspected => "SUSPECTED",
-            BugStatus::Unverified => "UNVERIFIED",
-            BugStatus::Verified => "VERIFIED",
-            BugStatus::Fixed => "FIXED",
-            BugStatus::Regressed => "REGRESSED",
-            BugStatus::Ignored => "IGNORED",
+            FindingStatus::Suspected => "SUSPECTED",
+            FindingStatus::Unverified => "UNVERIFIED",
+            FindingStatus::Verified => "VERIFIED",
+            FindingStatus::Fixed => "FIXED",
+            FindingStatus::Regressed => "REGRESSED",
+            FindingStatus::Ignored => "IGNORED",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
         Some(match s {
-            "SUSPECTED" => BugStatus::Suspected,
-            "UNVERIFIED" => BugStatus::Unverified,
-            "VERIFIED" => BugStatus::Verified,
-            "FIXED" => BugStatus::Fixed,
-            "REGRESSED" => BugStatus::Regressed,
-            "IGNORED" => BugStatus::Ignored,
+            "SUSPECTED" => FindingStatus::Suspected,
+            "UNVERIFIED" => FindingStatus::Unverified,
+            "VERIFIED" => FindingStatus::Verified,
+            "FIXED" => FindingStatus::Fixed,
+            "REGRESSED" => FindingStatus::Regressed,
+            "IGNORED" => FindingStatus::Ignored,
             _ => return None,
         })
     }
@@ -522,10 +522,10 @@ impl BugStatus {
     pub fn is_open(self) -> bool {
         matches!(
             self,
-            BugStatus::Suspected
-                | BugStatus::Unverified
-                | BugStatus::Verified
-                | BugStatus::Regressed
+            FindingStatus::Suspected
+                | FindingStatus::Unverified
+                | FindingStatus::Verified
+                | FindingStatus::Regressed
         )
     }
 }

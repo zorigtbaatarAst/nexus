@@ -110,6 +110,55 @@ fn language_analyzers_know_nothing_about_storage() {
 }
 
 #[test]
+fn a_capability_is_not_coupled_to_a_nexus_ui() {
+    // "BugHunter should be usable independently while also exposed through Nexus" is only
+    // true if the capability links neither adapter. A capability that could reach the CLI
+    // or the MCP server would drag a UI with it wherever it went.
+    let g = dependency_graph();
+    for capability in g
+        .keys()
+        .filter(|k| k.starts_with("cap-"))
+        .cloned()
+        .collect::<Vec<_>>()
+    {
+        for adapter in ["nexus-cli", "nexus-mcp"] {
+            assert_forbidden(
+                &g,
+                &capability,
+                adapter,
+                "a capability must not depend on an adapter — that is what makes it separable.",
+            );
+        }
+        assert_forbidden(
+            &g,
+            &capability,
+            "nexus-store",
+            "a capability reads a prepared snapshot, never the database.",
+        );
+    }
+}
+
+#[test]
+fn the_core_does_not_know_its_capabilities() {
+    // Capabilities are registered into the core by the composition root, never compiled
+    // into it. The reverse dependency would make "add Code Review later" a core change.
+    let g = dependency_graph();
+    for capability in g
+        .keys()
+        .filter(|k| k.starts_with("cap-"))
+        .cloned()
+        .collect::<Vec<_>>()
+    {
+        assert_forbidden(
+            &g,
+            "nexus-core",
+            &capability,
+            "the platform must not depend on a capability.",
+        );
+    }
+}
+
+#[test]
 fn only_the_store_touches_sql() {
     let g = dependency_graph();
     for crate_name in g.keys() {
