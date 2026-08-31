@@ -1,0 +1,18 @@
+# Cargo build output (the workspace lands here from the MVP onward)
+/target/
+**/*.rs.bk
+
+# BugHunter's own local state, when it runs on itself
+.bughunter/bughunter.db
+.bughunter/bughunter.db-wal
+.bughunter/bughunter.db-shm
+.bughunter/cache/
+.bughunter/generated-tests/
+.bughunter/audit.log
+
+# Editor and OS noise
+*.swp
+*.swo
+.idea/
+.vscode/
+.DS_Store
