@@ -229,9 +229,19 @@ resolve_latest() {
 			awk '/^  Location: /{print $2}' | tail -1 || true)
 	fi
 	case "$url" in
-	*/releases/tag/*) printf '%s' "${url##*/tag/}" ;;
-	*) return 1 ;;
+	*/releases/tag/*)
+		printf '%s' "${url##*/tag/}"
+		return 0
+		;;
 	esac
+
+	# The redirect above deliberately excludes pre-releases, so a project whose only
+	# published version is a v0.x pre-release lands here. Fall back to the API, which
+	# lists every release newest-first. The API is rate-limited to 60 requests an hour
+	# per IP, which is why it is the fallback rather than the first choice.
+	fetch "https://api.github.com/repos/$REPO/releases?per_page=1" 2>/dev/null |
+		sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' |
+		head -1 | grep . || return 1
 }
 
 ASSET=$(detect_platform) || {
