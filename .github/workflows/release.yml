@@ -31,12 +31,17 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             asset: bughunter-linux-aarch64
-          - os: macos-13
-            target: x86_64-apple-darwin
-            asset: bughunter-macos-x86_64
+          # Both macOS assets are built on Apple Silicon. GitHub is retiring the Intel
+          # macos-13 runners, and a job requesting one simply waits forever for a runner
+          # that is never assigned — a failure with no error message. Xcode ships both
+          # SDKs, so an arm64 runner cross-compiles the Intel binary natively.
           - os: macos-14
             target: aarch64-apple-darwin
             asset: bughunter-macos-aarch64
+          - os: macos-14
+            target: x86_64-apple-darwin
+            asset: bughunter-macos-x86_64
+            cross: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,12 +59,19 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Verify the binary runs and is static
+      - name: Verify the binary
         run: |
           set -eu
           bin="target/${{ matrix.target }}/release/bughunter"
-          "$bin" --version
           file "$bin"
+
+          # A cross-compiled binary cannot be executed here: Rosetta is not installed on
+          # the arm64 runners. `file` still proves the architecture is right.
+          if [ "${{ matrix.cross || false }}" = "true" ]; then
+            file "$bin" | grep -q "x86_64" || { echo "wrong architecture"; exit 1; }
+          else
+            "$bin" --version
+          fi
           if [ "${{ contains(matrix.target, 'musl') }}" = "true" ]; then
             # A dynamically linked "static" build works on the runner and fails on a
             # user's machine, which is the worst possible time to find out.
