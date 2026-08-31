@@ -8,6 +8,12 @@ add either. See [ADR-004](architecture-decisions.md#adr-004-mcp-as-the-primary-i
 bughunter mcp        # stdio JSON-RPC — the only transport in V1
 ```
 
+> **Built today:** the eight read tools — `get_project_context`, `scan`, `rescan`,
+> `get_changes`, `get_impact`, `get_symbol`, `get_graph`, `doctor` — with response budgeting
+> and structured domain failures. The bug, verification and fact tools land with the engines
+> behind them; the server says so in its own instructions rather than leaving an agent to
+> infer it.
+
 ---
 
 ## 1. The thinness rule

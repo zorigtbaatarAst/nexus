@@ -178,6 +178,29 @@ pub enum Resolved<T> {
     One(T),
     #[serde(rename = "ambiguous")]
     Ambiguous(Vec<SeedRef>),
+    // A struct variant, not a newtype: serde cannot serialize an internally-tagged
+    // newtype variant that wraps a string, and it fails at runtime rather than at compile
+    // time — so `--json` on a missing symbol errored instead of reporting not_found.
     #[serde(rename = "not_found")]
-    NotFound(String),
+    NotFound { target: String },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Neighbourhood {
+    pub fqn: String,
+    pub edge: &'static str,
+    pub resolution: &'static str,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SymbolDetail {
+    pub fqn: String,
+    pub kind: String,
+    pub file: String,
+    pub line: i64,
+    pub depends_on: Vec<Neighbourhood>,
+    pub depended_on_by: Vec<Neighbourhood>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }

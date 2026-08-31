@@ -216,26 +216,35 @@ impl Store {
             "CREATE TABLE IF NOT EXISTS schema_migrations (
                version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
         )?;
-        let current: u32 = self.conn.query_row(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-            [],
-            |r| r.get(0),
-        )?;
 
-        if current > SCHEMA_VERSION {
-            // Refuse rather than guess at an unknown schema. Errors should never pass
-            // silently, least of all in the store.
-            return Err(StoreError::SchemaTooNew {
-                found: current,
-                max: SCHEMA_VERSION,
-            });
-        }
+        // The version is read *inside* an immediate transaction, not before one.
+        //
+        // Reading it first and then opening a transaction lets two processes starting on the
+        // same fresh project both see version 0 and both apply migration 1 — the second one
+        // failing with "table projects already exists". SQLite serializes the writes but not
+        // the decision to write, so the decision has to happen under the write lock.
+        loop {
+            let tx = self
+                .conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let current: u32 = tx.query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                [],
+                |r| r.get(0),
+            )?;
 
-        for (version, sql) in MIGRATIONS {
-            if *version <= current {
-                continue;
+            if current > SCHEMA_VERSION {
+                // Refuse rather than guess at an unknown schema. Errors should never pass
+                // silently, least of all in the store.
+                return Err(StoreError::SchemaTooNew {
+                    found: current,
+                    max: SCHEMA_VERSION,
+                });
             }
-            let tx = self.conn.transaction()?;
+
+            let Some((version, sql)) = MIGRATIONS.iter().find(|(v, _)| *v > current) else {
+                return Ok(());
+            };
             tx.execute_batch(sql)?;
             tx.execute(
                 "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
@@ -243,7 +252,6 @@ impl Store {
             )?;
             tx.commit()?;
         }
-        Ok(())
     }
 
     pub fn schema_version(&self) -> Result<u32> {

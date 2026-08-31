@@ -8,6 +8,7 @@ members = [
   "crates/bh-lang-java",
   "crates/bh-lang-ts",
   "crates/bh-core",
+  "crates/bh-mcp",
   "crates/bh-cli",
 ]
 
@@ -26,6 +27,7 @@ bh-lang      = { path = "crates/bh-lang" }
 bh-lang-java = { path = "crates/bh-lang-java" }
 bh-lang-ts   = { path = "crates/bh-lang-ts" }
 bh-core      = { path = "crates/bh-core" }
+bh-mcp       = { path = "crates/bh-mcp" }
 
 anyhow    = "1"
 blake3    = "1.8"

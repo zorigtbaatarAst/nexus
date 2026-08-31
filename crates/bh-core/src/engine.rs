@@ -943,7 +943,9 @@ impl Engine {
     pub fn impact(&self, q: &ImpactQuery) -> Result<Resolved<ImpactReport>> {
         let matches = self.store.find_symbols(self.project_id, &q.target, 25)?;
         if matches.is_empty() {
-            return Ok(Resolved::NotFound(q.target.clone()));
+            return Ok(Resolved::NotFound {
+                target: q.target.clone(),
+            });
         }
         // An exact FQN match, or every symbol in one file, is unambiguous.
         let exact: Vec<SymbolRef> = matches
@@ -978,6 +980,88 @@ impl Engine {
             &seeds,
             q,
         )?))
+    }
+
+    /// One symbol in detail, or the candidates when the target is ambiguous.
+    pub fn symbol(&self, target: &str) -> Result<Resolved<SymbolDetail>> {
+        let mut matches = self.store.find_symbols(self.project_id, target, 25)?;
+        if matches.is_empty() {
+            // A name that no longer exists may have moved. Consulting aliases before
+            // declaring it unknown is what makes a rename survivable for a caller that
+            // still knows the old name.
+            if let Some(aliased) = self.store.resolve_alias(self.project_id, target)? {
+                matches = vec![aliased];
+            } else {
+                return Ok(Resolved::NotFound {
+                    target: target.to_string(),
+                });
+            }
+        }
+        let exact: Vec<_> = matches
+            .iter()
+            .filter(|m| m.fqn == target)
+            .cloned()
+            .collect();
+        let chosen = if let Some(one) = exact.first() {
+            one.clone()
+        } else if matches.len() == 1 {
+            matches[0].clone()
+        } else {
+            return Ok(Resolved::Ambiguous(
+                matches
+                    .into_iter()
+                    .map(|m| SeedRef {
+                        fqn: m.fqn,
+                        kind: m.kind,
+                        file: m.file_path,
+                        line: m.start_line,
+                    })
+                    .collect(),
+            ));
+        };
+
+        let source = self.read_lines(&chosen.file_path, chosen.start_line as usize, 80);
+        Ok(Resolved::One(SymbolDetail {
+            fqn: chosen.fqn.clone(),
+            kind: chosen.kind,
+            file: chosen.file_path,
+            line: chosen.start_line,
+            depends_on: self
+                .store
+                .edges_out(chosen.id)?
+                .into_iter()
+                .map(|n| Neighbourhood {
+                    fqn: n.fqn,
+                    edge: n.edge_type.as_str(),
+                    resolution: n.resolution.as_str(),
+                    confidence: n.confidence,
+                })
+                .collect(),
+            depended_on_by: self
+                .store
+                .edges_into(chosen.id)?
+                .into_iter()
+                .map(|n| Neighbourhood {
+                    fqn: n.fqn,
+                    edge: n.edge_type.as_str(),
+                    resolution: n.resolution.as_str(),
+                    confidence: n.confidence,
+                })
+                .collect(),
+            source,
+        }))
+    }
+
+    /// A capped excerpt. Source is expensive context, so it is opt-in and bounded rather
+    /// than attached to every result.
+    fn read_lines(&self, rel: &str, start: usize, max: usize) -> Option<String> {
+        let text = std::fs::read_to_string(self.root.join(rel)).ok()?;
+        let lines: Vec<&str> = text
+            .lines()
+            .skip(start.saturating_sub(1))
+            .take(max)
+            .collect();
+        (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
     pub fn graph(&self) -> Result<GraphReport> {

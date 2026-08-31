@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "bughunter": {
+      "command": "bughunter",
+      "args": ["mcp"]
+    }
+  }
+}

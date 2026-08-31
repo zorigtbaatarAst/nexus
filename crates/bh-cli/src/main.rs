@@ -86,6 +86,8 @@ enum Command {
     Graph,
     /// Diagnose the environment and configuration
     Doctor,
+    /// Run as an MCP server on stdio, for Claude Code, Codex, Copilot or any MCP client
+    Mcp,
 }
 
 /// Exit codes are part of the interface. Discovering a change is a success, not an error —
@@ -273,7 +275,7 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                     });
                     return Ok(exit::AMBIGUOUS);
                 }
-                r @ Resolved::NotFound(_) => {
+                r @ Resolved::NotFound { .. } => {
                     emit!(&r, {
                         eprintln!("bughunter: no symbol matches '{target}'");
                         eprintln!(
@@ -292,6 +294,18 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                 render::banner(&mut out, &st)?;
                 render::graph(&mut out, &st, &report)?;
             });
+        }
+
+        Command::Mcp => {
+            // stdout is the MCP transport here, so the renderer's lock on it must go first.
+            // Holding it deadlocks the server the moment it tries to answer, and the
+            // symptom is a process that reads happily and never replies.
+            drop(out);
+            let root = root.clone();
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(bh_mcp::serve(root))?;
         }
 
         Command::Doctor => {
@@ -365,6 +379,7 @@ fn envelope<T: Serialize>(cli: &Cli, value: T) -> Result<String, serde_json::Err
             Command::Impact { .. } => "impact",
             Command::Graph => "graph",
             Command::Doctor => "doctor",
+            Command::Mcp => "mcp",
         },
         result: value,
     })

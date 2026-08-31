@@ -75,6 +75,7 @@ bughunter scan         төслийг индекслээд baseline тавина
 bughunter rescan       baseline-тай харьцуулж → өөрчлөгдсөн симбол → нөлөөлөл
 bughunter impact       нэг метод/файл өөрчлөгдвөл юу эвдрэхийг харуулна
 bughunter graph        dependency граф хэр том, хэдэн хувь нь холбогдсон
+bughunter mcp          Claude Code, Codex, Copilot-д зориулсан MCP сервер
 bughunter doctor       тохиргоо, орчны шалгалт
 ```
 
@@ -194,7 +195,8 @@ args    = ["mcp"]
 { "servers": { "bughunter": { "command": "bughunter", "args": ["mcp"] } } }
 ```
 
-*(MCP сервер V1-д орно — одоогоор CLI ажиллаж байна.)*
+MCP сервер аль хэдийн ажиллаж байна: найман tool — юу өөрчлөгдсөн, юунд нөлөөлөх,
+симболын хамаарал. Алдаа хайх, баталгаажуулах tool-ууд V1-д нэмэгдэнэ.
 
 ---
 
@@ -230,7 +232,8 @@ Java, TypeScript одоо ажиллаж байна. Python, Rust V1-д. Хэл 
 | Crate | Төлөв |
 |---|---|
 | `bh-types` · `bh-store` · `bh-vcs` · `bh-lang` · `bh-lang-java` · `bh-lang-ts` · `bh-core` · `bh-cli` | ажиллаж байна |
-| `bh-lang-python` · `bh-lang-rust` · `bh-verify` · `bh-ai` · `bh-mcp` | V1 |
+| `bh-mcp` | ажиллаж байна — найман tool |
+| `bh-lang-python` · `bh-lang-rust` · `bh-verify` · `bh-ai` | V1 |
 
 ---
 

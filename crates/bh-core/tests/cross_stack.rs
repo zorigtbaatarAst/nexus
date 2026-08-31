@@ -173,7 +173,10 @@ fn generated_files_are_not_indexed() {
         ..Default::default()
     };
     assert!(
-        matches!(engine.impact(&q).expect("impact"), Resolved::NotFound(_)),
+        matches!(
+            engine.impact(&q).expect("impact"),
+            Resolved::NotFound { .. }
+        ),
         "codegen output is not source and must stay out of the graph"
     );
     let _ = fs::remove_dir_all(&root);

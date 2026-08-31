@@ -15,9 +15,10 @@ network connection.
 
 ### Scope
 
-**Delivered so far** — `init` `scan` `rescan` `status` `changes` `impact` `graph` `doctor`;
-Java and TypeScript analyzers; the dependency graph with four resolution tiers; the GraphQL
-seam. Measured on a 880-file Spring + Next.js project: 5,665 symbols and 96 % of in-project
+**Delivered so far** — `init` `scan` `rescan` `status` `changes` `impact` `graph` `doctor`
+`mcp`; Java and TypeScript analyzers; the dependency graph with four resolution tiers; the
+GraphQL seam; symbol-level rename aliasing; and an MCP server exposing the eight read tools
+to Claude Code, Codex, Copilot and any other MCP client. Measured on a 880-file Spring + Next.js project: 5,665 symbols and 96 % of in-project
 edges resolved in 641 ms.
 
 | Area | In | Out |
