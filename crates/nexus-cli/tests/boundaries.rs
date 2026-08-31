@@ -8,9 +8,12 @@ use std::collections::BTreeMap;
 use std::process::Command;
 
 fn dependency_graph() -> BTreeMap<String, Vec<String>> {
-    let out = Command::new(env!("CARGO"))
+    // No `current_dir`: cargo runs a test with the package root as its working directory,
+    // and `env!("CARGO_MANIFEST_DIR")` is baked in at compile time — so a stale test binary
+    // from a checkout that has since moved points at a directory that no longer exists, and
+    // every boundary rule fails with "No such file or directory" rather than a real verdict.
+    let out = Command::new(option_env!("CARGO").unwrap_or("cargo"))
         .args(["metadata", "--format-version", "1", "--no-deps"])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .expect("cargo metadata should run");
     assert!(out.status.success(), "cargo metadata failed");
