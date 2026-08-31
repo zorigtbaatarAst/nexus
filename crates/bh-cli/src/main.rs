@@ -84,6 +84,25 @@ enum Command {
     },
     /// Dependency graph size and how much of it resolved
     Graph,
+    /// Run the deterministic detectors and reconcile findings with what is already known
+    Hunt,
+    /// List findings
+    Bugs {
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        severity: Option<String>,
+        /// Exit 3 if anything at or above this severity is open — the CI gate
+        #[arg(long, value_name = "SEVERITY")]
+        fail_on: Option<String>,
+    },
+    /// One finding in full, with its evidence and history
+    Bug {
+        /// e.g. BUG-3
+        id: String,
+    },
+    /// Dismiss a finding. A human decision is sticky: a later scan will not re-open it
+    Ignore { id: String },
     /// Diagnose the environment and configuration
     Doctor,
     /// Run as an MCP server on stdio, for Claude Code, Codex, Copilot or any MCP client
@@ -99,6 +118,8 @@ mod exit {
     pub const NO_BASELINE: u8 = 5;
     /// The target matched several symbols. The caller chooses; BugHunter does not guess.
     pub const AMBIGUOUS: u8 = 6;
+    /// Findings at or above `--fail-on`. The CI gate.
+    pub const FINDINGS: u8 = 3;
 }
 
 fn main() -> ExitCode {
@@ -308,6 +329,76 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             rt.block_on(bh_mcp::serve(root))?;
         }
 
+        Command::Hunt => {
+            let mut engine = open(&root)?;
+            match engine.hunt() {
+                Ok(report) => {
+                    emit!(&report, {
+                        render::banner(&mut out, &st)?;
+                        render::hunt(&mut out, &st, &report)?;
+                    });
+                }
+                Err(EngineError::NoBaseline) => {
+                    eprintln!("bughunter: no baseline for this project");
+                    eprintln!("  run: bughunter scan");
+                    return Ok(exit::NO_BASELINE);
+                }
+                Err(e) => return Err(Box::new(e)),
+            }
+        }
+
+        Command::Bugs {
+            status,
+            severity,
+            fail_on,
+        } => {
+            let engine = open(&root)?;
+            let bugs = engine.bugs(status.as_deref(), severity.as_deref())?;
+            emit!(&bugs, {
+                render::banner(&mut out, &st)?;
+                render::bugs(&mut out, &st, &bugs)?;
+            });
+            if let Some(threshold) = fail_on {
+                // Discovering a bug is a success, not an error. Only an explicit gate makes
+                // it fail, or the command gets removed from the pipeline within a week.
+                if render::breaches(&bugs, threshold) {
+                    return Ok(exit::FINDINGS);
+                }
+            }
+        }
+
+        Command::Bug { id } => {
+            let engine = open(&root)?;
+            match engine.bug(id)? {
+                Some(detail) => {
+                    emit!(&detail, {
+                        render::banner(&mut out, &st)?;
+                        render::bug(&mut out, &st, &detail)?;
+                    });
+                }
+                None => {
+                    eprintln!("bughunter: no finding {id}");
+                    eprintln!("  list them with: bughunter bugs");
+                    return Ok(exit::USAGE);
+                }
+            }
+        }
+
+        Command::Ignore { id } => {
+            let engine = open(&root)?;
+            if engine.ignore_bug(id)? {
+                if !cli.quiet {
+                    writeln!(
+                        out,
+                        "{id} ignored. It will not be re-opened by a later scan."
+                    )?;
+                }
+            } else {
+                eprintln!("bughunter: no finding {id}");
+                return Ok(exit::USAGE);
+            }
+        }
+
         Command::Doctor => {
             let engine = open(&root)?;
             let checks = engine.doctor()?;
@@ -378,6 +469,10 @@ fn envelope<T: Serialize>(cli: &Cli, value: T) -> Result<String, serde_json::Err
             Command::Changes { .. } => "changes",
             Command::Impact { .. } => "impact",
             Command::Graph => "graph",
+            Command::Hunt => "hunt",
+            Command::Bugs { .. } => "bugs",
+            Command::Bug { .. } => "bug",
+            Command::Ignore { .. } => "ignore",
             Command::Doctor => "doctor",
             Command::Mcp => "mcp",
         },

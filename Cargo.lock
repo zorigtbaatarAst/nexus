@@ -113,6 +113,7 @@ name = "bh-core"
 version = "0.1.0"
 dependencies = [
  "bh-lang",
+ "bh-lang-graphql",
  "bh-lang-java",
  "bh-lang-ts",
  "bh-store",
@@ -132,6 +133,15 @@ version = "0.1.0"
 dependencies = [
  "bh-types",
  "thiserror",
+]
+
+[[package]]
+name = "bh-lang-graphql"
+version = "0.1.0"
+dependencies = [
+ "bh-lang",
+ "bh-types",
+ "blake3",
 ]
 
 [[package]]

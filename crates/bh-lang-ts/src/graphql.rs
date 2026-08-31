@@ -125,6 +125,10 @@ pub fn root_fields(body: &str) -> Vec<String> {
             _ => i += 1,
         }
     }
+    // Introspection meta-fields are valid on every type by spec and are declared in no
+    // schema. Emitting them as selections makes every document that asks for __typename —
+    // which Apollo adds automatically — look like it hits a field nobody serves.
+    out.retain(|f| !f.starts_with("__"));
     out.dedup();
     out
 }
@@ -246,6 +250,18 @@ mod tests {
     fn fragment_spreads_are_skipped_but_sibling_fields_survive() {
         let ops = operations("query Q { ...SalaryFields  mySalary { id } }");
         assert_eq!(ops[0].fields, vec!["mySalary"]);
+    }
+
+    #[test]
+    fn introspection_meta_fields_are_not_selections() {
+        let ops = operations("query Ping { __typename }");
+        assert!(
+            ops[0].fields.is_empty(),
+            "__typename is valid on every type: {:?}",
+            ops[0].fields
+        );
+        let mixed = operations("query Q { __typename vehicles { id } }");
+        assert_eq!(mixed[0].fields, vec!["vehicles"]);
     }
 
     #[test]

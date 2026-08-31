@@ -75,6 +75,9 @@ bughunter scan         төслийг индекслээд baseline тавина
 bughunter rescan       baseline-тай харьцуулж → өөрчлөгдсөн симбол → нөлөөлөл
 bughunter impact       нэг метод/файл өөрчлөгдвөл юу эвдрэхийг харуулна
 bughunter graph        dependency граф хэр том, хэдэн хувь нь холбогдсон
+bughunter hunt         детерминистик шалгуурууд ажиллуулах
+bughunter bugs         олдворуудын жагсаалт
+bughunter bug <id>     нэг олдвор — нотолгоо, түүхтэй нь
 bughunter mcp          Claude Code, Codex, Copilot-д зориулсан MCP сервер
 bughunter doctor       тохиргоо, орчны шалгалт
 ```

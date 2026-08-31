@@ -81,6 +81,9 @@ bughunter scan         index files, symbols, dependencies, tests → establish a
 bughunter rescan       diff against the baseline → changed symbols → impact → hunt
 bughunter impact       blast radius of a symbol, a file or a name — across the stack
 bughunter graph        dependency graph size and how much of it resolved
+bughunter hunt         run the deterministic detectors
+bughunter bugs         list findings
+bughunter bug <id>     one finding with its evidence and history
 bughunter mcp          run as an MCP server for Claude Code, Codex or Copilot
 bughunter investigate  a described screenshot → UI anchor → across the seam → suspects
 bughunter verify       generate a reproduction test, run it, run it on the baseline, judge

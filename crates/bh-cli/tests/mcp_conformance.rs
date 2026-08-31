@@ -139,11 +139,19 @@ fn the_server_handshakes_advertises_tools_and_answers() {
         "a server that advertises no tools capability may never be asked for its tools: {}",
         init["result"]["capabilities"]
     );
+    // The instructions have to keep pace with what the build actually does. This exists to
+    // fail when a capability lands and the honesty about its limits does not.
+    let instructions = init["result"]["instructions"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
     assert!(
-        init["result"]["instructions"]
-            .as_str()
-            .is_some_and(|i| i.contains("finds no bugs")),
-        "the instructions must say plainly what this build does not do"
+        instructions.contains("runs no tests"),
+        "must say plainly that nothing is verified by reproduction: {instructions}"
+    );
+    assert!(
+        instructions.contains("deterministic detectors only"),
+        "and that the detectors do not reason about business logic: {instructions}"
     );
 
     s.send(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
@@ -163,6 +171,10 @@ fn the_server_handshakes_advertises_tools_and_answers() {
         "bughunter_get_symbol",
         "bughunter_get_graph",
         "bughunter_doctor",
+        "bughunter_find_bugs",
+        "bughunter_get_bugs",
+        "bughunter_get_bug",
+        "bughunter_ignore_bug",
     ] {
         assert!(
             names.contains(&expected),

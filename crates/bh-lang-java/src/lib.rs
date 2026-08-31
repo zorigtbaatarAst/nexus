@@ -40,7 +40,7 @@ impl LanguageAnalyzer for JavaAnalyzer {
     fn grammar_version(&self) -> &'static str {
         // Bump on any change to extraction or normalization, not only on a grammar upgrade:
         // this value forces a re-parse when content hashes would otherwise say "unchanged".
-        "tree-sitter-java/0.23.5+extract5"
+        "tree-sitter-java/0.23.5+extract6"
     }
 
     fn parse(&self, src: &SourceFile<'_>) -> Result<ParsedFile, LangError> {
@@ -677,6 +677,10 @@ fn collect_calls(
                 // Resolution in bh-core turns the hint into a symbol id, or leaves it
                 // unresolved and says so. A receiver of unknown or platform type yields no
                 // edge at all — not a wrong one.
+                let owner_type = match owner_type {
+                    Some(t) if t == SELF_RECEIVER => Some(owner_of(src_fqn).to_string()),
+                    other => other,
+                };
                 if let Some(qualified) = owner_type.and_then(|t| project_type(&t, ctx)) {
                     out.edges.push(RawEdge {
                         src_fqn: src_fqn.to_string(),
@@ -724,10 +728,16 @@ fn receiver_type(obj: Node, src: &[u8], env: &HashMap<String, String>) -> Option
             let field = obj.child_by_field_name("field")?.utf8_text(src).ok()?;
             env.get(field).cloned()
         }
-        "this" => None,
+        // `this.foo()` is the enclosing type, and it is the exact shape of a Spring
+        // self-invocation bug — the proxy is bypassed, so @Transactional on `foo` does
+        // nothing. Returning None here made that class of bug invisible.
+        "this" => Some(SELF_RECEIVER.to_string()),
         _ => None,
     }
 }
+
+/// Sentinel for a `this` receiver, replaced with the enclosing type at the call site.
+pub(crate) const SELF_RECEIVER: &str = "\u{0}self";
 
 fn owner_of(fqn: &str) -> &str {
     fqn.split('#').next().unwrap_or(fqn)
@@ -809,6 +819,11 @@ fn project_type(simple: &str, ctx: &Ctx<'_>) -> Option<String> {
     ];
     const PLATFORM: &[&str] = &["java.", "javax.", "jakarta.", "sun.", "com.sun.", "kotlin."];
 
+    // An already-qualified project name (the enclosing type, for a `this` or unqualified
+    // call) passes straight through: the checks below are about *simple* names.
+    if simple.contains('.') && !PLATFORM.iter().any(|p| simple.starts_with(p)) {
+        return Some(simple.to_string());
+    }
     if simple.is_empty() || simple.ends_with("[]") || !simple.starts_with(char::is_uppercase) {
         return None;
     }

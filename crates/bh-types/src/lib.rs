@@ -394,3 +394,138 @@ impl ChangeKind {
         }
     }
 }
+
+// ─────────────────────────── bugs ───────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BugType {
+    Concurrency,
+    Transaction,
+    NullSafety,
+    Security,
+    Logic,
+    Performance,
+    ErrorHandling,
+    DataConsistency,
+    ApiContract,
+    ResourceLeak,
+    Regression,
+    UiState,
+}
+
+impl BugType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BugType::Concurrency => "concurrency",
+            BugType::Transaction => "transaction",
+            BugType::NullSafety => "null-safety",
+            BugType::Security => "security",
+            BugType::Logic => "logic",
+            BugType::Performance => "performance",
+            BugType::ErrorHandling => "error-handling",
+            BugType::DataConsistency => "data-consistency",
+            BugType::ApiContract => "api-contract",
+            BugType::ResourceLeak => "resource-leak",
+            BugType::Regression => "regression",
+            BugType::UiState => "ui-state",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "concurrency" => BugType::Concurrency,
+            "transaction" => BugType::Transaction,
+            "null-safety" => BugType::NullSafety,
+            "security" => BugType::Security,
+            "logic" => BugType::Logic,
+            "performance" => BugType::Performance,
+            "error-handling" => BugType::ErrorHandling,
+            "data-consistency" => BugType::DataConsistency,
+            "api-contract" => BugType::ApiContract,
+            "resource-leak" => BugType::ResourceLeak,
+            "regression" => BugType::Regression,
+            "ui-state" => BugType::UiState,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    Info,
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl Severity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Severity::Critical => "critical",
+            Severity::High => "high",
+            Severity::Medium => "medium",
+            Severity::Low => "low",
+            Severity::Info => "info",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "critical" => Severity::Critical,
+            "high" => Severity::High,
+            "medium" => Severity::Medium,
+            "low" => Severity::Low,
+            "info" => Severity::Info,
+            _ => return None,
+        })
+    }
+}
+
+/// docs/change-analysis.md §10. The transitions that matter are the ones that require
+/// evidence: `FIXED` is never reached by a bug merely not being seen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum BugStatus {
+    Suspected,
+    Unverified,
+    Verified,
+    Fixed,
+    Regressed,
+    Ignored,
+}
+
+impl BugStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BugStatus::Suspected => "SUSPECTED",
+            BugStatus::Unverified => "UNVERIFIED",
+            BugStatus::Verified => "VERIFIED",
+            BugStatus::Fixed => "FIXED",
+            BugStatus::Regressed => "REGRESSED",
+            BugStatus::Ignored => "IGNORED",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "SUSPECTED" => BugStatus::Suspected,
+            "UNVERIFIED" => BugStatus::Unverified,
+            "VERIFIED" => BugStatus::Verified,
+            "FIXED" => BugStatus::Fixed,
+            "REGRESSED" => BugStatus::Regressed,
+            "IGNORED" => BugStatus::Ignored,
+            _ => return None,
+        })
+    }
+
+    /// A human dismissal is sticky, and a proven bug is not re-opened by a scan.
+    pub fn is_open(self) -> bool {
+        matches!(
+            self,
+            BugStatus::Suspected
+                | BugStatus::Unverified
+                | BugStatus::Verified
+                | BugStatus::Regressed
+        )
+    }
+}

@@ -17,8 +17,13 @@ network connection.
 
 **Delivered so far** — `init` `scan` `rescan` `status` `changes` `impact` `graph` `doctor`
 `mcp`; Java and TypeScript analyzers; the dependency graph with four resolution tiers; the
-GraphQL seam; symbol-level rename aliasing; and an MCP server exposing the eight read tools
-to Claude Code, Codex, Copilot and any other MCP client. Measured on a 880-file Spring + Next.js project: 5,665 symbols and 96 % of in-project
+GraphQL seam; symbol-level rename aliasing; four deterministic detectors with the full bug
+lifecycle (fingerprinting, recurrence, fixed, regressed, ignored); and an MCP server exposing
+twelve tools to Claude Code, Codex, Copilot and any other MCP client.
+
+Still absent: the verification engine, any AI integration, and the Python and Rust analyzers.
+Nothing is verified by reproduction yet, and the tool says so in its own output rather than
+leaving anyone to infer it. Measured on a 880-file Spring + Next.js project: 5,665 symbols and 96 % of in-project
 edges resolved in 641 ms.
 
 | Area | In | Out |

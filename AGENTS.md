@@ -144,6 +144,26 @@ that is hard to attribute.
   on that key constantly, and carrying identity to an arbitrary candidate is worse than
   reporting a delete and an add.
 
+- **The `.graphqls` schema is the contract, not the Java annotations.** Taking resolvers
+  from `@QueryMapping` alone assumed every served field carries an annotation shape this
+  analyzer recognizes. On a real Spring for GraphQL project that is false, and the orphan
+  detector produced thirteen confident reports that a field "no resolver serves" was missing
+  when the schema declared it plainly. Index the schema; it is what codegen generates the
+  frontend types from, so both sides already agree on it.
+
+- **Introspection meta-fields are not selections.** Apollo adds `__typename` to almost every
+  document. It is valid on every type by spec and declared in no schema, so emitting it as a
+  root field makes nearly every operation look broken.
+
+- **`FIXED` for a deterministic detector is different from `FIXED` for an AI finding.**
+  Absence is not evidence in general — but a rule that ran again over the same index and did
+  not fire *is* evidence. The sweep therefore checks which detector families ran, not merely
+  which fingerprints were seen.
+
+- **The fixed-sweep matches on bug ids, not fingerprints.** A bug matched through a rename
+  alias has the *old* fingerprint stored, so a fingerprint-based sweep closes the very bug it
+  just found.
+
 - **A static import is not a call on the enclosing class.** `import static
   org.mockito.Mockito.when;` makes `when(...)` a call on Mockito. Attributing unqualified
   calls to the enclosing type without checking static imports invented ~600 edges to methods

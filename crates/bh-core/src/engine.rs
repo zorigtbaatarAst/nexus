@@ -4,11 +4,14 @@
 //! rule: this crate must not depend on `bh-mcp`, `bh-cli`, or any concrete AI provider.
 //! `tests/boundaries.rs` fails the build otherwise.
 
+use crate::bugs::{BugCandidate, CodeRef};
 use crate::detect::Detector;
+use crate::detectors::{self, DetectContext, EdgeFacts, FileFacts, SymbolFacts};
 use crate::impact::{self, ImpactQuery};
 use crate::report::*;
 use crate::walk::{self, HashedFile};
 use bh_lang::{ParsedFile, Registry, SourceFile};
+use bh_lang_graphql::GraphQlSchemaAnalyzer;
 use bh_lang_java::JavaAnalyzer;
 use bh_lang_ts::TypeScriptAnalyzer;
 use bh_store::{ChangeRecord, NewEdge, NewSymbol, Store, SymbolRef};
@@ -113,7 +116,11 @@ impl Engine {
         let mut registry = Registry::new();
         registry
             .register(Box::new(JavaAnalyzer::new()))
-            .register(Box::new(TypeScriptAnalyzer::new()));
+            .register(Box::new(TypeScriptAnalyzer::new()))
+            // The schema is indexed as the contract both sides are generated from, so
+            // "no resolver serves this" means the field is absent from the schema — not
+            // merely that no annotation shape this analyzer knows was found.
+            .register(Box::new(GraphQlSchemaAnalyzer::new()));
 
         Ok(Engine {
             root: root.to_path_buf(),
@@ -853,7 +860,13 @@ impl Engine {
         force_full: bool,
         warnings: &mut Vec<String>,
     ) -> (Vec<String>, BTreeSet<String>, bool) {
-        if !force_full {
+        // A baseline taken on a dirty tree indexed content that no commit describes, so
+        // `git diff <baseline commit>` is not a sufficient candidate set: reverting a file
+        // to its committed state leaves git reporting nothing while the index still holds
+        // the uncommitted version. The only safe candidate set is then everything — and the
+        // stat fast path makes that cheap.
+        let dirty_baseline = baseline.dirty;
+        if !force_full && !dirty_baseline {
             if let (Some(repo), Some(from)) = (&self.repo, &baseline.commit_sha) {
                 match repo.changed_paths_since(from) {
                     Ok(d) => {
@@ -931,6 +944,264 @@ impl Engine {
             return Err(EngineError::NoBaseline);
         };
         Ok(self.store.changes_for_scan(b.scan_id, entity)?)
+    }
+
+    // ── bugs ─────────────────────────────────────────────────
+
+    /// Run every deterministic detector and reconcile the results with what is already known.
+    ///
+    /// No model is asked here, so nothing this produces is subject to the 0.75 clamp that
+    /// applies to a model's own confidence: both sides of every claim are in the index and
+    /// comparing them is a query.
+    pub fn hunt(&mut self) -> Result<HuntReport> {
+        let started = Instant::now();
+        let (commit, _) = self.head();
+
+        let scan_uid = self
+            .store
+            .baseline(self.project_id)?
+            .map(|b| b.scan_uid)
+            .ok_or(EngineError::NoBaseline)?;
+        let scan_id = self
+            .store
+            .baseline(self.project_id)?
+            .map(|b| b.scan_id)
+            .ok_or(EngineError::NoBaseline)?;
+
+        let symbols: Vec<SymbolFacts> = self
+            .store
+            .symbol_facts(self.project_id)?
+            .into_iter()
+            .map(|r| SymbolFacts {
+                fqn: r.fqn,
+                name: r.name,
+                kind: r.kind,
+                file: r.file,
+                line: r.line,
+                visibility: r.visibility,
+                parent_fqn: r.parent_fqn,
+                annotations: r
+                    .annotations_json
+                    .as_deref()
+                    .and_then(|j| serde_json::from_str(j).ok())
+                    .unwrap_or_default(),
+            })
+            .collect();
+        let edges: Vec<EdgeFacts> = self
+            .store
+            .edge_facts(self.project_id)?
+            .into_iter()
+            .map(|r| EdgeFacts {
+                src_fqn: r.src_fqn,
+                dst_fqn: r.dst_fqn,
+                dst_hint: r.dst_hint,
+                edge_type: r.edge_type,
+                resolution: r.resolution,
+                line: r.line,
+            })
+            .collect();
+        let files: Vec<FileFacts> = self
+            .store
+            .file_facts(self.project_id)?
+            .into_iter()
+            .map(|r| FileFacts {
+                path: r.path,
+                lang: r.lang,
+            })
+            .collect();
+
+        let ctx = DetectContext::new(&self.root, &symbols, &edges, &files);
+        let detectors = detectors::all();
+        let mut detectors_run = Vec::new();
+        let mut candidates: Vec<BugCandidate> = Vec::new();
+        for d in &detectors {
+            detectors_run.push(d.id());
+            candidates.extend(d.run(&ctx));
+        }
+
+        // A candidate with no checkable evidence is rejected at the boundary rather than
+        // down-ranked. An assertion nobody can verify is not a finding, and storing one lets
+        // the next reader mistake it for one.
+        let before = candidates.len();
+        candidates.retain(|c| !c.evidence.is_empty());
+        let rejected = before - candidates.len();
+
+        // Alternates are resolved before the transaction opens: rusqlite's Transaction
+        // holds a mutable borrow of the connection for its whole lifetime.
+        let mut alternates: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for c in &candidates {
+            let Some(anchor) = c.anchor_fqn.as_deref() else {
+                continue;
+            };
+            if alternates.contains_key(anchor) {
+                continue;
+            }
+            let olds = self.store.old_fqns_for(self.project_id, anchor)?;
+            alternates.insert(anchor.to_string(), olds);
+        }
+
+        let open_before = self.store.open_bugs_by_detector(self.project_id)?;
+
+        // Which bugs this pass actually touched, by id rather than by fingerprint. A
+        // fingerprint set would miss a bug matched through an alias — its stored fingerprint
+        // was the old one — and the sweep below would then close the very bug it just found.
+        let mut touched: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        let mut new_count = 0usize;
+        let mut recurring = 0usize;
+        let mut regressed = 0usize;
+
+        let tx = self.store.transaction()?;
+        for c in &candidates {
+            let fingerprint = c.fingerprint();
+            // A symbol that moved keeps its findings: the fingerprints it would have had
+            // under its former names are offered as alternates.
+            let alt_fingerprints: Vec<String> = c
+                .anchor_fqn
+                .as_deref()
+                .and_then(|a| alternates.get(a))
+                .map(|olds| {
+                    olds.iter()
+                        .map(|old| {
+                            let mut moved = c.clone();
+                            moved.anchor_fqn = Some(old.clone());
+                            moved.fingerprint()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let status = c.initial_status();
+            let anchor_line = c.evidence.first().map(|e| e.line as i64);
+            let anchor_file = c.evidence.first().map(|e| e.file.clone());
+
+            let up = Store::upsert_bug(
+                &tx,
+                self.project_id,
+                scan_id,
+                &bh_store::NewBug {
+                    fingerprint,
+                    alt_fingerprints,
+                    slug: c.slug.clone(),
+                    title: c.title.clone(),
+                    bug_type: c.bug_type.as_str().to_string(),
+                    component: c.component.clone(),
+                    severity: c.severity.as_str().to_string(),
+                    confidence: c.confidence,
+                    status: status.as_str().to_string(),
+                    detector: c.detector.clone(),
+                    anchor_fqn: c.anchor_fqn.clone(),
+                    commit: commit.clone(),
+                },
+            )?;
+            touched.insert(up.id);
+            if up.is_new {
+                new_count += 1;
+            } else if up.status == "REGRESSED" {
+                regressed += 1;
+            } else {
+                recurring += 1;
+            }
+
+            Store::insert_occurrence(
+                &tx,
+                up.id,
+                scan_id,
+                &bh_store::NewOccurrence {
+                    file_path: anchor_file,
+                    start_line: anchor_line,
+                    status: up.status.clone(),
+                    confidence: c.confidence,
+                    evidence_json: serde_json::to_string(&c.evidence)?,
+                    commit: commit.clone(),
+                },
+            )?;
+        }
+
+        // Closing a bug needs evidence, and for a deterministic detector that evidence is:
+        // the rule ran again, over the same index, and did not fire. Absence *without* the
+        // detector having run is not the same thing, which is why the ran-set is consulted
+        // rather than just the seen-set.
+        let ran: std::collections::HashSet<&str> = detectors
+            .iter()
+            .map(|d| d.id().split(':').next().unwrap_or(""))
+            .collect();
+        let mut fixed = 0usize;
+        for open in &open_before {
+            if touched.contains(&open.id) {
+                continue;
+            }
+            let family = open.detector.split(':').next().unwrap_or("");
+            if !ran.contains(family) {
+                // Nobody looked. Absence proves nothing.
+                continue;
+            }
+            Store::mark_fixed(&tx, open.id, scan_id, commit.as_deref())?;
+            fixed += 1;
+        }
+        tx.commit().map_err(bh_store::StoreError::from)?;
+
+        let bugs = self.bugs(None, None)?;
+        Ok(HuntReport {
+            scan_uid: Some(scan_uid),
+            detectors_run,
+            found: candidates.len(),
+            new: new_count,
+            recurring,
+            regressed,
+            fixed,
+            rejected,
+            bugs,
+            duration_ms: started.elapsed().as_millis(),
+        })
+    }
+
+    pub fn bugs(&self, status: Option<&str>, severity: Option<&str>) -> Result<Vec<BugSummary>> {
+        Ok(self
+            .store
+            .bugs(self.project_id, status, severity)?
+            .into_iter()
+            .map(to_summary)
+            .collect())
+    }
+
+    pub fn bug(&self, uid: &str) -> Result<Option<BugDetail>> {
+        let Some(row) = self
+            .store
+            .bugs(self.project_id, None, None)?
+            .into_iter()
+            .find(|b| b.uid.eq_ignore_ascii_case(uid))
+        else {
+            return Ok(None);
+        };
+        let fingerprint = row.fingerprint.clone();
+        let evidence: Vec<CodeRef> = self
+            .store
+            .bug_evidence(self.project_id, &row.uid)?
+            .as_deref()
+            .and_then(|j| serde_json::from_str(j).ok())
+            .unwrap_or_default();
+        let history = self
+            .store
+            .bug_history(self.project_id, &row.uid)?
+            .into_iter()
+            .map(|e| BugEvent {
+                scan_uid: e.scan_uid,
+                commit: e.commit,
+                status: e.status,
+                confidence: e.confidence,
+            })
+            .collect();
+        Ok(Some(BugDetail {
+            summary: to_summary(row),
+            fingerprint,
+            evidence,
+            history,
+        }))
+    }
+
+    /// Dismiss a finding. A human decision is sticky: a later scan will not re-open it.
+    pub fn ignore_bug(&self, uid: &str) -> Result<bool> {
+        Ok(self.store.set_bug_status(self.project_id, uid, "IGNORED")?)
     }
 
     // ── impact ───────────────────────────────────────────────
@@ -1365,6 +1636,24 @@ fn detect_renames(
         }
     }
     renames
+}
+
+fn to_summary(r: bh_store::BugRow) -> BugSummary {
+    BugSummary {
+        uid: r.uid,
+        slug: r.slug,
+        title: r.title,
+        bug_type: r.bug_type,
+        component: r.component,
+        severity: r.severity,
+        confidence: r.confidence,
+        status: r.status,
+        detector: r.detector,
+        file: r.file,
+        line: r.line,
+        introduced_commit: r.introduced_commit,
+        fixed_commit: r.fixed_commit,
+    }
 }
 
 fn canonical(p: &Path) -> PathBuf {

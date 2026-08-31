@@ -10,7 +10,9 @@
 // an assertion that cannot unwrap is not an assertion.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod bugs;
 pub mod detect;
+pub mod detectors;
 pub mod engine;
 pub mod impact;
 pub mod report;

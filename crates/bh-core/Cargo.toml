@@ -13,6 +13,7 @@ bh-vcs.workspace = true
 bh-lang.workspace = true
 bh-lang-java.workspace = true
 bh-lang-ts.workspace = true
+bh-lang-graphql.workspace = true
 blake3.workspace = true
 ignore.workspace = true
 rayon.workspace = true

@@ -204,3 +204,56 @@ pub struct SymbolDetail {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BugSummary {
+    pub uid: String,
+    pub slug: String,
+    pub title: String,
+    #[serde(rename = "type")]
+    pub bug_type: String,
+    pub component: Option<String>,
+    pub severity: String,
+    pub confidence: f64,
+    pub status: String,
+    pub detector: String,
+    pub file: Option<String>,
+    pub line: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub introduced_commit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixed_commit: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BugEvent {
+    pub scan_uid: String,
+    pub commit: Option<String>,
+    pub status: String,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BugDetail {
+    #[serde(flatten)]
+    pub summary: BugSummary,
+    pub fingerprint: String,
+    pub evidence: Vec<crate::bugs::CodeRef>,
+    pub history: Vec<BugEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HuntReport {
+    pub scan_uid: Option<String>,
+    pub detectors_run: Vec<&'static str>,
+    pub found: usize,
+    pub new: usize,
+    pub recurring: usize,
+    pub regressed: usize,
+    pub fixed: usize,
+    /// Rejected before storage for having no checkable evidence. Counted and reported,
+    /// because a silently discarded finding is indistinguishable from finding nothing.
+    pub rejected: usize,
+    pub bugs: Vec<BugSummary>,
+    pub duration_ms: u128,
+}

@@ -152,6 +152,106 @@ pub struct SymbolRef {
 }
 
 #[derive(Debug, Clone)]
+pub struct SymbolFactRow {
+    pub fqn: String,
+    pub name: String,
+    pub kind: String,
+    pub file: String,
+    pub line: u32,
+    pub visibility: Option<String>,
+    pub parent_fqn: Option<String>,
+    pub annotations_json: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EdgeFactRow {
+    pub src_fqn: String,
+    pub dst_fqn: Option<String>,
+    pub dst_hint: Option<String>,
+    pub edge_type: String,
+    pub resolution: String,
+    pub line: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileFactRow {
+    pub path: String,
+    pub lang: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewBug {
+    pub fingerprint: String,
+    /// Fingerprints this finding would have had under the anchor's previous names.
+    pub alt_fingerprints: Vec<String>,
+    pub slug: String,
+    pub title: String,
+    pub bug_type: String,
+    pub component: String,
+    pub severity: String,
+    pub confidence: f64,
+    pub status: String,
+    pub detector: String,
+    pub anchor_fqn: Option<String>,
+    pub commit: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewOccurrence {
+    pub file_path: Option<String>,
+    pub start_line: Option<i64>,
+    pub status: String,
+    pub confidence: f64,
+    pub evidence_json: String,
+    pub commit: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BugUpsert {
+    pub id: i64,
+    pub uid: String,
+    pub is_new: bool,
+    pub previous_status: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenBugRow {
+    pub id: i64,
+    pub uid: String,
+    pub fingerprint: String,
+    pub detector: String,
+    pub status: String,
+    pub file_path: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BugRow {
+    pub uid: String,
+    pub fingerprint: String,
+    pub slug: String,
+    pub title: String,
+    pub bug_type: String,
+    pub component: Option<String>,
+    pub severity: String,
+    pub confidence: f64,
+    pub status: String,
+    pub detector: String,
+    pub introduced_commit: Option<String>,
+    pub fixed_commit: Option<String>,
+    pub file: Option<String>,
+    pub line: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BugEventRow {
+    pub scan_uid: String,
+    pub commit: Option<String>,
+    pub status: String,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone)]
 pub struct Baseline {
     pub scan_id: ScanId,
     pub scan_uid: String,
@@ -938,6 +1038,345 @@ impl Store {
         Ok(rows)
     }
 
+    // ── detector snapshot ────────────────────────────────────
+
+    /// Everything a detector needs about symbols, in one pass.
+    ///
+    /// Detectors get a snapshot rather than the store: it keeps them pure and unit-testable,
+    /// and it keeps SQL in this crate where boundary rule 3 says it belongs.
+    pub fn symbol_facts(&self, project_id: ProjectId) -> Result<Vec<SymbolFactRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.fqn, s.name, s.kind, f.path, s.start_line, s.visibility,
+                    p.fqn, s.annotations_json
+             FROM live_symbols s
+             JOIN files f ON f.id = s.file_id
+             LEFT JOIN symbols p ON p.id = s.parent_id
+             WHERE s.project_id = ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id], |r| {
+                Ok(SymbolFactRow {
+                    fqn: r.get(0)?,
+                    name: r.get(1)?,
+                    kind: r.get(2)?,
+                    file: r.get(3)?,
+                    line: r.get::<_, i64>(4)? as u32,
+                    visibility: r.get(5)?,
+                    parent_fqn: r.get(6)?,
+                    annotations_json: r.get(7)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn edge_facts(&self, project_id: ProjectId) -> Result<Vec<EdgeFactRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT src.fqn, dst.fqn, e.dst_fqn_hint, e.edge_type, e.resolution, e.site_line
+             FROM symbol_edges e
+             JOIN live_symbols src ON src.id = e.src_symbol_id
+             LEFT JOIN live_symbols dst ON dst.id = e.dst_symbol_id
+             WHERE e.project_id = ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id], |r| {
+                Ok(EdgeFactRow {
+                    src_fqn: r.get(0)?,
+                    dst_fqn: r.get(1)?,
+                    dst_hint: r.get(2)?,
+                    edge_type: r.get(3)?,
+                    resolution: r.get(4)?,
+                    line: r.get::<_, Option<i64>>(5)?.map(|v| v as u32),
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn file_facts(&self, project_id: ProjectId) -> Result<Vec<FileFactRow>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, lang FROM live_files WHERE project_id = ?1")?;
+        let rows = stmt
+            .query_map(params![project_id], |r| {
+                Ok(FileFactRow {
+                    path: r.get(0)?,
+                    lang: r.get(1)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    // ── bugs ─────────────────────────────────────────────────
+
+    /// Record a finding, or recognize one already known.
+    ///
+    /// `UNIQUE(project_id, fingerprint)` is what makes deduplication a database guarantee
+    /// rather than application discipline: a bug seen again is an `ON CONFLICT` that
+    /// advances `last_seen_scan_id`, never a second row.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_bug(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        scan_id: ScanId,
+        b: &NewBug,
+    ) -> Result<BugUpsert> {
+        // The primary fingerprint first, then any this finding would have had under a name
+        // the symbol used to carry. Without the alternates a package move reports every
+        // finding in it twice — once fixed, once new.
+        let mut existing = None;
+        for candidate in std::iter::once(&b.fingerprint).chain(b.alt_fingerprints.iter()) {
+            existing = tx
+                .query_row(
+                    "SELECT id, bug_uid, status FROM bugs WHERE project_id = ?1 AND fingerprint = ?2",
+                    params![project_id, candidate],
+                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
+                )
+                .optional()?;
+            if existing.is_some() {
+                break;
+            }
+        }
+
+        if let Some((id, uid, prev_status)) = existing {
+            // A bug that had been fixed and is firing again is a regression, and that is the
+            // strongest thing this product can say — so it is never silently re-opened as a
+            // plain finding.
+            let next = match prev_status.as_str() {
+                "FIXED" => "REGRESSED",
+                "IGNORED" => "IGNORED", // a human dismissal is sticky
+                other => other,
+            };
+            // Identity migrates forward: matched through an alias, the row now carries the
+            // fingerprint of the name the symbol has today, so the next scan matches directly.
+            tx.execute(
+                "UPDATE bugs SET status = ?2, severity = ?3, confidence = ?4,
+                                 title = ?5, last_seen_scan_id = ?6, fingerprint = ?7,
+                                 component = ?8
+                 WHERE id = ?1",
+                params![
+                    id,
+                    next,
+                    b.severity,
+                    b.confidence,
+                    b.title,
+                    scan_id,
+                    b.fingerprint,
+                    b.component
+                ],
+            )?;
+            let next = next.to_string();
+            return Ok(BugUpsert {
+                id,
+                uid,
+                is_new: false,
+                previous_status: Some(prev_status),
+                status: next,
+            });
+        }
+
+        let n: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(CAST(SUBSTR(bug_uid, 5) AS INTEGER)), 0) FROM bugs WHERE project_id = ?1",
+            params![project_id],
+            |r| r.get(0),
+        )?;
+        let uid = format!("BUG-{}", n + 1);
+        tx.execute(
+            "INSERT INTO bugs (project_id, bug_uid, fingerprint, slug, title, bug_type, component,
+                               severity, confidence, status, detector, anchor_symbol_id,
+                               introduced_commit, first_seen_scan_id, last_seen_scan_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,
+                     (SELECT id FROM symbols WHERE project_id = ?1 AND fqn = ?12 AND deleted = 0),
+                     ?13,?14,?14)",
+            params![
+                project_id,
+                uid,
+                b.fingerprint,
+                b.slug,
+                b.title,
+                b.bug_type,
+                b.component,
+                b.severity,
+                b.confidence,
+                b.status,
+                b.detector,
+                b.anchor_fqn,
+                b.commit,
+                scan_id
+            ],
+        )?;
+        Ok(BugUpsert {
+            id: tx.last_insert_rowid(),
+            uid,
+            is_new: true,
+            previous_status: None,
+            status: b.status.clone(),
+        })
+    }
+
+    pub fn insert_occurrence(
+        tx: &Transaction<'_>,
+        bug_id: i64,
+        scan_id: ScanId,
+        o: &NewOccurrence,
+    ) -> Result<()> {
+        tx.execute(
+            "INSERT INTO bug_occurrences (bug_id, scan_id, file_path, start_line,
+                                          status_at_scan, confidence_at_scan, evidence_json, commit_sha)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+             ON CONFLICT(bug_id, scan_id) DO UPDATE SET
+               status_at_scan = excluded.status_at_scan,
+               confidence_at_scan = excluded.confidence_at_scan,
+               evidence_json = excluded.evidence_json",
+            params![
+                bug_id, scan_id, o.file_path, o.start_line, o.status, o.confidence,
+                o.evidence_json, o.commit
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Close a bug whose detector no longer fires over code it actually re-examined.
+    pub fn mark_fixed(
+        tx: &Transaction<'_>,
+        bug_id: i64,
+        scan_id: ScanId,
+        commit: Option<&str>,
+    ) -> Result<()> {
+        tx.execute(
+            "UPDATE bugs SET status = 'FIXED', fixed_commit = ?3, last_seen_scan_id = ?2
+             WHERE id = ?1 AND status IN ('SUSPECTED','UNVERIFIED','VERIFIED','REGRESSED')",
+            params![bug_id, scan_id, commit],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_bug_status(&self, project_id: ProjectId, uid: &str, status: &str) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE bugs SET status = ?3 WHERE project_id = ?1 AND bug_uid = ?2",
+            params![project_id, uid, status],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Open bugs by detector, so a detector pass can tell "no longer fires" from
+    /// "never looked at".
+    pub fn open_bugs_by_detector(&self, project_id: ProjectId) -> Result<Vec<OpenBugRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT b.id, b.bug_uid, b.fingerprint, b.detector, b.status,
+                    (SELECT file_path FROM bug_occurrences o WHERE o.bug_id = b.id
+                     ORDER BY o.scan_id DESC LIMIT 1)
+             FROM bugs b
+             WHERE b.project_id = ?1
+               AND b.status IN ('SUSPECTED','UNVERIFIED','VERIFIED','REGRESSED')",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id], |r| {
+                Ok(OpenBugRow {
+                    id: r.get(0)?,
+                    uid: r.get(1)?,
+                    fingerprint: r.get(2)?,
+                    detector: r.get(3)?,
+                    status: r.get(4)?,
+                    file_path: r.get(5)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn bugs(
+        &self,
+        project_id: ProjectId,
+        status: Option<&str>,
+        severity: Option<&str>,
+    ) -> Result<Vec<BugRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT bug_uid, fingerprint, slug, title, bug_type, component, severity,
+                    confidence, status, detector, introduced_commit, fixed_commit,
+                    (SELECT file_path FROM bug_occurrences o WHERE o.bug_id = bugs.id
+                     ORDER BY o.scan_id DESC LIMIT 1),
+                    (SELECT start_line FROM bug_occurrences o WHERE o.bug_id = bugs.id
+                     ORDER BY o.scan_id DESC LIMIT 1)
+             FROM bugs
+             WHERE project_id = ?1
+               AND (?2 IS NULL OR status = ?2)
+               AND (?3 IS NULL OR severity = ?3)
+             ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1
+                                    WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+                      confidence DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id, status, severity], |r| {
+                Ok(BugRow {
+                    uid: r.get(0)?,
+                    fingerprint: r.get(1)?,
+                    slug: r.get(2)?,
+                    title: r.get(3)?,
+                    bug_type: r.get(4)?,
+                    component: r.get(5)?,
+                    severity: r.get(6)?,
+                    confidence: r.get(7)?,
+                    status: r.get(8)?,
+                    detector: r.get(9)?,
+                    introduced_commit: r.get(10)?,
+                    fixed_commit: r.get(11)?,
+                    file: r.get(12)?,
+                    line: r.get(13)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn bug_evidence(&self, project_id: ProjectId, uid: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT o.evidence_json FROM bug_occurrences o
+                 JOIN bugs b ON b.id = o.bug_id
+                 WHERE b.project_id = ?1 AND b.bug_uid = ?2
+                 ORDER BY o.scan_id DESC LIMIT 1",
+                params![project_id, uid],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Every sighting of one bug, oldest first. This is the regression history.
+    pub fn bug_history(&self, project_id: ProjectId, uid: &str) -> Result<Vec<BugEventRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.scan_uid, s.commit_sha, o.status_at_scan, o.confidence_at_scan
+             FROM bug_occurrences o
+             JOIN bugs b ON b.id = o.bug_id
+             JOIN scans s ON s.id = o.scan_id
+             WHERE b.project_id = ?1 AND b.bug_uid = ?2
+             ORDER BY o.scan_id",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id, uid], |r| {
+                Ok(BugEventRow {
+                    scan_uid: r.get(0)?,
+                    commit: r.get(1)?,
+                    status: r.get(2)?,
+                    confidence: r.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn bug_counts(&self, project_id: ProjectId) -> Result<Vec<(String, i64)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT status, COUNT(*) FROM bugs WHERE project_id = ?1 GROUP BY status")?;
+        let rows = stmt
+            .query_map(params![project_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     // ── aliases ──────────────────────────────────────────────
 
     /// Record that `old_fqn` now lives at `symbol_id`.
@@ -1001,6 +1440,23 @@ impl Store {
                 |r| r.get(0),
             )
             .optional()?)
+    }
+
+    /// Every name this symbol used to have.
+    ///
+    /// Consulted when a finding is recorded, so a bug on a symbol that moved is recognized
+    /// rather than reported twice — ADR-007's "rename aliases are consulted before declaring
+    /// a new bug", which is inert unless something actually consults them.
+    pub fn old_fqns_for(&self, project_id: ProjectId, fqn: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.old_fqn FROM symbol_aliases a
+             JOIN symbols s ON s.id = a.symbol_id
+             WHERE a.project_id = ?1 AND s.fqn = ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id, fqn], |r| r.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     pub fn alias_count(&self, project_id: ProjectId) -> Result<i64> {

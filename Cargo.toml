@@ -7,6 +7,7 @@ members = [
   "crates/bh-lang",
   "crates/bh-lang-java",
   "crates/bh-lang-ts",
+  "crates/bh-lang-graphql",
   "crates/bh-core",
   "crates/bh-mcp",
   "crates/bh-cli",
@@ -26,6 +27,7 @@ bh-vcs       = { path = "crates/bh-vcs" }
 bh-lang      = { path = "crates/bh-lang" }
 bh-lang-java = { path = "crates/bh-lang-java" }
 bh-lang-ts   = { path = "crates/bh-lang-ts" }
+bh-lang-graphql = { path = "crates/bh-lang-graphql" }
 bh-core      = { path = "crates/bh-core" }
 bh-mcp       = { path = "crates/bh-mcp" }
 

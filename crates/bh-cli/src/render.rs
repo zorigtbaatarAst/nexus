@@ -506,3 +506,162 @@ pub fn graph(w: &mut impl Write, st: &Style, g: &GraphReport) -> std::io::Result
     }
     Ok(())
 }
+
+fn severity_rank(s: &str) -> u8 {
+    match s {
+        "critical" => 4,
+        "high" => 3,
+        "medium" => 2,
+        "low" => 1,
+        _ => 0,
+    }
+}
+
+/// Whether any open finding is at or above the gate.
+pub fn breaches(bugs: &[BugSummary], threshold: &str) -> bool {
+    let gate = severity_rank(threshold);
+    bugs.iter()
+        .filter(|b| b.status != "FIXED" && b.status != "IGNORED")
+        .any(|b| severity_rank(&b.severity) >= gate)
+}
+
+fn glyph(st: &Style, severity: &str) -> String {
+    match severity {
+        "critical" => st.bad("🚨"),
+        "high" => st.warn("⚠"),
+        _ => st.dim("·"),
+    }
+}
+
+pub fn hunt(w: &mut impl Write, st: &Style, r: &HuntReport) -> std::io::Result<()> {
+    writeln!(w, "{}", st.head("Analysis"))?;
+    writeln!(w, "  {} detectors", r.detectors_run.len())?;
+    writeln!(
+        w,
+        "  {} findings  {}",
+        r.found,
+        st.dim(&format!(
+            "({} new, {} recurring, {} regressed)",
+            r.new, r.recurring, r.regressed
+        ))
+    )?;
+    if r.fixed > 0 {
+        writeln!(
+            w,
+            "  {} closed — the rule no longer fires",
+            st.good(&r.fixed.to_string())
+        )?;
+    }
+    if r.rejected > 0 {
+        // A silently discarded finding is indistinguishable from finding nothing.
+        writeln!(
+            w,
+            "  {} rejected {}",
+            r.rejected,
+            st.dim("(no checkable evidence)")
+        )?;
+    }
+    writeln!(w, "{}", st.dim(&format!("  {} ms", r.duration_ms)))?;
+    if r.bugs.is_empty() {
+        writeln!(w)?;
+        writeln!(w, "{}", st.good("Nothing found."))?;
+        return Ok(());
+    }
+    writeln!(w)?;
+    bugs(w, st, &r.bugs)
+}
+
+pub fn bugs(w: &mut impl Write, st: &Style, list: &[BugSummary]) -> std::io::Result<()> {
+    if list.is_empty() {
+        writeln!(
+            w,
+            "{}",
+            st.dim("No findings. Run `bughunter hunt` if you have not yet.")
+        )?;
+        return Ok(());
+    }
+    for b in list {
+        let status = match b.status.as_str() {
+            "VERIFIED" | "REGRESSED" => st.bad(&b.status),
+            "FIXED" => st.good(&b.status),
+            "IGNORED" => st.dim(&b.status),
+            _ => st.warn(&b.status),
+        };
+        writeln!(
+            w,
+            "{} {}  {}",
+            glyph(st, &b.severity),
+            st.head(&b.uid),
+            b.title
+        )?;
+        writeln!(
+            w,
+            "     {:<10} {:>3}%  {:<12} {}",
+            b.severity,
+            (b.confidence * 100.0).round() as u32,
+            status,
+            st.dim(&b.bug_type)
+        )?;
+        if let (Some(f), Some(l)) = (&b.file, b.line) {
+            writeln!(w, "     {}", st.dim(&format!("{f}:{l}")))?;
+        }
+        writeln!(w)?;
+    }
+    writeln!(
+        w,
+        "{}",
+        st.dim(&format!(
+            "  {} findings — see one with: bughunter bug <id>",
+            list.len()
+        ))
+    )
+}
+
+pub fn bug(w: &mut impl Write, st: &Style, d: &BugDetail) -> std::io::Result<()> {
+    let b = &d.summary;
+    writeln!(w, "{} {}", glyph(st, &b.severity), st.head(&b.uid))?;
+    writeln!(w, "{}", b.title)?;
+    writeln!(w)?;
+    writeln!(w, "Severity:   {}", b.severity)?;
+    writeln!(w, "Confidence: {}%", (b.confidence * 100.0).round() as u32)?;
+    writeln!(w, "Status:     {}", b.status)?;
+    writeln!(w, "Type:       {}", b.bug_type)?;
+    writeln!(w, "Detector:   {}", b.detector)?;
+    if let Some(c) = &b.introduced_commit {
+        writeln!(w, "Introduced: {}", &c[..7.min(c.len())])?;
+    }
+    if let Some(c) = &b.fixed_commit {
+        writeln!(w, "Fixed:      {}", &c[..7.min(c.len())])?;
+    }
+    writeln!(w)?;
+
+    writeln!(w, "{}", st.head("Evidence"))?;
+    if d.evidence.is_empty() {
+        writeln!(w, "  {}", st.warn("none recorded"))?;
+    }
+    for e in &d.evidence {
+        writeln!(w, "  {}", st.head(&format!("{}:{}", e.file, e.line)))?;
+        writeln!(w, "    {}", e.note)?;
+    }
+
+    if d.history.len() > 1 {
+        writeln!(w)?;
+        writeln!(w, "{}", st.head("History"))?;
+        for h in &d.history {
+            let c = h.commit.as_deref().unwrap_or("-");
+            writeln!(
+                w,
+                "  {:<10} {:<8} {}",
+                h.scan_uid,
+                &c[..7.min(c.len())],
+                h.status
+            )?;
+        }
+    }
+    writeln!(w)?;
+    writeln!(
+        w,
+        "{}",
+        st.dim("This build does not verify findings. `bughunter verify` lands in V1.")
+    )
+}

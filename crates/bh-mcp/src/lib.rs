@@ -59,6 +59,22 @@ pub struct SymbolArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct BugsArgs {
+    /// SUSPECTED | UNVERIFIED | VERIFIED | FIXED | REGRESSED | IGNORED
+    #[serde(default)]
+    pub status: Option<String>,
+    /// critical | high | medium | low | info
+    #[serde(default)]
+    pub severity: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BugArgs {
+    /// e.g. BUG-3
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ChangesArgs {
     /// file | symbol | dependency | config | test
     #[serde(default)]
@@ -299,6 +315,101 @@ impl BugHunter {
     }
 
     #[tool(
+        description = "Run the deterministic detectors and reconcile the results with what is \
+                       already known. Findings are recognized across scans by fingerprint, so a \
+                       bug seen again is not reported twice; one that stops firing is closed; \
+                       one that returns after a fix is a regression. No model is involved, so \
+                       these confidences are not model estimates."
+    )]
+    async fn bughunter_find_bugs(
+        &self,
+        Parameters(_): Parameters<NoArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self
+            .with_engine(|e| e.hunt().map_err(|e| e.to_string()))
+            .await
+        {
+            Ok(r) => Ok(ok(budget::fit(
+                &r,
+                "bugs",
+                "filter with bughunter_get_bugs",
+            ))),
+            Err(m) => Ok(failure("no_baseline", m, &["bughunter_scan"])),
+        }
+    }
+
+    #[tool(description = "List findings, optionally filtered by status or severity.")]
+    async fn bughunter_get_bugs(
+        &self,
+        Parameters(a): Parameters<BugsArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let (status, severity) = (a.status.clone(), a.severity.clone());
+        match self
+            .with_engine(move |e| {
+                e.bugs(status.as_deref(), severity.as_deref())
+                    .map_err(|e| e.to_string())
+            })
+            .await
+        {
+            Ok(bugs) => Ok(ok(budget::fit(
+                &json!({"status": "ok", "bugs": bugs}),
+                "bugs",
+                "filter by severity",
+            ))),
+            Err(m) => Ok(failure("no_project", m, &["bughunter_scan"])),
+        }
+    }
+
+    #[tool(
+        description = "One finding in full: its evidence with file and line, and every scan \
+                       that saw it. The history is what distinguishes a regression from a new \
+                       bug."
+    )]
+    async fn bughunter_get_bug(
+        &self,
+        Parameters(a): Parameters<BugArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let id = a.id.clone();
+        match self
+            .with_engine(move |e| e.bug(&id).map_err(|e| e.to_string()))
+            .await
+        {
+            Ok(Some(d)) => Ok(ok(serde_json::to_value(&d).unwrap_or(json!({})))),
+            Ok(None) => Ok(failure(
+                "unknown_bug",
+                format!("no finding {}", a.id),
+                &["bughunter_get_bugs"],
+            )),
+            Err(m) => Ok(failure("no_project", m, &["bughunter_scan"])),
+        }
+    }
+
+    #[tool(
+        description = "Dismiss a finding. A human decision is sticky: later scans will not \
+                       re-open it. Only call this when a person has decided it is not a bug."
+    )]
+    async fn bughunter_ignore_bug(
+        &self,
+        Parameters(a): Parameters<BugArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let id = a.id.clone();
+        match self
+            .with_engine(move |e| e.ignore_bug(&id).map_err(|e| e.to_string()))
+            .await
+        {
+            Ok(true) => Ok(ok(
+                json!({"status": "ok", "id": a.id, "new_status": "IGNORED"}),
+            )),
+            Ok(false) => Ok(failure(
+                "unknown_bug",
+                format!("no finding {}", a.id),
+                &["bughunter_get_bugs"],
+            )),
+            Err(m) => Ok(failure("no_project", m, &[])),
+        }
+    }
+
+    #[tool(
         description = "Dependency graph size and how much of it resolved, broken down by tier. \
                        Use it to judge how much to trust an impact result on this project."
     )]
@@ -353,8 +464,13 @@ impl ServerHandler for BugHunter {
              it. Every result carries the edge chain that produced it and the weakest \
              confidence along that chain — treat a low min_confidence as a guess, not a fact.\n\
              \n\
-             This build finds no bugs and runs no tests. It answers \"what changed and what \
-             does it touch\"; the reasoning is yours."
+             bughunter_find_bugs runs deterministic detectors only — Spring proxy mistakes, \
+             GraphQL fields no resolver serves, credentials in source. Their confidences are \
+             not model estimates, so do not discount them as such. What it does NOT do is \
+             reason about business logic, races or data consistency: that is yours, and there \
+             is no way yet to write your findings back.\n\
+             \n\
+             It also runs no tests, so nothing here is verified by reproduction."
                 .into(),
         );
         info
