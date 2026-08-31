@@ -1,11 +1,12 @@
-BIN     := target/release/bughunter
+BIN     := target/release/nexus
+CAP_BIN := target/release/bughunter
 PREFIX  ?= $(HOME)/.local
 
 .PHONY: help build release test lint fmt check install uninstall clean demo smoke
 
 help:
 	@echo "build    debug build"
-	@echo "release  optimized single binary -> $(BIN)"
+	@echo "release  optimized binaries -> nexus and bughunter"
 	@echo "test     unit tests + architecture boundary tests"
 	@echo "lint     clippy, warnings denied"
 	@echo "check    fmt + lint + test — what CI runs"
@@ -31,15 +32,16 @@ fmt:
 check: fmt lint test
 
 install: release
-	install -Dm755 $(BIN) $(PREFIX)/bin/bughunter
-	@echo "installed to $(PREFIX)/bin/bughunter"
+	install -Dm755 $(BIN) $(PREFIX)/bin/nexus
+	install -Dm755 $(CAP_BIN) $(PREFIX)/bin/bughunter
+	@echo "installed $(PREFIX)/bin/nexus and $(PREFIX)/bin/bughunter"
 	@case ":$$PATH:" in *":$(PREFIX)/bin:"*) ;; \
 	  *) echo "note: $(PREFIX)/bin is not on your PATH — add it:"; \
 	     echo "  export PATH=\"$(PREFIX)/bin:\$$PATH\"" ;; esac
 
 uninstall:
-	rm -f $(PREFIX)/bin/bughunter
-	@echo "removed $(PREFIX)/bin/bughunter"
+	rm -f $(PREFIX)/bin/nexus $(PREFIX)/bin/bughunter
+	@echo "removed $(PREFIX)/bin/nexus and $(PREFIX)/bin/bughunter"
 	@echo "project data in each repository's .nexus/ was left alone"
 
 clean:

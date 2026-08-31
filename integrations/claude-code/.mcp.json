@@ -1,8 +1,10 @@
 {
   "mcpServers": {
-    "bughunter": {
-      "command": "bughunter",
-      "args": ["mcp"]
+    "nexus": {
+      "command": "nexus",
+      "args": [
+        "mcp"
+      ]
     }
   }
 }

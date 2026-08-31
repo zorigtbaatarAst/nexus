@@ -802,6 +802,7 @@ dependencies = [
  "nexus-types",
  "nexus-vcs",
  "rayon",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror",
@@ -875,6 +876,7 @@ dependencies = [
 name = "nexus-types"
 version = "0.1.0"
 dependencies = [
+ "schemars",
  "serde",
 ]
 

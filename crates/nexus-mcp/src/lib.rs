@@ -77,6 +77,36 @@ pub struct BugArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct TargetArgs {
+    /// A file path, a fully-qualified symbol name, or a component name.
+    pub target: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RecordFindingArgs {
+    /// Which capability this belongs to. Defaults to `agent` — findings you reasoned out
+    /// rather than a rule produced.
+    #[serde(default)]
+    pub capability: Option<String>,
+    pub finding: nexus_core::findings::Finding,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FactArgs {
+    /// Dotted and greppable: `arch.payment.idempotency`, `invariant.order.status`.
+    pub key: String,
+    /// The fact itself, in one sentence.
+    pub claim: String,
+    /// The symbol or module it is about, when it is about one.
+    #[serde(default)]
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub evidence: Vec<nexus_core::findings::CodeRef>,
+    #[serde(default)]
+    pub confidence: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ChangesArgs {
     /// file | symbol | dependency | config | test
     #[serde(default)]
@@ -167,7 +197,7 @@ impl Nexus {
                        databases, the current baseline, and how far it has drifted. Call this \
                        first — it is cheap and it tells you what the other tools can answer."
     )]
-    async fn bughunter_get_project_context(
+    async fn nexus_get_project_context(
         &self,
         Parameters(_): Parameters<NoArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -176,7 +206,7 @@ impl Nexus {
             .await
         {
             Ok(r) => Ok(ok(budget::fit(&r, "warnings", "no narrowing needed"))),
-            Err(m) => Ok(failure("no_project", m, &["bughunter_scan"])),
+            Err(m) => Ok(failure("no_project", m, &["nexus_scan"])),
         }
     }
 
@@ -184,7 +214,7 @@ impl Nexus {
         description = "Index the project and set a baseline. Needed once before rescan or \
                        impact will work. Initializes the project if it has never been set up."
     )]
-    async fn bughunter_scan(
+    async fn nexus_scan(
         &self,
         Parameters(_): Parameters<NoArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -197,7 +227,7 @@ impl Nexus {
                 "warnings",
                 "use --verbose on the CLI for all warnings",
             ))),
-            Err(m) => Ok(failure("scan_failed", m, &["bughunter_doctor"])),
+            Err(m) => Ok(failure("scan_failed", m, &["nexus_doctor"])),
         }
     }
 
@@ -206,7 +236,7 @@ impl Nexus {
                        baseline. Reports API_CHANGED, BODY_CHANGED, CONTRACT_CHANGED, ADDED, \
                        DELETED and RENAMED per symbol — not just which files differ."
     )]
-    async fn bughunter_rescan(
+    async fn nexus_rescan(
         &self,
         Parameters(_): Parameters<NoArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -217,14 +247,14 @@ impl Nexus {
             Ok(r) => Ok(ok(budget::fit(
                 &r,
                 "items",
-                "call bughunter_get_changes with an entity filter",
+                "call nexus_get_changes with an entity filter",
             ))),
-            Err(m) => Ok(failure("no_baseline", m, &["bughunter_scan"])),
+            Err(m) => Ok(failure("no_baseline", m, &["nexus_scan"])),
         }
     }
 
     #[tool(description = "The changes recorded by the current baseline scan.")]
-    async fn bughunter_get_changes(
+    async fn nexus_get_changes(
         &self,
         Parameters(a): Parameters<ChangesArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -247,7 +277,7 @@ impl Nexus {
                     "filter with entity: \"symbol\"",
                 )))
             }
-            Err(m) => Ok(failure("no_baseline", m, &["bughunter_scan"])),
+            Err(m) => Ok(failure("no_baseline", m, &["nexus_scan"])),
         }
     }
 
@@ -257,7 +287,7 @@ impl Nexus {
                        method reaches the UI components that render it. Every result carries the \
                        edge chain that produced it and the weakest confidence along that chain."
     )]
-    async fn bughunter_get_impact(
+    async fn nexus_get_impact(
         &self,
         Parameters(a): Parameters<ImpactArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -283,7 +313,7 @@ impl Nexus {
                 "items",
                 "raise min_score, or lower depth",
             ))),
-            Err(m) => Ok(failure("no_baseline", m, &["bughunter_scan"])),
+            Err(m) => Ok(failure("no_baseline", m, &["nexus_scan"])),
         }
     }
 
@@ -292,7 +322,7 @@ impl Nexus {
                        optionally a capped source excerpt. Follows renames, so an old name \
                        still resolves."
     )]
-    async fn bughunter_get_symbol(
+    async fn nexus_get_symbol(
         &self,
         Parameters(a): Parameters<SymbolArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -315,7 +345,7 @@ impl Nexus {
                     "ask for the specific caller instead",
                 )))
             }
-            Err(m) => Ok(failure("unknown_symbol", m, &["bughunter_get_impact"])),
+            Err(m) => Ok(failure("unknown_symbol", m, &["nexus_get_impact"])),
         }
     }
 
@@ -326,7 +356,7 @@ impl Nexus {
                        one that returns after a fix is a regression. No model is involved, so \
                        these confidences are not model estimates."
     )]
-    async fn bughunter_find_bugs(
+    async fn bughunter_analyze(
         &self,
         Parameters(_): Parameters<NoArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -339,15 +369,15 @@ impl Nexus {
         {
             Ok(r) => Ok(ok(budget::fit(
                 &r,
-                "bugs",
-                "filter with bughunter_get_bugs",
+                "findings",
+                "filter with nexus_get_findings",
             ))),
-            Err(m) => Ok(failure("no_baseline", m, &["bughunter_scan"])),
+            Err(m) => Ok(failure("no_baseline", m, &["nexus_scan"])),
         }
     }
 
     #[tool(description = "List findings, optionally filtered by status or severity.")]
-    async fn bughunter_get_bugs(
+    async fn nexus_get_findings(
         &self,
         Parameters(a): Parameters<BugsArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -359,12 +389,12 @@ impl Nexus {
             })
             .await
         {
-            Ok(bugs) => Ok(ok(budget::fit(
-                &json!({"status": "ok", "bugs": bugs}),
-                "bugs",
+            Ok(findings) => Ok(ok(budget::fit(
+                &json!({"status": "ok", "findings": findings}),
+                "findings",
                 "filter by severity",
             ))),
-            Err(m) => Ok(failure("no_project", m, &["bughunter_scan"])),
+            Err(m) => Ok(failure("no_project", m, &["nexus_scan"])),
         }
     }
 
@@ -373,7 +403,7 @@ impl Nexus {
                        that saw it. The history is what distinguishes a regression from a new \
                        bug."
     )]
-    async fn bughunter_get_bug(
+    async fn nexus_get_finding(
         &self,
         Parameters(a): Parameters<BugArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -386,9 +416,9 @@ impl Nexus {
             Ok(None) => Ok(failure(
                 "unknown_bug",
                 format!("no finding {}", a.id),
-                &["bughunter_get_bugs"],
+                &["nexus_get_findings"],
             )),
-            Err(m) => Ok(failure("no_project", m, &["bughunter_scan"])),
+            Err(m) => Ok(failure("no_project", m, &["nexus_scan"])),
         }
     }
 
@@ -396,7 +426,7 @@ impl Nexus {
         description = "Dismiss a finding. A human decision is sticky: later scans will not \
                        re-open it. Only call this when a person has decided it is not a bug."
     )]
-    async fn bughunter_ignore_bug(
+    async fn nexus_ignore_finding(
         &self,
         Parameters(a): Parameters<BugArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -411,7 +441,7 @@ impl Nexus {
             Ok(false) => Ok(failure(
                 "unknown_bug",
                 format!("no finding {}", a.id),
-                &["bughunter_get_bugs"],
+                &["nexus_get_findings"],
             )),
             Err(m) => Ok(failure("no_project", m, &[])),
         }
@@ -421,7 +451,7 @@ impl Nexus {
         description = "Dependency graph size and how much of it resolved, broken down by tier. \
                        Use it to judge how much to trust an impact result on this project."
     )]
-    async fn bughunter_get_graph(
+    async fn nexus_get_graph(
         &self,
         Parameters(_): Parameters<NoArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -430,7 +460,103 @@ impl Nexus {
             .await
         {
             Ok(r) => Ok(ok(serde_json::to_value(&r).unwrap_or(json!({})))),
-            Err(m) => Ok(failure("no_project", m, &["bughunter_scan"])),
+            Err(m) => Ok(failure("no_project", m, &["nexus_scan"])),
+        }
+    }
+
+    #[tool(
+        description = "Record a finding you reasoned out yourself. This is how a model \
+                       contributes to Nexus: it gets the same identity, lifecycle and history \
+                       as a rule-produced one, so the same observation next session is \
+                       recognized rather than duplicated. Every finding needs at least one \
+                       file:line of evidence — a claim nobody can check is rejected, not \
+                       stored — and model confidence is capped at 0.75, because reproduction, \
+                       not assertion, is what makes a finding certain."
+    )]
+    async fn nexus_record_finding(
+        &self,
+        Parameters(a): Parameters<RecordFindingArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let capability = a.capability.clone().unwrap_or_else(|| "agent".into());
+        let finding = a.finding.clone();
+        match self
+            .with_engine(move |e| {
+                e.record_finding(&capability, finding)
+                    .map_err(|e| e.to_string())
+            })
+            .await
+        {
+            Ok(r) => Ok(ok(serde_json::to_value(&r).unwrap_or(json!({})))),
+            Err(m) => Ok(failure("rejected", m, &["nexus_get_symbol"])),
+        }
+    }
+
+    #[tool(
+        description = "What is already known about this file, symbol or component: findings \
+                       recorded here before, and facts learned about it. Ask before changing \
+                       something — the answer is what a previous session already worked out."
+    )]
+    async fn nexus_get_known(
+        &self,
+        Parameters(a): Parameters<TargetArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let (t1, t2) = (a.target.clone(), a.target.clone());
+        let findings = self
+            .with_engine(move |e| e.findings_for(&t1).map_err(|e| e.to_string()))
+            .await;
+        let facts = self
+            .with_engine(move |e| e.facts(Some(&t2)).map_err(|e| e.to_string()))
+            .await;
+        match (findings, facts) {
+            (Ok(f), Ok(k)) => Ok(ok(budget::fit(
+                &json!({"status": "ok", "target": a.target, "findings": f, "facts": k}),
+                "findings",
+                "narrow the target",
+            ))),
+            (Err(m), _) | (_, Err(m)) => Ok(failure("no_project", m, &["nexus_scan"])),
+        }
+    }
+
+    #[tool(
+        description = "Remember something about this project that is not a symbol or a \
+                       finding — an invariant, a convention, a decision. It survives every \
+                       later session and every later model, which is the point: expensive \
+                       conclusions should be reached once."
+    )]
+    async fn nexus_record_fact(
+        &self,
+        Parameters(a): Parameters<FactArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let input = nexus_core::FactInput {
+            key: a.key.clone(),
+            scope: if a.subject.is_some() {
+                "module".into()
+            } else {
+                "project".into()
+            },
+            subject: a.subject.clone(),
+            claim: a.claim.clone(),
+            source: "ai".into(),
+            evidence: a.evidence.clone(),
+            confidence: a.confidence.unwrap_or(0.8),
+        };
+        match self
+            .with_engine(move |e| e.record_fact(input).map_err(|e| e.to_string()))
+            .await
+        {
+            Ok(()) => Ok(ok(json!({"status": "ok", "key": a.key}))),
+            Err(m) => Ok(failure("no_baseline", m, &["nexus_scan"])),
+        }
+    }
+
+    #[tool(description = "Which capabilities this build can run.")]
+    async fn nexus_capabilities(
+        &self,
+        Parameters(_): Parameters<NoArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self.with_engine(|e| Ok(e.capability_list())).await {
+            Ok(c) => Ok(ok(json!({"status": "ok", "capabilities": c}))),
+            Err(m) => Ok(failure("no_project", m, &["nexus_scan"])),
         }
     }
 
@@ -438,7 +564,7 @@ impl Nexus {
         description = "Diagnose the environment and configuration. Each check names what it \
                           found and the command that fixes it."
     )]
-    async fn bughunter_doctor(
+    async fn nexus_doctor(
         &self,
         Parameters(_): Parameters<NoArgs>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -461,24 +587,31 @@ impl ServerHandler for Nexus {
         // the kind of thing a probe does not catch.
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
-            "BugHunter indexes a codebase and answers what changed and what it touches.\n\
+            "Nexus is persistent code intelligence. It understands the project once and \
+             remembers; capabilities use that understanding.\n\
              \n\
-             Call bughunter_get_project_context first. If there is no baseline, call \
-             bughunter_scan once; afterwards bughunter_rescan is cheap and reports changes \
-             down to the symbol.\n\
+             Call nexus_get_project_context first. If there is no baseline, nexus_scan once; \
+             afterwards nexus_rescan is cheap and reports changes down to the symbol.\n\
              \n\
-             bughunter_get_impact is the useful one: it crosses the frontend/backend seam, \
-             so a change to a backend service method reaches the UI components that render \
-             it. Every result carries the edge chain that produced it and the weakest \
-             confidence along that chain — treat a low min_confidence as a guess, not a fact.\n\
+             Before changing code, call nexus_get_known on it — findings recorded there \
+             before and facts a previous session worked out. That is what the persistence is \
+             for: expensive conclusions should be reached once.\n\
              \n\
-             bughunter_find_bugs runs deterministic detectors only — Spring proxy mistakes, \
-             GraphQL fields no resolver serves, credentials in source. Their confidences are \
-             not model estimates, so do not discount them as such. What it does NOT do is \
-             reason about business logic, races or data consistency: that is yours, and there \
-             is no way yet to write your findings back.\n\
+             nexus_get_impact crosses the frontend/backend seam, so a change to a backend \
+             service method reaches the UI components that render it. Every result carries \
+             the edge chain that produced it and the weakest confidence along that chain — \
+             treat a low min_confidence as a lead, not a fact.\n\
              \n\
-             It also runs no tests, so nothing here is verified by reproduction."
+             bughunter_analyze runs deterministic rules only: Spring proxy mistakes, GraphQL \
+             fields no resolver serves, credentials in source. Their confidences are not \
+             model estimates, so do not discount them as such.\n\
+             \n\
+             What the rules cannot do is reason about business logic, races or data \
+             consistency. That is yours — and nexus_record_finding is how you contribute it, \
+             with the same identity and history a rule-produced finding gets, so the same \
+             observation next session is recognized rather than duplicated. Every finding \
+             needs file:line evidence, and model confidence is capped at 0.75: nothing here \
+             runs tests, so nothing is verified by reproduction yet."
                 .into(),
         );
         info

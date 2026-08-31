@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -397,7 +398,7 @@ impl ChangeKind {
 
 // ─────────────────────────── bugs ───────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum FindingType {
     Concurrency,
@@ -450,7 +451,9 @@ impl FindingType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Info,
@@ -484,7 +487,7 @@ impl Severity {
 
 /// docs/change-analysis.md §10. The transitions that matter are the ones that require
 /// evidence: `FIXED` is never reached by a bug merely not being seen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FindingStatus {
     Suspected,

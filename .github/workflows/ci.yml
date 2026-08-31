@@ -38,7 +38,7 @@ jobs:
         run: |
           set -eu
           cargo build --release --locked
-          bh="$PWD/target/release/bughunter"
+          bh="$PWD/target/release/nexus"
           repo=$(mktemp -d)
           out=$(mktemp -d)
           git clone --depth 1 https://github.com/spring-projects/spring-petclinic.git "$repo" >/dev/null 2>&1

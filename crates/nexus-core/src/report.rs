@@ -270,3 +270,47 @@ pub struct AnalyzeReport {
     pub findings: Vec<FindingSummary>,
     pub duration_ms: u128,
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RecordedFinding {
+    pub uid: String,
+    /// False when this was already known — the fingerprint recognized it rather than
+    /// creating a duplicate, which is the point of recording through the platform.
+    pub is_new: bool,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FactInput {
+    pub key: String,
+    #[serde(default = "default_scope")]
+    pub scope: String,
+    pub subject: Option<String>,
+    pub claim: String,
+    #[serde(default = "default_source")]
+    pub source: String,
+    #[serde(default)]
+    pub evidence: Vec<crate::findings::CodeRef>,
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
+}
+
+fn default_scope() -> String {
+    "project".into()
+}
+fn default_source() -> String {
+    "ai".into()
+}
+fn default_confidence() -> f64 {
+    0.8
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Fact {
+    pub key: String,
+    pub scope: String,
+    pub subject: Option<String>,
+    pub claim: String,
+    pub source: String,
+    pub confidence: f64,
+}

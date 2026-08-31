@@ -27,20 +27,20 @@ jobs:
           # "download it and run it" true rather than nearly true.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            asset: bughunter-linux-x86_64
+            asset: nexus-linux-x86_64
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
-            asset: bughunter-linux-aarch64
+            asset: nexus-linux-aarch64
           # Both macOS assets are built on Apple Silicon. GitHub is retiring the Intel
           # macos-13 runners, and a job requesting one simply waits forever for a runner
           # that is never assigned — a failure with no error message. Xcode ships both
           # SDKs, so an arm64 runner cross-compiles the Intel binary natively.
           - os: macos-14
             target: aarch64-apple-darwin
-            asset: bughunter-macos-aarch64
+            asset: nexus-macos-aarch64
           - os: macos-14
             target: x86_64-apple-darwin
-            asset: bughunter-macos-x86_64
+            asset: nexus-macos-x86_64
             cross: true
     steps:
       - uses: actions/checkout@v4
@@ -62,7 +62,7 @@ jobs:
       - name: Verify the binary
         run: |
           set -eu
-          bin="target/${{ matrix.target }}/release/bughunter"
+          bin="target/${{ matrix.target }}/release/nexus"
           file "$bin"
 
           # A cross-compiled binary cannot be executed here: Rosetta is not installed on
@@ -89,7 +89,7 @@ jobs:
       - name: Stage the asset
         run: |
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/bughunter" "dist/${{ matrix.asset }}"
+          cp "target/${{ matrix.target }}/release/nexus" "dist/${{ matrix.asset }}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -114,9 +114,9 @@ jobs:
       - name: Checksums
         run: |
           set -eu
-          mkdir -p dist && cp staging/bughunter-* dist/
-          chmod +x dist/bughunter-*
-          cd dist && sha256sum bughunter-* > checksums.txt
+          mkdir -p dist && cp staging/nexus-* dist/
+          chmod +x dist/nexus-*
+          cd dist && sha256sum nexus-* > checksums.txt
           cat checksums.txt
 
       - name: Publish the release
@@ -137,7 +137,7 @@ jobs:
             gh release upload "$version" dist/* --clobber
           else
             gh release create "$version" dist/* $prerelease \
-              --title "BugHunter $version" \
+              --title "Nexus $version" \
               --notes "Install:
 
           \`\`\`
@@ -148,18 +148,22 @@ jobs:
 
           \`\`\`
           cd /path/to/your/project
-          bughunter scan       # index it and set a baseline
-          bughunter rescan     # what changed, and what it touches
-          bughunter impact <symbol>
+          nexus scan           # index it and set a baseline
+          nexus rescan         # what changed, and what it touches
+          nexus analyze        # run BugHunter over it
+          nexus ask next       # what is worth looking at
           \`\`\`
 
           Linux binaries are statically linked against musl and run on any distribution.
           Every asset's SHA-256 is in \`checksums.txt\`; the installer refuses to install
           a binary whose checksum does not match.
 
-          **Working:** \`scan\` \`rescan\` \`status\` \`changes\` \`impact\` \`graph\` \`doctor\`;
-          Java and TypeScript; the dependency graph and the GraphQL cross-stack seam.
+          The installer places two binaries: \`nexus\`, the platform, and \`bughunter\`, its first
+          capability's own CLI.
 
-          **Not yet:** bug detection, the verification engine, and the MCP server — see
-          [docs/roadmap.md](docs/roadmap.md)."
+          **Working:** scan, rescan, impact, graph, analyze, findings, ask, facts, and an MCP
+          server; Java, TypeScript and GraphQL; the dependency graph and the cross-stack seam.
+
+          **Not yet:** the verification engine — nothing is proven by reproduction — and the
+          Python and Rust analyzers. See [docs/roadmap.md](docs/roadmap.md)."
           fi

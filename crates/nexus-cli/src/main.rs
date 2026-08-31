@@ -7,10 +7,11 @@
 
 #![forbid(unsafe_code)]
 
+mod ask;
 mod render;
 
 use cap_bughunter::BugHunter;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use nexus_core::capability::Scope;
 use nexus_core::impact::{Direction, ImpactQuery};
 use nexus_core::report::Resolved;
@@ -23,9 +24,9 @@ use std::process::ExitCode;
 
 #[derive(Parser)]
 #[command(
-    name = "bughunter",
+    name = "nexus",
     version,
-    about = "Change-aware code intelligence: what changed, what it touches, and what broke",
+    about = "Nexus — persistent code intelligence. Nexus understands the project; capabilities use that understanding.",
     disable_help_subcommand = true
 )]
 struct Cli {
@@ -86,10 +87,42 @@ enum Command {
     },
     /// Dependency graph size and how much of it resolved
     Graph,
-    /// Run the deterministic detectors and reconcile findings with what is already known
-    Hunt,
+    /// Run a capability over the project
+    #[command(alias = "hunt")]
+    Analyze {
+        /// Which capability. `nexus capabilities` lists them.
+        #[arg(default_value = "bughunter")]
+        capability: String,
+        /// Only what changed since the previous scan, instead of everything
+        #[arg(long)]
+        changed: bool,
+        /// Only these files
+        #[arg(long, value_name = "PATH")]
+        file: Vec<String>,
+    },
+    /// What this build can analyze
+    Capabilities,
+    /// Answer a question about the project
+    Ask {
+        /// changed | affected <target> | uses <target> | known <target> | facts | next
+        #[arg(trailing_var_arg = true)]
+        question: Vec<String>,
+    },
+    /// Record something learned about this project, so the next session starts with it
+    Fact {
+        /// e.g. arch.payment.idempotency
+        key: String,
+        /// One sentence
+        claim: String,
+        #[arg(long)]
+        subject: Option<String>,
+    },
     /// List findings
-    Bugs {
+    #[command(alias = "bugs")]
+    Findings {
+        /// Only this capability's findings
+        #[arg(long)]
+        capability: Option<String>,
         #[arg(long)]
         status: Option<String>,
         #[arg(long)]
@@ -99,7 +132,8 @@ enum Command {
         fail_on: Option<String>,
     },
     /// One finding in full, with its evidence and history
-    Bug {
+    #[command(alias = "bug")]
+    Finding {
         /// e.g. BUG-3
         id: String,
     },
@@ -125,7 +159,28 @@ mod exit {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // The help and version text carry the name the user typed. One binary image under two
+    // names, so `bughunter --version` must not answer "nexus".
+    // A &'static str, because clap's builder wants one and the two names are known.
+    let name: &'static str = if render::product_name() == "BugHunter" {
+        "bughunter"
+    } else {
+        "nexus"
+    };
+    let about: &'static str = if name == "bughunter" {
+        "BugHunter — deterministic bug detection, the first Nexus capability"
+    } else {
+        "Nexus — persistent code intelligence. Nexus understands the project; capabilities use that understanding."
+    };
+    let matches = Cli::command()
+        .name(name)
+        .bin_name(name)
+        .about(about)
+        .get_matches();
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(c) => c,
+        Err(e) => e.exit(),
+    };
     match run(&cli) {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
@@ -331,32 +386,21 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             rt.block_on(nexus_mcp::serve(root))?;
         }
 
-        Command::Hunt => {
-            let mut engine = open(&root)?;
-            match engine.analyze("bughunter", Scope::Everything) {
-                Ok(report) => {
-                    emit!(&report, {
-                        render::banner(&mut out, &st)?;
-                        render::analyze(&mut out, &st, &report)?;
-                    });
-                }
-                Err(EngineError::NoBaseline) => {
-                    eprintln!("bughunter: no baseline for this project");
-                    eprintln!("  run: bughunter scan");
-                    return Ok(exit::NO_BASELINE);
-                }
-                Err(e) => return Err(Box::new(e)),
-            }
-        }
-
-        Command::Bugs {
+        Command::Findings {
+            capability,
             status,
             severity,
             fail_on,
         } => {
             let engine = open(&root)?;
-            let bugs =
-                engine.findings(Some("bughunter"), status.as_deref(), severity.as_deref())?;
+            // Under the `bughunter` name the tool is one capability, so its findings list is
+            // that capability's unless asked otherwise. Under `nexus` it is the platform's.
+            let default_cap = (render::product_name() == "BugHunter").then_some("bughunter");
+            let bugs = engine.findings(
+                capability.as_deref().or(default_cap),
+                status.as_deref(),
+                severity.as_deref(),
+            )?;
             emit!(&bugs, {
                 render::banner(&mut out, &st)?;
                 render::findings(&mut out, &st, &bugs)?;
@@ -364,13 +408,13 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             if let Some(threshold) = fail_on {
                 // Discovering a bug is a success, not an error. Only an explicit gate makes
                 // it fail, or the command gets removed from the pipeline within a week.
-                if render::breaches(&bugs, threshold) {
+                if render::breaches(&bugs, threshold.as_str()) {
                     return Ok(exit::FINDINGS);
                 }
             }
         }
 
-        Command::Bug { id } => {
+        Command::Finding { id } => {
             let engine = open(&root)?;
             match engine.finding(id)? {
                 Some(detail) => {
@@ -399,6 +443,85 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             } else {
                 eprintln!("bughunter: no finding {id}");
                 return Ok(exit::USAGE);
+            }
+        }
+
+        Command::Analyze {
+            capability,
+            changed,
+            file,
+        } => {
+            let mut engine = open(&root)?;
+            let scope = if !file.is_empty() {
+                Scope::Files(file.clone())
+            } else if *changed {
+                // The previous scan is what "changed" is measured against, and the rescan
+                // cascade already worked out exactly which symbols moved.
+                match engine.previous_scan_id()? {
+                    Some(id) => Scope::Changed { since_scan: id },
+                    None => Scope::Everything,
+                }
+            } else {
+                Scope::Everything
+            };
+            match engine.analyze(capability, scope) {
+                Ok(report) => emit!(&report, {
+                    render::banner(&mut out, &st)?;
+                    render::analyze(&mut out, &st, &report)?;
+                }),
+                Err(e @ EngineError::UnknownCapability { .. }) => {
+                    eprintln!("nexus: {e}");
+                    return Ok(exit::USAGE);
+                }
+                Err(EngineError::NoBaseline) => {
+                    eprintln!("nexus: no baseline for this project");
+                    eprintln!("  run: nexus scan");
+                    return Ok(exit::NO_BASELINE);
+                }
+                Err(e) => return Err(Box::new(e)),
+            }
+        }
+
+        Command::Capabilities => {
+            let engine = open(&root)?;
+            let caps = engine.capability_list();
+            emit!(&caps, {
+                render::banner(&mut out, &st)?;
+                render::capabilities(&mut out, &st, &caps)?;
+            });
+        }
+
+        Command::Ask { question } => {
+            let engine = open(&root)?;
+            let answer = ask::answer(&engine, question)?;
+            emit!(&answer, {
+                render::banner(&mut out, &st)?;
+                render::answer(&mut out, &st, &answer)?;
+            });
+        }
+
+        Command::Fact {
+            key,
+            claim,
+            subject,
+        } => {
+            let mut engine = open(&root)?;
+            engine.record_fact(nexus_core::FactInput {
+                key: key.clone(),
+                scope: if subject.is_some() {
+                    "module".into()
+                } else {
+                    "project".into()
+                },
+                subject: subject.clone(),
+                claim: claim.clone(),
+                // Entered by a person at a terminal, and ranked above an inferred fact.
+                source: "human".into(),
+                evidence: Vec::new(),
+                confidence: 1.0,
+            })?;
+            if !cli.quiet {
+                writeln!(out, "remembered: {key}")?;
             }
         }
 
@@ -459,9 +582,12 @@ struct ChangeOut {
     detail: Option<String>,
 }
 
-/// One versioned envelope for every command, so a script written today keeps working.
-/// `warnings` is always present: a consumer must never have to tell "no warnings" apart
-/// from "an older version that did not report them".
+/// One versioned envelope for every command.
+///
+/// `schema` is 2: version 1 named the commands `bugs` and `hunt`, and the platform renamed
+/// their canonical forms to `findings` and `analyze` (the old names still work as aliases).
+/// Findings also gained a `capability` field. Additive changes do not move this number;
+/// a renamed value does, because a script matching on it would otherwise fail silently.
 #[derive(Serialize)]
 struct Envelope<'a, T: Serialize> {
     bughunter: &'a str,
@@ -473,7 +599,7 @@ struct Envelope<'a, T: Serialize> {
 fn envelope<T: Serialize>(cli: &Cli, value: T) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(&Envelope {
         bughunter: env!("CARGO_PKG_VERSION"),
-        schema: 1,
+        schema: 2,
         command: match &cli.command {
             Command::Init => "init",
             Command::Scan => "scan",
@@ -482,9 +608,12 @@ fn envelope<T: Serialize>(cli: &Cli, value: T) -> Result<String, serde_json::Err
             Command::Changes { .. } => "changes",
             Command::Impact { .. } => "impact",
             Command::Graph => "graph",
-            Command::Hunt => "hunt",
-            Command::Bugs { .. } => "bugs",
-            Command::Bug { .. } => "bug",
+            Command::Findings { .. } => "findings",
+            Command::Finding { .. } => "finding",
+            Command::Analyze { .. } => "analyze",
+            Command::Capabilities => "capabilities",
+            Command::Ask { .. } => "ask",
+            Command::Fact { .. } => "fact",
             Command::Ignore { .. } => "ignore",
             Command::Doctor => "doctor",
             Command::Mcp => "mcp",

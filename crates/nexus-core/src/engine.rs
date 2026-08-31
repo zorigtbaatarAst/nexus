@@ -6,7 +6,7 @@
 
 use crate::capability::{Registry as Capabilities, Scope};
 use crate::detect::Detector;
-use crate::findings::CodeRef;
+use crate::findings::{CodeRef, Finding};
 use crate::impact::{self, ImpactQuery};
 use crate::project::{ChangedSymbol, EdgeFacts, FileFacts, ProjectContext, SymbolFacts};
 use crate::report::*;
@@ -45,6 +45,10 @@ pub enum EngineError {
     UnknownCapability { asked: String, known: String },
     #[error("capability failed: {0}")]
     Capability(String),
+    #[error("a finding needs at least one file:line of evidence — an assertion nobody can check is not a finding")]
+    NoEvidence,
+    #[error("evidence points at {0}, which is not in the index — run a scan, or check the path")]
+    UnknownEvidenceFile(String),
 }
 
 pub type Result<T> = std::result::Result<T, EngineError>;
@@ -55,6 +59,9 @@ pub type Result<T> = std::result::Result<T, EngineError>;
 /// index, the dependency graph, project memory and findings from every capability, only
 /// one of which is BugHunter.
 pub const NEXUS_DIR: &str = ".nexus";
+
+/// A model may not grade its own work: only reproduction moves a finding above this.
+pub const MODEL_CONFIDENCE_CAP: f64 = 0.75;
 pub const DB_FILE: &str = "nexus.db";
 
 /// What the directory was called before this was a platform. See `migrate_legacy_dir`.
@@ -1233,6 +1240,146 @@ impl Engine {
             findings,
             duration_ms: started.elapsed().as_millis(),
         })
+    }
+
+    /// Record a finding produced outside this process.
+    ///
+    /// This is what LLM independence actually means. Until an agent can write a finding
+    /// back, only code compiled into Nexus can produce one — and that, not the absence of
+    /// HTTP clients, is what makes a system model-dependent. With this, any model is a
+    /// provider and Nexus contains no provider-specific code at all.
+    ///
+    /// The same evidence rule applies as to a rule-produced finding: a candidate with no
+    /// checkable `file:line` is rejected, not down-ranked. A model's confidence is clamped,
+    /// because a model may not grade its own work.
+    pub fn record_finding(&mut self, capability: &str, mut f: Finding) -> Result<RecordedFinding> {
+        if f.evidence.is_empty() {
+            return Err(EngineError::NoEvidence);
+        }
+        let known: Vec<String> = self
+            .store
+            .live_files(self.project_id)?
+            .into_iter()
+            .map(|r| r.path)
+            .collect();
+        // Evidence pointing at a file that is not in the index is not evidence. A model
+        // describing a plausible problem in a file that does not exist produces no rows.
+        if let Some(bad) = f
+            .evidence
+            .iter()
+            .find(|e| !known.iter().any(|k| k == &e.file))
+        {
+            return Err(EngineError::UnknownEvidenceFile(bad.file.clone()));
+        }
+        f.confidence = f.confidence.min(MODEL_CONFIDENCE_CAP);
+
+        let (commit, _) = self.head();
+        let baseline = self
+            .store
+            .baseline(self.project_id)?
+            .ok_or(EngineError::NoBaseline)?;
+        let prefix = self
+            .capabilities
+            .get(capability)
+            .map(|c| c.finding_prefix().to_string())
+            .unwrap_or_else(|| capability.to_uppercase().chars().take(3).collect());
+
+        let tx = self.store.transaction()?;
+        let up = Store::upsert_finding(
+            &tx,
+            self.project_id,
+            baseline.scan_id,
+            &nexus_store::NewFinding {
+                capability: capability.to_string(),
+                uid_prefix: prefix,
+                fingerprint: f.fingerprint(),
+                alt_fingerprints: Vec::new(),
+                slug: f.slug.clone(),
+                title: f.title.clone(),
+                finding_type: f.finding_type.as_str().to_string(),
+                component: f.component.clone(),
+                severity: f.severity.as_str().to_string(),
+                confidence: f.confidence,
+                status: f.initial_status().as_str().to_string(),
+                detector: f.detector.clone(),
+                anchor_fqn: f.anchor_fqn.clone(),
+                commit: commit.clone(),
+            },
+        )?;
+        Store::insert_occurrence(
+            &tx,
+            up.id,
+            baseline.scan_id,
+            &nexus_store::NewOccurrence {
+                file_path: f.evidence.first().map(|e| e.file.clone()),
+                start_line: f.evidence.first().map(|e| e.line as i64),
+                status: up.status.clone(),
+                confidence: f.confidence,
+                evidence_json: serde_json::to_string(&f.evidence)?,
+                commit,
+            },
+        )?;
+        tx.commit().map_err(nexus_store::StoreError::from)?;
+
+        Ok(RecordedFinding {
+            uid: up.uid,
+            is_new: up.is_new,
+            status: up.status,
+        })
+    }
+
+    /// Findings attached to a file, a symbol or a component — "what do we already know
+    /// about this code?"
+    pub fn findings_for(&self, target: &str) -> Result<Vec<FindingSummary>> {
+        Ok(self
+            .store
+            .findings_for(self.project_id, target)?
+            .into_iter()
+            .map(to_summary)
+            .collect())
+    }
+
+    /// Remember something about this project that is not a symbol, an edge or a finding.
+    pub fn record_fact(&mut self, f: FactInput) -> Result<()> {
+        let baseline = self
+            .store
+            .baseline(self.project_id)?
+            .ok_or(EngineError::NoBaseline)?;
+        self.store.record_fact(
+            self.project_id,
+            baseline.scan_id,
+            &nexus_store::NewFact {
+                key: f.key,
+                scope: f.scope,
+                subject: f.subject,
+                claim: f.claim,
+                source: f.source,
+                evidence_json: Some(serde_json::to_string(&f.evidence)?),
+                confidence: f.confidence,
+            },
+        )?;
+        Ok(())
+    }
+
+    pub fn facts(&self, subject: Option<&str>) -> Result<Vec<Fact>> {
+        Ok(self
+            .store
+            .facts(self.project_id, subject)?
+            .into_iter()
+            .map(|r| Fact {
+                key: r.key,
+                scope: r.scope,
+                subject: r.subject,
+                claim: r.claim,
+                source: r.source,
+                confidence: r.confidence,
+            })
+            .collect())
+    }
+
+    /// The scan before the current baseline — what `--changed` is measured against.
+    pub fn previous_scan_id(&self) -> Result<Option<i64>> {
+        Ok(self.store.previous_scan_id(self.project_id)?)
     }
 
     pub fn capability_list(&self) -> Vec<CapabilityInfo> {

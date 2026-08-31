@@ -58,7 +58,7 @@ fn binary() -> PathBuf {
     if p.ends_with("deps") {
         p.pop();
     }
-    p.join("bughunter")
+    p.join("nexus")
 }
 
 struct Server {
@@ -146,12 +146,12 @@ fn the_server_handshakes_advertises_tools_and_answers() {
         .unwrap_or_default()
         .to_string();
     assert!(
-        instructions.contains("runs no tests"),
-        "must say plainly that nothing is verified by reproduction: {instructions}"
+        instructions.contains("nothing is verified by reproduction"),
+        "must say plainly that nothing is proven by running it: {instructions}"
     );
     assert!(
-        instructions.contains("deterministic detectors only"),
-        "and that the detectors do not reason about business logic: {instructions}"
+        instructions.contains("deterministic rules only"),
+        "and that the rules do not reason about business logic: {instructions}"
     );
 
     s.send(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
@@ -163,18 +163,22 @@ fn the_server_handshakes_advertises_tools_and_answers() {
         .filter_map(|t| t["name"].as_str())
         .collect();
     for expected in [
-        "bughunter_get_project_context",
-        "bughunter_scan",
-        "bughunter_rescan",
-        "bughunter_get_changes",
-        "bughunter_get_impact",
-        "bughunter_get_symbol",
-        "bughunter_get_graph",
-        "bughunter_doctor",
-        "bughunter_find_bugs",
-        "bughunter_get_bugs",
-        "bughunter_get_bug",
-        "bughunter_ignore_bug",
+        "nexus_get_project_context",
+        "nexus_scan",
+        "nexus_rescan",
+        "nexus_get_changes",
+        "nexus_get_impact",
+        "nexus_get_symbol",
+        "nexus_get_graph",
+        "nexus_doctor",
+        "bughunter_analyze",
+        "nexus_get_findings",
+        "nexus_get_finding",
+        "nexus_ignore_finding",
+        "nexus_record_finding",
+        "nexus_record_fact",
+        "nexus_get_known",
+        "nexus_capabilities",
     ] {
         assert!(
             names.contains(&expected),
@@ -184,7 +188,7 @@ fn the_server_handshakes_advertises_tools_and_answers() {
 
     // Every tool must answer. The deadlock this test exists to catch shows up as a read
     // that never returns, so simply getting a reply is the assertion.
-    let ctx = s.call(3, "bughunter_get_project_context", serde_json::json!({}));
+    let ctx = s.call(3, "nexus_get_project_context", serde_json::json!({}));
     assert!(ctx["project"].is_string(), "{ctx}");
 
     let _ = std::fs::remove_dir_all(&root);
@@ -198,12 +202,12 @@ fn scan_then_impact_returns_a_trace_with_its_path() {
     };
     s.handshake();
 
-    let scan = s.call(2, "bughunter_scan", serde_json::json!({}));
+    let scan = s.call(2, "nexus_scan", serde_json::json!({}));
     assert!(scan["symbols_indexed"].as_u64().unwrap_or(0) > 0, "{scan}");
 
     let impact = s.call(
         3,
-        "bughunter_get_impact",
+        "nexus_get_impact",
         serde_json::json!({"target": "mn.pay.PaymentRepository#save"}),
     );
     assert_eq!(impact["status"], "ok", "{impact}");
@@ -230,25 +234,171 @@ fn a_domain_failure_is_a_result_the_agent_can_act_on_not_a_protocol_error() {
         return;
     };
     s.handshake();
-    s.call(2, "bughunter_scan", serde_json::json!({}));
+    s.call(2, "nexus_scan", serde_json::json!({}));
 
     let missing = s.call(
         3,
-        "bughunter_get_impact",
+        "nexus_get_impact",
         serde_json::json!({"target": "no.such.Symbol#nope"}),
     );
     // An agent can act on a result; a JSON-RPC error just makes it retry.
     assert_eq!(missing["status"], "not_found", "{missing}");
 
-    let ambiguous = s.call(
-        4,
-        "bughunter_get_impact",
-        serde_json::json!({"target": "save"}),
-    );
+    let ambiguous = s.call(4, "nexus_get_impact", serde_json::json!({"target": "save"}));
     assert!(
         matches!(ambiguous["status"].as_str(), Some("ok") | Some("ambiguous")),
         "{ambiguous}"
     );
 
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn an_agent_can_record_a_finding_and_it_is_recognized_next_time() {
+    // This is what LLM independence means in practice. Until an agent can write a finding
+    // back, only code compiled into Nexus can produce one — and that, not the absence of an
+    // HTTP client, is what makes a system model-dependent.
+    let root = fixture("writeback");
+    let Some(mut s) = Server::start(&root) else {
+        return;
+    };
+    s.handshake();
+    s.call(2, "nexus_scan", serde_json::json!({}));
+
+    let finding = serde_json::json!({
+        "finding_type": "concurrency",
+        "title": "duplicate payment under concurrency",
+        "component": "PaymentService",
+        "anchor_fqn": "mn.pay.PaymentService#pay(String)",
+        "severity": "critical",
+        "confidence": 0.95,
+        "detector": "agent:reasoned",
+        "structural_key": "payment.status,repo",
+        "slug": "payment-duplicate-concurrent",
+        "evidence": [{
+            "file": "src/mn/pay/PaymentService.java",
+            "line": 5,
+            "note": "the exists() check and the insert are not in one transaction"
+        }]
+    });
+
+    let recorded = s.call(
+        3,
+        "nexus_record_finding",
+        serde_json::json!({"finding": finding}),
+    );
+    assert!(recorded["uid"].is_string(), "{recorded}");
+    assert_eq!(recorded["is_new"], true);
+    // A model may not grade its own work: 0.95 is capped.
+    let listed = s.call(4, "nexus_get_findings", serde_json::json!({}));
+    let f = &listed["findings"][0];
+    assert!(
+        f["confidence"].as_f64().unwrap_or(1.0) <= 0.75,
+        "model confidence must be capped: {f}"
+    );
+
+    // Recorded again, it is recognized by fingerprint rather than duplicated — the whole
+    // point of recording through the platform instead of into a chat log.
+    let again = s.call(
+        5,
+        "nexus_record_finding",
+        serde_json::json!({"finding": finding}),
+    );
+    assert_eq!(again["is_new"], false, "{again}");
+    assert_eq!(again["uid"], recorded["uid"]);
+
+    let all = s.call(6, "nexus_get_findings", serde_json::json!({}));
+    assert_eq!(
+        all["findings"].as_array().map(Vec::len),
+        Some(1),
+        "one row, not two"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_finding_without_checkable_evidence_is_refused() {
+    let root = fixture("noevidence");
+    let Some(mut s) = Server::start(&root) else {
+        return;
+    };
+    s.handshake();
+    s.call(2, "nexus_scan", serde_json::json!({}));
+
+    let base = serde_json::json!({
+        "finding_type": "logic", "title": "t", "component": "C",
+        "anchor_fqn": null, "severity": "high", "confidence": 0.9,
+        "detector": "agent:reasoned", "structural_key": "k", "slug": "s",
+        "evidence": []
+    });
+    let refused = s.call(
+        3,
+        "nexus_record_finding",
+        serde_json::json!({"finding": base}),
+    );
+    assert_eq!(refused["status"], "error", "{refused}");
+
+    // Evidence pointing at a file that is not in the index is not evidence either: a model
+    // describing a plausible problem in a file that does not exist must produce no rows.
+    let mut fabricated = base.clone();
+    fabricated["evidence"] =
+        serde_json::json!([{"file": "does/not/exist.java", "line": 1, "note": "n"}]);
+    let rejected = s.call(
+        4,
+        "nexus_record_finding",
+        serde_json::json!({"finding": fabricated}),
+    );
+    assert_eq!(rejected["status"], "error", "{rejected}");
+
+    let all = s.call(5, "nexus_get_findings", serde_json::json!({}));
+    assert_eq!(
+        all["findings"].as_array().map(Vec::len),
+        Some(0),
+        "nothing was stored"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_fact_survives_for_the_next_session() {
+    let root = fixture("facts");
+    let Some(mut s) = Server::start(&root) else {
+        return;
+    };
+    s.handshake();
+    s.call(2, "nexus_scan", serde_json::json!({}));
+    s.call(
+        3,
+        "nexus_record_fact",
+        serde_json::json!({
+            "key": "arch.payment.idempotency",
+            "claim": "Idempotency is enforced at the controller, not in PaymentService.",
+            "subject": "mn.pay"
+        }),
+    );
+    drop(s);
+
+    // A new process: the point of persistence is that the next session starts with it.
+    let Some(mut s2) = Server::start(&root) else {
+        return;
+    };
+    s2.handshake();
+    let known = s2.call(
+        2,
+        "nexus_get_known",
+        serde_json::json!({"target": "mn.pay"}),
+    );
+    let claims: Vec<&str> = known["facts"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|f| f["claim"].as_str()).collect())
+        .unwrap_or_default();
+    assert!(
+        claims
+            .iter()
+            .any(|c| c.contains("Idempotency is enforced at the controller")),
+        "the fact must outlive the session that learned it: {known}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }

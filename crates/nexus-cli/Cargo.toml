@@ -6,6 +6,13 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# Two binaries, one crate. `nexus` is the platform; `bughunter` is the capability's own
+# CLI, kept so BugHunter stays usable on its own. Which one is running is decided by
+# argv[0], so there is one dispatch path rather than two that drift.
+[[bin]]
+name = "nexus"
+path = "src/main.rs"
+
 [[bin]]
 name = "bughunter"
 path = "src/main.rs"

@@ -1,4 +1,4 @@
 # Append to ~/.codex/config.toml
-[mcp_servers.bughunter]
-command = "bughunter"
+[mcp_servers.nexus]
+command = "nexus"
 args    = ["mcp"]

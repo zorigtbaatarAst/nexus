@@ -31,7 +31,10 @@
 set -eu
 
 REPO="zorigtbaatarAst/bughunter"
-BINARY="bughunter"
+BINARY="nexus"
+# BugHunter ships alongside the platform: the same image under a second name, so the
+# capability stays usable on its own.
+CAPABILITY_BINARY="bughunter"
 
 VERSION="${BUGHUNTER_VERSION:-}"
 INSTALL_DIR="${BUGHUNTER_INSTALL_DIR:-}"
@@ -97,7 +100,8 @@ if [ "$UNINSTALL" -eq 1 ]; then
 	found=0
 	for dir in "$INSTALL_DIR" /usr/local/bin "$HOME/.local/bin" "$HOME/bin"; do
 		[ -n "$dir" ] || continue
-		target="$dir/$BINARY"
+		for name in "$BINARY" "$CAPABILITY_BINARY"; do
+		target="$dir/$name"
 		[ -f "$target" ] || continue
 		found=1
 		if rm -f "$target" 2>/dev/null; then
@@ -106,8 +110,9 @@ if [ "$UNINSTALL" -eq 1 ]; then
 			warn "Cannot remove $target (needs root). Run:"
 			dim "  sudo rm $target"
 		fi
+		done
 	done
-	[ "$found" -eq 1 ] || say "No bughunter installation found."
+	[ "$found" -eq 1 ] || say "No Nexus installation found."
 	say ""
 	dim "Project data lives in each repository's .nexus/ directory and was left alone."
 	exit 0
@@ -171,6 +176,13 @@ Install somewhere else, or as root:
   sudo sh -c 'curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh'"
 	fi
 	ok "Installed $dir/$BINARY"
+
+	# The capability's CLI is the same image under a second name — which face is running is
+	# decided by argv[0], so a copy costs nothing but keeps `bughunter` working on its own.
+	if cp "$dir/$BINARY" "$dir/$CAPABILITY_BINARY" 2>/dev/null; then
+		chmod +x "$dir/$CAPABILITY_BINARY"
+		ok "Installed $dir/$CAPABILITY_BINARY"
+	fi
 
 	case ":$PATH:" in
 	*":$dir:"*) ;;

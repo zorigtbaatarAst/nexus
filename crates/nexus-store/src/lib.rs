@@ -590,6 +590,19 @@ impl Store {
             .optional()?)
     }
 
+    /// The most recent completed scan. `--changed` narrows to what it recorded.
+    pub fn previous_scan_id(&self, project_id: ProjectId) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM scans WHERE project_id = ?1 AND status = 'ok'
+                 ORDER BY id DESC LIMIT 1",
+                params![project_id],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
     pub fn scan_count(&self, project_id: ProjectId) -> Result<i64> {
         Ok(self.conn.query_row(
             "SELECT COUNT(*) FROM scans WHERE project_id = ?1 AND status = 'ok'",

@@ -50,8 +50,28 @@ impl Style {
 
 const RULE: &str = "────────────────────────────────────────";
 
+/// The product name this invocation is wearing.
+///
+/// One binary under two names: which one the user typed is the only thing that should
+/// differ, so it is read from argv[0] rather than compiled in twice.
+pub fn product_name() -> &'static str {
+    static NAME: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let invoked = std::env::args()
+            .next()
+            .map(std::path::PathBuf::from)
+            .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
+            .unwrap_or_default();
+        if invoked.starts_with("bughunter") {
+            "BugHunter"
+        } else {
+            "Nexus"
+        }
+    })
+}
+
 pub fn banner(w: &mut impl Write, st: &Style) -> std::io::Result<()> {
-    writeln!(w, "{}", st.head("BugHunter"))?;
+    writeln!(w, "{}", st.head(product_name()))?;
     writeln!(w, "{}", st.dim(RULE))?;
     writeln!(w)
 }
@@ -665,4 +685,132 @@ pub fn finding(w: &mut impl Write, st: &Style, d: &FindingDetail) -> std::io::Re
         "{}",
         st.dim("This build does not verify findings. `bughunter verify` lands in V1.")
     )
+}
+
+pub fn capabilities(
+    w: &mut impl Write,
+    st: &Style,
+    caps: &[CapabilityInfo],
+) -> std::io::Result<()> {
+    writeln!(w, "{}", st.head("Capabilities"))?;
+    if caps.is_empty() {
+        writeln!(w, "  {}", st.warn("none registered"))?;
+        return Ok(());
+    }
+    for c in caps {
+        writeln!(
+            w,
+            "  {:<12} {} {}",
+            st.head(&c.id),
+            c.describes,
+            st.dim(&format!("({}-n)", c.finding_prefix))
+        )?;
+    }
+    Ok(())
+}
+
+pub fn answer(w: &mut impl Write, st: &Style, a: &crate::ask::Answer) -> std::io::Result<()> {
+    use crate::ask::Answer;
+    match a {
+        Answer::Changed {
+            since,
+            symbols,
+            files,
+        } => {
+            writeln!(w, "{}", st.head("Changed"))?;
+            if let Some(s) = since {
+                writeln!(w, "  {}", st.dim(&format!("since {s}")))?;
+            }
+            writeln!(w, "  {files} files · {} symbols", symbols.len())?;
+            for s in symbols.iter().take(15) {
+                writeln!(w, "    {s}")?;
+            }
+            if symbols.len() > 15 {
+                writeln!(
+                    w,
+                    "    {}",
+                    st.dim(&format!("… and {} more", symbols.len() - 15))
+                )?;
+            }
+        }
+        Answer::Affected {
+            target,
+            symbols,
+            crossed_seam,
+        } => {
+            writeln!(w, "{} {}", st.head("Affected by"), target)?;
+            if *crossed_seam > 0 {
+                writeln!(
+                    w,
+                    "  {} crossing the frontend/backend seam",
+                    st.good(&crossed_seam.to_string())
+                )?;
+            }
+            if symbols.is_empty() {
+                writeln!(w, "  {}", st.dim("nothing else depends on it"))?;
+            }
+            for s in symbols.iter().take(20) {
+                let tag = if s.min_confidence >= 0.95 {
+                    st.good("exact")
+                } else {
+                    st.dim("likely")
+                };
+                writeln!(
+                    w,
+                    "  {:>5}  {:<14} {}",
+                    format!("{:.2}", s.score),
+                    tag,
+                    s.fqn
+                )?;
+            }
+        }
+        Answer::Known {
+            target,
+            findings,
+            facts,
+        } => {
+            writeln!(w, "{} {}", st.head("Already known about"), target)?;
+            if findings.is_empty() && facts.is_empty() {
+                writeln!(w, "  {}", st.dim("nothing recorded here yet"))?;
+            }
+            for f in findings {
+                writeln!(w, "  {:<8} {:<10} {}", st.head(&f.uid), f.status, f.title)?;
+            }
+            for f in facts {
+                writeln!(w, "  {:<8} {}", st.dim(&f.source), f.claim)?;
+            }
+        }
+        Answer::Facts { facts } => {
+            writeln!(w, "{}", st.head("What Nexus remembers"))?;
+            if facts.is_empty() {
+                writeln!(
+                    w,
+                    "  {}",
+                    st.dim("nothing yet — record one with: nexus fact <key> \"<claim>\"")
+                )?;
+            }
+            for f in facts {
+                writeln!(w, "  {} {}", st.head(&f.key), st.dim(&f.source))?;
+                writeln!(w, "    {}", f.claim)?;
+            }
+        }
+        Answer::Next { suggestions } => {
+            writeln!(w, "{}", st.head("Worth looking at next"))?;
+            if suggestions.is_empty() {
+                writeln!(w, "  {}", st.dim("nothing changed since the baseline"))?;
+            }
+            for s in suggestions {
+                writeln!(w, "  {:>5}  {}", format!("{:.0}", s.score), s.target)?;
+                writeln!(w, "         {}", st.dim(&s.why))?;
+            }
+        }
+        Answer::Unknown { asked, understood } => {
+            writeln!(w, "{} {asked:?}", st.warn("Not a question I know:"))?;
+            writeln!(w, "  try:")?;
+            for u in understood {
+                writeln!(w, "    nexus ask {u}")?;
+            }
+        }
+    }
+    Ok(())
 }

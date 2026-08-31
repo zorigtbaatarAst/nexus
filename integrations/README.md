@@ -11,29 +11,35 @@ capability. Every tool stays callable; only the shorthand goes away.
 | Claude Code | [`claude-code/.mcp.json`](claude-code/.mcp.json) | your project root |
 | Codex | [`codex/config.toml`](codex/config.toml) | append to `~/.codex/config.toml` |
 | GitHub Copilot | [`copilot/mcp.json`](copilot/mcp.json) | `.vscode/mcp.json` |
-| Anything else | — | spawn `bughunter mcp` and speak MCP over stdio |
+| Anything else | — | spawn `nexus mcp` and speak MCP over stdio |
 
 ## What the agent gets
 
 | Tool | Answers |
 |---|---|
-| `bughunter_get_project_context` | what kind of project this is, and how far the baseline has drifted |
-| `bughunter_scan` | index it and set a baseline |
-| `bughunter_rescan` | what changed since the baseline, down to the symbol |
-| `bughunter_get_changes` | the changes recorded by the current baseline scan |
-| `bughunter_get_impact` | who breaks if this changes — **across the frontend/backend seam** |
-| `bughunter_get_symbol` | one symbol's neighbourhood, following renames |
-| `bughunter_get_graph` | how much of the dependency graph resolved, so you know what to trust |
-| `bughunter_doctor` | what is misconfigured, and the command that fixes it |
+| `nexus_get_project_context` | what kind of project this is, and how far the baseline has drifted |
+| `nexus_scan` | index it and set a baseline |
+| `nexus_rescan` | what changed since the baseline, down to the symbol |
+| `nexus_get_changes` | the changes recorded by the current baseline scan |
+| `nexus_get_impact` | who breaks if this changes — **across the frontend/backend seam** |
+| `nexus_get_known` | what is already known about this code: findings and facts |
+| `nexus_record_finding` | contribute a finding you reasoned out — it gets the same identity and history a rule's does |
+| `nexus_record_fact` | remember something for the next session |
+| `bughunter_analyze` | run BugHunter's deterministic rules |
+| `nexus_get_symbol` | one symbol's neighbourhood, following renames |
+| `nexus_get_graph` | how much of the dependency graph resolved, so you know what to trust |
+| `nexus_doctor` | what is misconfigured, and the command that fixes it |
 
-Nothing here finds bugs or runs tests yet. The server says so in its own instructions, so an
-agent is not left to infer it.
+Nothing here runs tests, so no finding is verified by reproduction. The server says so in its
+own instructions, so an agent is not left to infer it.
 
 ## Notes for whoever writes the prompts
 
-- Call `bughunter_get_project_context` first. It is cheap and it says whether a baseline
+- Call `nexus_get_project_context` first, and `nexus_get_known` before changing anything —
+  the answer is what a previous session already worked out.
+- Call `nexus_get_project_context` first. It is cheap and it says whether a baseline
   exists.
-- `bughunter_get_impact` returns the **edge chain** that produced each result and the weakest
+- `nexus_get_impact` returns the **edge chain** that produced each result and the weakest
   confidence along it. A result whose `min_confidence` is 0.5 went through a heuristic hop and
   should be treated as a lead, not a fact.
 - Results are budgeted to roughly 8k tokens. When one is truncated it says so, with the true

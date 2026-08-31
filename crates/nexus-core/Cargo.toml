@@ -17,6 +17,9 @@ nexus-lang-graphql.workspace = true
 blake3.workspace = true
 ignore.workspace = true
 rayon.workspace = true
+# Derive-only, so the platform's finding contract can describe itself to an agent.
+# Not an adapter and not an AI provider, so the boundary rules are untouched.
+schemars = "1"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

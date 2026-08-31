@@ -5,6 +5,7 @@
 //! more. ADR-007.
 
 use nexus_types::{FindingStatus, FindingType, Severity};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A place in the source that supports a claim.
@@ -12,14 +13,15 @@ use serde::{Deserialize, Serialize};
 /// A candidate with no `CodeRef` is rejected at the boundary rather than down-ranked: an
 /// assertion nobody can check is not evidence, and storing it would let the next reader
 /// mistake it for one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CodeRef {
     pub file: String,
     pub line: u32,
     pub note: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Finding {
     pub finding_type: FindingType,
     pub title: String,
@@ -31,6 +33,7 @@ pub struct Finding {
     pub confidence: f64,
     /// `detector:rule`. The family half feeds the fingerprint; the rule half does not, so a
     /// rule can be renamed without inventing a new bug.
+    #[serde(default = "external_detector")]
     pub detector: String,
     /// The detector's own normalization of what the bug is *about*: the shared state, the
     /// endpoint, the field. This is what separates two different bugs in the same class.
@@ -38,6 +41,14 @@ pub struct Finding {
     /// Human-readable identity, shown instead of the hash. Never used *as* identity.
     pub slug: String,
     pub evidence: Vec<CodeRef>,
+}
+
+/// What a finding recorded from outside is attributed to when it names no detector.
+///
+/// The detector family feeds the fingerprint, so agent-recorded findings need a stable one
+/// — otherwise the same observation from two sessions becomes two findings.
+fn external_detector() -> String {
+    "agent:reported".into()
 }
 
 impl Finding {
