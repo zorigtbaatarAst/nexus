@@ -16,8 +16,8 @@ flowchart TD
     LO --> S
 
     S["bughunter mcp<br/>stdio JSON-RPC"]
-    S --> H["bh-mcp handlers<br/>deserialize → ONE Engine call → serialize"]
-    H --> E["bh-core Engine"]
+    S --> H["nexus-mcp handlers<br/>deserialize → ONE Engine call → serialize"]
+    H --> E["nexus-core Engine"]
     E --> DB[("SQLite")]
 
     classDef thin fill:#1e3a8a,stroke:#1e40af,color:#eff6ff
@@ -36,7 +36,7 @@ sequenceDiagram
     autonumber
     participant A as AI agent
     participant M as bughunter mcp
-    participant E as bh-core Engine
+    participant E as nexus-core Engine
     participant D as SQLite
 
     A->>M: bughunter_get_project_context

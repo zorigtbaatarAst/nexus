@@ -567,7 +567,7 @@ Two of these carry unusual weight:
 
 ## 5. Migrations
 
-Forward-only numbered SQL files in `crates/bh-store/migrations/`, applied in a transaction,
+Forward-only numbered SQL files in `crates/nexus-store/migrations/`, applied in a transaction,
 tracked in a `schema_migrations` table. `projects.schema_version` records what the database
 was last migrated to.
 

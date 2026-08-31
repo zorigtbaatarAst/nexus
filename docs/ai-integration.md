@@ -63,7 +63,7 @@ AiProvider
 └── LocalProvider    ┘  Ollama / llama.cpp / any OpenAI-compatible local endpoint
 ```
 
-`bh-core` depends on `bh-ai` with `default-features = false`, which compiles the trait, the
+`nexus-core` depends on `nexus-ai` with `default-features = false`, which compiles the trait, the
 request/response types, `NullProvider` and `AgentProvider` — **and no HTTP client at all**.
 A deterministic build has no `reqwest` in its dependency tree. That is constraint 1 ("core
 must not depend on Claude") and constraint 3 ("AI is optional") expressed as a build fact
@@ -162,7 +162,7 @@ tokens there is spending money to become less accurate.
 ## 6. Redaction and data flow
 
 Before any bundle leaves the process — path B only; path A never leaves the machine at all —
-it passes `bh-ai::redact`:
+it passes `nexus-ai::redact`:
 
 | Detector | Action |
 |---|---|

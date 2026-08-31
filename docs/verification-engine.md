@@ -3,7 +3,7 @@
 This is the feature that separates BugHunter from a static analyzer with a chat window.
 Anything can *suspect* a bug. Verification is the claim that BugHunter made the bug happen.
 
-Owned by `bh-verify`. Never called implicitly — verification executes code, so it runs only
+Owned by `nexus-verify`. Never called implicitly — verification executes code, so it runs only
 from `bughunter verify`, from `bughunter_verify_bug`, or from `rescan --verify` where the
 user asked for it.
 
@@ -104,7 +104,7 @@ impl SafeWriter {
 }
 ```
 
-`bh-verify` exposes no other write path. Symlinks and `..` are resolved *before* the prefix
+`nexus-verify` exposes no other write path. Symlinks and `..` are resolved *before* the prefix
 check, because a jail that compares unresolved paths is not a jail. An escape attempt is a
 hard error and an `audit_events` row, not a warning.
 
@@ -202,7 +202,7 @@ with typed holes, expanded into an explicit argv. See [security.md](security.md)
 
 ## 7. Test generation without an AI provider
 
-Verification does not require an LLM. `bh-verify` ships deterministic templates per
+Verification does not require an LLM. `nexus-verify` ships deterministic templates per
 `(bug_type, framework)` that cover the common shapes:
 
 | bug_type | template |

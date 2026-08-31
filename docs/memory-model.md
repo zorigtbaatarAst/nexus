@@ -77,7 +77,7 @@ decision.<topic>               decision.storage.mongo-over-postgres
 
 ## 3. Retrieval
 
-`ContextBuilder` (in `bh-core::context`) assembles what an agent or provider sees. Facts are
+`ContextBuilder` (in `nexus-core::context`) assembles what an agent or provider sees. Facts are
 selected by relevance to the current question, never dumped:
 
 ```

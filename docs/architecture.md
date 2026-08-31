@@ -1,11 +1,39 @@
-# BugHunter — Architecture
+# Nexus — Architecture
 
 > Status: design, pre-implementation. No code exists yet.
 > Companion documents are listed in [Deliverable coverage](#8-deliverable-coverage) at the end.
 
-## 1. What BugHunter is
+## 1. What Nexus is
 
-BugHunter is a **change-aware software intelligence system**. It reads a codebase once,
+Nexus is a **platform for persistent code intelligence**. It reads a codebase once, stores
+structured knowledge about it locally, and from then on works incrementally: it detects what
+changed, computes the blast radius, and runs targeted analysis over the affected region only.
+
+> **Nexus understands the project; capabilities use that understanding.**
+
+Capabilities are what turn that understanding into findings. **BugHunter is the first**, and
+the shape every other one takes: read the index, return findings, get identity, lifecycle and
+history for free. See [capabilities.md](capabilities.md).
+
+```
+                        NEXUS
+                          │
+              ┌───────────┴───────────┐
+              │                       │
+       Project intelligence      Capabilities
+              │                       │
+              │              ┌────────┴────────┐
+              │              │        │        │
+              │          BugHunter  Review  Security
+              │                     (later) (later)
+              ├── code understanding      nexus-lang*
+              ├── git and change          nexus-vcs, the tiered cascade
+              ├── dependency and impact   symbol_edges, the weighted BFS
+              ├── persistent knowledge    nexus-store, facts, findings
+              └── agent context           nexus-mcp
+```
+
+Historically this was BugHunter, a **change-aware software intelligence system**. It reads a codebase once,
 stores structured knowledge about it locally, and from then on works *incrementally*:
 it detects what changed since the last scan, computes the blast radius of those changes,
 looks for bugs in the affected region, and tries to **prove** each suspected bug by
@@ -15,7 +43,7 @@ It is not a linter, and it is not an AI wrapper.
 
 ### The one idea the whole design rests on
 
-**BugHunter owns evidence, history and verification. The AI agent owns reasoning.**
+**Nexus owns evidence, history and verification. The AI agent owns reasoning.**
 
 Everything else follows from that split:
 
@@ -23,11 +51,14 @@ Everything else follows from that split:
   changed, plus what that change touches, plus what already broke here before. BugHunter's
   job is to produce exactly that.
 - Because the intelligence is evidence-shaped rather than prompt-shaped, it is reusable by
-  any agent. Claude Code, Codex, Copilot and a future local model all consume the same
+  any agent — and by any capability. Claude Code, Codex, Copilot and a future local model all consume the same
   MCP tool surface.
-- Because the evidence is deterministic, BugHunter is still useful with the AI turned off
-  entirely. `scan`, `rescan`, `changes`, `impact` and the deterministic detectors need no
-  model and no API key.
+- Because the evidence is deterministic, Nexus is still useful with the AI turned off
+  entirely. `scan`, `rescan`, `changes`, `impact`, `analyze` and `ask` need no model and no
+  API key.
+- Because an agent can *record* a finding as well as read one, no model is foundational: any
+  model is a provider, and Nexus contains no provider-specific code.
+  [ADR-020](architecture-decisions.md#adr-020--llm-independence-is-the-write-back-path).
 
 ### What it answers
 
@@ -53,34 +84,40 @@ What broke here before?                   → bugs + bug_occurrences by componen
                         │
                         │ MCP (stdio JSON-RPC)
                         ▼
-              ┌──────────────────┐
-              │  bh-mcp  (thin)  │        ┌──────────────┐
-              └────────┬─────────┘        │   bh-cli     │
-                       │                  └──────┬───────┘
+              ┌──────────────────┐        ┌──────────────┐
+              │ nexus-mcp (thin) │        │  nexus-cli   │
+              └────────┬─────────┘        └──────┬───────┘
                        └────────┬────────────────┘
                                 ▼
-                    ┌───────────────────────┐
-                    │   bh-core  (Engine)   │  ← all business logic lives here
-                    └───────────┬───────────┘
-            ┌───────────┬───────┼────────┬────────────┐
-            ▼           ▼       ▼        ▼            ▼
-        ┌───────┐  ┌────────┐ ┌─────┐ ┌────────┐ ┌────────┐
-        │bh-vcs │  │bh-lang │ │ bh- │ │ bh-ai  │ │bh-store│
-        │ git   │  │  AST   │ │verify│ │(trait) │ │ SQLite │
-        └───────┘  └───┬────┘ └─────┘ └────────┘ └────────┘
-                       │
-        bh-lang-java · bh-lang-ts · bh-lang-python · bh-lang-rust
+                  ┌───────────────────────────┐
+                  │  nexus-core  (Engine)     │  ← the platform
+                  │  index · graph · change   │
+                  │  impact · findings · facts│
+                  │  capability registry      │
+                  └───────────┬───────────────┘
+            ┌───────────┬─────┴─────┬──────────────┐
+            ▼           ▼           ▼              ▼
+      ┌──────────┐ ┌──────────┐ ┌────────────┐ ┌──────────────┐
+      │nexus-vcs │ │nexus-lang│ │nexus-store │ │ capabilities │
+      │   git    │ │   AST    │ │  SQLite    │ │cap-bughunter │
+      └──────────┘ └────┬─────┘ └────────────┘ │  (Review)    │
+                        │                      │  (Security)  │
+   nexus-lang-java · nexus-lang-ts             └──────────────┘
+   nexus-lang-graphql                          registered, never
+                                               compiled in
 ```
 
-Read top to bottom: **agents → adapter → core → capabilities → storage.** No arrow ever
-points back up. `bh-core` does not know that MCP exists.
+Read top to bottom: **agents → adapter → platform → understanding.** No arrow ever points
+back up: `nexus-core` does not know that MCP exists, and it does not know that BugHunter
+exists either. Capabilities are handed to it by the composition root, which is the only place
+that knows both.
 
 The pipeline through those layers:
 
 ```
-Git analysis ─┐
-Code analysis ─┼──▶ Project memory ──▶ Bug intelligence ──▶ Verification
-Test analysis ─┘        (SQLite)         (fingerprints)      (run a test)
+Git analysis  ─┐
+Code analysis ─┼──▶ Project understanding ──▶ Capability ──▶ Findings ──▶ Verification
+Change/impact ─┘        (persistent)          (BugHunter…)   (lifecycle)   (later)
 ```
 
 See [`diagrams/system-architecture.md`](diagrams/system-architecture.md) for the Mermaid
@@ -97,21 +134,19 @@ the CLI and (via `bughunter mcp`) the MCP server. Rationale in
 
 | Crate | Responsibility | Must not know about |
 |---|---|---|
-| `bh-types` | IDs, enums, DTOs, error kinds. Serde only. | everything |
-| `bh-store` | SQLite access, migrations. **The only crate containing SQL.** | languages, AI, MCP |
-| `bh-vcs` | git2: HEAD, dirty state, diffs, blame, file history, detached worktrees | languages, AI, MCP |
-| `bh-lang` | `LanguageAnalyzer` + `FrameworkPack` traits, analyzer registry | any specific language |
-| `bh-lang-java` | tree-sitter-java, symbol/edge extraction, Spring framework pack | other languages, store |
-| `bh-lang-ts` | tree-sitter-typescript/tsx, NestJS/Next.js packs | other languages, store |
-| `bh-lang-python` | tree-sitter-python, Django/FastAPI packs | other languages, store |
-| `bh-lang-rust` | tree-sitter-rust, axum/sqlx packs | other languages, store |
-| `bh-verify` | reproduction planning, test emission, `SafeWriter`, sandbox, judgement | MCP, CLI |
-| `bh-ai` | `AiProvider` trait, context budgeting, redaction. Providers behind features. | store, MCP, CLI |
-| `bh-core` | `Engine` — the public API of BugHunter | MCP, CLI, concrete providers |
-| `bh-mcp` | rmcp server: schema in, `Engine` call, schema out | store, lang, verify |
-| `bh-cli` | clap, renderers, composition root | — (it is the top) |
+| `nexus-types` | IDs, enums, DTOs, error kinds. Serde only. | everything |
+| `nexus-store` | SQLite access, migrations. **The only crate containing SQL.** | languages, capabilities, MCP |
+| `nexus-vcs` | git2: HEAD, dirty state, diffs, blame, file history, detached worktrees | languages, capabilities, MCP |
+| `nexus-lang` | `LanguageAnalyzer` + `FrameworkPack` traits, analyzer registry | any specific language |
+| `nexus-lang-java` | tree-sitter-java, symbol/edge extraction, Spring pack | other languages, store |
+| `nexus-lang-ts` | tree-sitter-typescript/tsx, `gql` documents, the frontend seam | other languages, store |
+| `nexus-lang-graphql` | `.graphqls` schema — the contract both sides are generated from | other languages, store |
+| `nexus-core` | **The platform.** Index, graph, change detection, impact, findings lifecycle, facts, the capability registry | adapters, capabilities, AI providers |
+| `cap-bughunter` | **The first capability.** Deterministic rules over the index | adapters, store |
+| `nexus-mcp` | rmcp server: schema in, `Engine` call, schema out | store, lang, capabilities' internals |
+| `nexus-cli` | clap, renderers, composition root. Produces `nexus` and `bughunter` | — (it is the top) |
 
-### 3.1 `bh-core::Engine` — the single public API
+### 3.1 `nexus-core::Engine` — the single public API
 
 Every CLI command and every MCP tool is one call into this facade. Nothing else is public.
 
@@ -136,18 +171,19 @@ impl Engine {
     fn investigate(&self, r: SymptomReport)      -> Result<Investigation>;
     fn answer(&self, id: InvestigationId, a: Vec<Answer>) -> Result<Investigation>;
 
-    // bugs
-    fn find_bugs(&self, q: HuntQuery)            -> Result<HuntResult>;
-    fn record_bug(&self, c: BugCandidate)        -> Result<BugRef>;   // agent writes back
-    fn bug(&self, id: BugSelector)               -> Result<BugDetail>;
-    fn bugs(&self, q: BugQuery)                  -> Result<Page<BugSummary>>;
-    fn verify_bug(&self, id: BugSelector, o: VerifyOptions) -> Result<Verification>;
-    fn bug_history(&self, id: BugSelector)       -> Result<Vec<BugEvent>>;
-    fn regressions(&self, q: RegressionQuery)    -> Result<Page<BugSummary>>;
+    // capabilities and findings
+    fn analyze(&mut self, capability: &str, scope: Scope) -> Result<AnalyzeReport>;
+    fn capability_list(&self)                    -> Vec<CapabilityInfo>;
+    fn record_finding(&mut self, cap: &str, f: Finding) -> Result<RecordedFinding>;
+    fn findings(&self, cap: Option<&str>, status: Option<&str>, sev: Option<&str>)
+                                                 -> Result<Vec<FindingSummary>>;
+    fn finding(&self, uid: &str)                 -> Result<Option<FindingDetail>>;
+    fn findings_for(&self, target: &str)         -> Result<Vec<FindingSummary>>;
+    fn ignore_finding(&self, uid: &str)          -> Result<bool>;
 
     // memory
-    fn record_fact(&self, f: FactInput)          -> Result<FactRef>;
-    fn facts(&self, q: FactQuery)                -> Result<Page<Fact>>;
+    fn record_fact(&mut self, f: FactInput)      -> Result<()>;
+    fn facts(&self, subject: Option<&str>)       -> Result<Vec<Fact>>;
 }
 ```
 
@@ -158,10 +194,10 @@ it. See [investigation.md](investigation.md) §7 and
 [ADR-015](architecture-decisions.md#adr-015-structured-clarification-instead-of-guessing).
 
 `Engine::new(project_root, policy, store, analyzers, ai)` is constructed at the composition
-root — `bh-cli::main` or `bh-mcp::serve`. The `ai` argument is
+root — `nexus-cli::main` or `nexus-mcp::serve`. The `ai` argument is
 `Arc<dyn AiProvider>` and defaults to `NullProvider`.
 
-### 3.2 Inside `bh-core`
+### 3.2 Inside `nexus-core`
 
 | Module | Job |
 |---|---|
@@ -171,9 +207,11 @@ root — `bh-cli::main` or `bh-mcp::serve`. The `ai` argument is
 | `resolve` | edge resolution: exact → framework → heuristic → unresolved |
 | `diff` | the tiered change-detection cascade |
 | `impact` | weighted bidirectional BFS + test selection |
-| `hunt` | detector orchestration; builds evidence bundles |
-| `investigate` | symptom anchoring, cross-stack tracing, suspect ranking |
-| `clarify` | measures ambiguity and generates the questions that resolve it |
+| `capability` | the `Capability` trait, `Scope`, and the registry |
+| `project` | `ProjectContext` — the snapshot a capability reads |
+| `findings` | identity, the lifecycle rules, the evidence requirement |
+| `investigate` | symptom anchoring, cross-stack tracing, suspect ranking (designed, not built) |
+| `clarify` | measures ambiguity and generates the questions that resolve it (designed, not built) |
 | `fingerprint` | bug identity, alias resolution, near-duplicate linking |
 | `lifecycle` | the bug status machine |
 | `memory` | facts: record, supersede, retrieve by relevance |
@@ -230,20 +268,26 @@ These are not conventions. A test walking `cargo metadata` fails the build if an
 violated, which is how the brief's constraints 1, 2 and 3 become structural facts rather
 than good intentions.
 
-1. **`bh-core` must not depend on `bh-mcp` or `bh-cli`.**
+1. **`nexus-core` must not depend on `nexus-mcp` or `nexus-cli`.**
    *Constraint 2: MCP is an adapter, not the core.*
-2. **`bh-core` must not depend on any concrete AI provider** — only on `bh-ai` with
+2. **`nexus-core` must not depend on any concrete AI provider** — only on `nexus-ai` with
    `default-features = false`, which contains the trait and no HTTP client.
    *Constraints 1 and 3: core does not depend on Claude; AI is optional.*
-3. **`bh-mcp` must not depend on `bh-store`, `bh-lang*` or `bh-verify`.** It can only reach
-   them through `bh-core`, so a handler physically cannot grow logic that the CLI lacks.
+3. **`nexus-mcp` must not depend on `nexus-store`, `nexus-lang*` or `nexus-verify`.** It can only reach
+   them through `nexus-core`, so a handler physically cannot grow logic that the CLI lacks.
    *Constraint: "do not implement important functionality only inside MCP handlers."*
-4. **Only `bh-store` contains SQL.** Schema changes have exactly one blast radius.
-5. **`bh-lang-*` must not depend on `bh-store` or `bh-core`.** An analyzer takes source text
+4. **Only `nexus-store` contains SQL.** Schema changes have exactly one blast radius.
+5. **`nexus-lang-*` must not depend on `nexus-store` or `nexus-core`.** An analyzer takes source text
    and returns a `ParsedFile`; it never learns about scans or baselines.
    *Constraint 12: no language-specific logic in the core.*
-6. **`bh-verify` writes through `SafeWriter` only**, rooted at `.nexus/generated-tests/`.
+6. **`nexus-verify` writes through `SafeWriter` only**, rooted at `.nexus/generated-tests/`.
    *Constraint 10: never modify production code during verification.*
+7. **`cap-*` must not depend on `nexus-cli`, `nexus-mcp` or `nexus-store`.**
+   *A capability that could reach a UI would drag one with it wherever it went — this is the
+   concrete meaning of "BugHunter is usable independently".*
+8. **`nexus-core` must not depend on any `cap-*`.**
+   *Capabilities are registered into the platform, never compiled into it. The reverse
+   dependency would make "add Code Review later" a core change.*
 
 ### On-disk layout
 
@@ -254,7 +298,7 @@ than good intentions.
 ├── nexus.db         # local  — the knowledge store (SQLite, WAL)
 ├── nexus.db-wal
 ├── cache/               # local  — parse caches keyed by content hash
-├── generated-tests/     # local  — the only path bh-verify may write to
+├── generated-tests/     # local  — the only path nexus-verify may write to
 │   └── BUG-104/
 ├── audit.log            # local  — append-only JSONL, every exec and AI call
 └── .gitignore           # self-managing: ignores db, cache, audit, generated-tests
@@ -328,42 +372,32 @@ is a token-budgeted evidence bundle, and only if AI is enabled and a provider is
 ## 7. Repository structure
 
 ```
-bughunter/
+nexus/
 ├── Cargo.toml                      # workspace
-├── Makefile                        # build · test · lint · install · fixtures
-├── install.sh
-├── README.md                       # Монгол
-├── README.en.md                    # English
-├── AGENTS.md                       # briefing for an AI agent working in this repo
-├── LICENSE
+├── Makefile                        # build · test · lint · install · smoke · demo
+├── install.sh                      # installs both binaries
+├── README.md  README.en.md  AGENTS.md  LICENSE
 ├── crates/
-│   ├── bh-types/
-│   ├── bh-store/
-│   │   └── migrations/             # 0001_init.sql, 0002_*.sql — forward only
-│   ├── bh-vcs/
-│   ├── bh-lang/
-│   ├── bh-lang-java/
-│   ├── bh-lang-ts/
-│   ├── bh-lang-python/
-│   ├── bh-lang-rust/
-│   ├── bh-verify/
-│   ├── bh-ai/
-│   ├── bh-core/
-│   ├── bh-mcp/
-│   └── bh-cli/                     # produces the `bughunter` binary
-├── integrations/
-│   ├── claude-code/                # .mcp.json + 6 slash commands + skill
-│   ├── codex/                      # config.toml snippet
-│   └── copilot/                    # mcp.json snippet
-├── tests/
-│   ├── fixtures/                   # golden repos with planted bugs
-│   │   ├── spring-payments/
-│   │   ├── next-storefront/
-│   │   ├── fastapi-orders/
-│   │   └── cargo-ledger/
-│   └── conformance/                # recorded MCP JSON-RPC sessions
-└── docs/                           # this directory
+│   ├── nexus-types/                # vocabulary
+│   ├── nexus-store/                # SQLite; the only crate with SQL
+│   │   └── migrations/             # forward-only
+│   ├── nexus-vcs/                  # git
+│   ├── nexus-lang/                 # LanguageAnalyzer, FrameworkPack
+│   ├── nexus-lang-{java,ts,graphql}/
+│   ├── nexus-core/                 # the platform
+│   │   ├── capability.rs           #   the trait, Scope, the registry
+│   │   ├── project.rs              #   ProjectContext — what a capability reads
+│   │   ├── findings.rs             #   identity and lifecycle
+│   │   ├── engine.rs impact.rs walk.rs detect.rs report.rs
+│   ├── cap-bughunter/              # the first capability
+│   │   └── src/detectors/          #   spring · graphql · secrets
+│   ├── nexus-mcp/                  # agent surface
+│   └── nexus-cli/                  # produces `nexus` and `bughunter`
+├── integrations/                   # config snippets and prompts — no logic
+├── tests/fixtures/
+└── docs/
 ```
+
 
 ---
 
@@ -393,6 +427,8 @@ bughunter/
 | 20 | ADRs | [architecture-decisions.md](architecture-decisions.md) |
 | 21 | Repository structure | this document, §7 |
 | 22 | MVP → V1 → V2 roadmap | [roadmap.md](roadmap.md) |
+| + | Capability contract | [capabilities.md](capabilities.md) |
+| + | Platform shape and forbidden edges | [diagrams/nexus-platform.md](diagrams/nexus-platform.md) |
 | + | Symptom-driven investigation | [investigation.md](investigation.md) |
 | + | Cross-stack tracing and contract mismatch | [investigation.md](investigation.md) §3, §6 |
 | + | Clarification protocol | [investigation.md](investigation.md) §7 |
@@ -406,7 +442,7 @@ that enforces it.
 |---|---|---|
 | 1 | Core must not depend on Claude | Boundary rule 2 + `cargo metadata` test |
 | 2 | MCP is an adapter, not the core | Boundary rules 1 and 3 |
-| 3 | AI optional for deterministic functionality | `NullProvider` default; `bh-ai` default-features off |
+| 3 | AI optional for deterministic functionality | `NullProvider` default; `nexus-ai` default-features off |
 | 4 | First scan creates the baseline | `baselines` pointer table written by `scan` |
 | 5 | Rescans are incremental | Tiered cascade, [change-analysis.md](change-analysis.md) §2 |
 | 6 | Memory persists locally | SQLite at `.nexus/nexus.db` |

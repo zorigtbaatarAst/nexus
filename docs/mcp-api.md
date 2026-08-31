@@ -28,11 +28,11 @@ async fn bughunter_get_impact(&self, p: ImpactParams) -> Result<CallToolResult> 
 ```
 
 No branching on results, no assembling data from two calls, no business rules. If a handler
-needs a second `Engine` call to do its job, the missing method belongs in `bh-core`, because
+needs a second `Engine` call to do its job, the missing method belongs in `nexus-core`, because
 the CLI needs it too.
 
-This is enforced structurally: **`bh-mcp` does not depend on `bh-store`, `bh-lang*` or
-`bh-verify`** — a `cargo metadata` test fails the build otherwise. A handler physically
+This is enforced structurally: **`nexus-mcp` does not depend on `nexus-store`, `nexus-lang*` or
+`nexus-verify`** — a `cargo metadata` test fails the build otherwise. A handler physically
 cannot reach the database, so it cannot grow logic the CLI lacks. That is the mechanical
 form of the brief's "do not implement important functionality only inside MCP handlers".
 
@@ -242,19 +242,19 @@ The same server, four ways of pointing at it.
 
 **Claude Code** — `.mcp.json` in the project root:
 ```json
-{ "mcpServers": { "bughunter": { "command": "bughunter", "args": ["mcp"] } } }
+{ "mcpServers": { "nexus": { "command": "nexus", "args": ["mcp"] } } }
 ```
 
 **Codex** — `~/.codex/config.toml`:
 ```toml
-[mcp_servers.bughunter]
-command = "bughunter"
+[mcp_servers.nexus]
+command = "nexus"
 args    = ["mcp"]
 ```
 
 **GitHub Copilot** — `.vscode/mcp.json`:
 ```json
-{ "servers": { "bughunter": { "command": "bughunter", "args": ["mcp"] } } }
+{ "servers": { "nexus": { "command": "nexus", "args": ["mcp"] } } }
 ```
 
 **Anything else** — spawn `bughunter mcp` and speak MCP over stdio.

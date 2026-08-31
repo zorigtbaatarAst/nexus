@@ -50,14 +50,14 @@ what makes a UI symptom reachable to a repository method.
 
 ```mermaid
 flowchart LR
-    subgraph fe["frontend — bh-lang-ts"]
+    subgraph fe["frontend — nexus-lang-ts"]
         C1["TotalsPanel.tsx"] --> C2["useCart()"]
         C2 --> C3["fetch(`${API}/api/cart/${id}`)"]
     end
     subgraph canon["canonical join key"]
         K["GET /api/cart/:p"]
     end
-    subgraph be["backend — bh-lang-java"]
+    subgraph be["backend — nexus-lang-java"]
         S1["@GetMapping(&quot;/api/cart/{cartId}&quot;)"] --> S2["CartController#get"]
         S2 --> S3["CartService#totals"]
         S3 --> S4["CartRepository#findItems"]

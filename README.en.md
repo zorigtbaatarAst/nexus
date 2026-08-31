@@ -1,38 +1,22 @@
-# BugHunter
+# Nexus
 
 *English · [Монгол](README.md)*
 
-A **change-aware software intelligence system**. It understands a codebase once, remembers
-its structure and its history of bugs, detects what changed between scans, analyzes the
-impact of those changes, finds potential bugs — and verifies them by reproducing them with
-a test.
+**A platform for persistent code intelligence.** Nexus reads a codebase once, remembers its
+structure, its history and what has gone wrong in it, and from then on works incrementally —
+detecting what changed, computing what that touches, and running targeted analysis over the
+affected region only.
 
-> **Status: MVP in progress.** The architecture is complete
-> ([`docs/architecture.md`](docs/architecture.md)); the walking skeleton —
-> `init`, `scan`, `rescan`, `status`, `changes`, `doctor` over Java — builds and runs.
->
-> ```
-> cargo build --release && make demo REPO=/path/to/a/spring/project
-> ```
->
-> Cross-stack tracing works today on Spring for GraphQL + Apollo: a change to a backend
-> service method reaches the React components that render it.
+> **Nexus understands the project; capabilities use that understanding.**
 
----
+**BugHunter** is the first capability: deterministic bug detection. It works on its own and
+through Nexus, and it is the shape every later capability takes — read the index, return
+findings, get identity, lifecycle and history for free.
 
-## The idea
-
-**BugHunter owns evidence, history and verification. The AI agent owns reasoning.**
-
-An agent does not need your repository — it needs the right 4 KB of it, plus what changed,
-plus what that change touches, plus what already broke there before. BugHunter's job is to
-produce exactly that, deterministically, and to prove the findings that come back.
-
-Because the intelligence is evidence-shaped rather than prompt-shaped, any MCP-capable agent
-can use it: Claude Code, Codex, Copilot, or something that does not exist yet. And because
-the evidence is deterministic, BugHunter is still a useful tool with the AI switched off.
-
----
+> **Status: working, incomplete.** Scanning, change detection, impact across the
+> frontend/backend seam, four deterministic rules with the full finding lifecycle, persistent
+> memory, and an MCP server. Nothing is verified by reproduction yet, and every surface says
+> so. See [`docs/roadmap.md`](docs/roadmap.md).
 
 ## Install
 
@@ -44,9 +28,14 @@ One static binary, checksum-verified. No Java, no Node, no Docker, no runtime of
 
 ```bash
 cd /path/to/your/project
-bughunter scan       # index it and set a baseline
-bughunter rescan     # what changed, and what it touches
+nexus scan           # index it and set a baseline
+nexus rescan         # what changed, and what it touches
+nexus analyze        # run BugHunter over it
+nexus ask next       # what is worth looking at
 ```
+
+Two binaries are installed: `nexus`, the platform, and `bughunter`, the capability's own CLI.
+They are the same image under two names — which one is running is read from `argv[0]`.
 
 There is no separate setup step — `scan` initializes the project if it has not been set up,
 because requiring `init` first is a step whose only outcome is the error "you forgot to run
@@ -77,14 +66,15 @@ the exact command that fixes it.
 
 ```
 bughunter init         detect language, framework, build system, databases, containers
-bughunter scan         index files, symbols, dependencies, tests → establish a baseline
-bughunter rescan       diff against the baseline → changed symbols → impact → hunt
-bughunter impact       blast radius of a symbol, a file or a name — across the stack
-bughunter graph        dependency graph size and how much of it resolved
-bughunter hunt         run the deterministic detectors
-bughunter bugs         list findings
-bughunter bug <id>     one finding with its evidence and history
-bughunter mcp          run as an MCP server for Claude Code, Codex or Copilot
+nexus scan             index files, symbols, dependencies → establish a baseline
+nexus rescan           diff against the baseline → changed symbols → impact
+nexus impact <target>  blast radius of a symbol, a file or a name — across the stack
+nexus graph            dependency graph size and how much of it resolved
+nexus analyze [cap]    run a capability (BugHunter by default)
+nexus findings         findings from every capability
+nexus ask <question>   changed · affected X · known X · facts · next
+nexus fact <key> <..>  remember something for the next session
+nexus mcp              run as an MCP server for Claude Code, Codex or Copilot
 bughunter investigate  a described screenshot → UI anchor → across the seam → suspects
 bughunter verify       generate a reproduction test, run it, run it on the baseline, judge
 ```
@@ -145,19 +135,19 @@ One binary, one MCP server, no per-agent implementation.
 
 ```jsonc
 // Claude Code — .mcp.json
-{ "mcpServers": { "bughunter": { "command": "bughunter", "args": ["mcp"] } } }
+{ "mcpServers": { "nexus": { "command": "nexus", "args": ["mcp"] } } }
 ```
 
 ```toml
 # Codex — ~/.codex/config.toml
-[mcp_servers.bughunter]
-command = "bughunter"
+[mcp_servers.nexus]
+command = "nexus"
 args    = ["mcp"]
 ```
 
 ```jsonc
 // GitHub Copilot — .vscode/mcp.json
-{ "servers": { "bughunter": { "command": "bughunter", "args": ["mcp"] } } }
+{ "servers": { "nexus": { "command": "nexus", "args": ["mcp"] } } }
 ```
 
 ---
@@ -189,6 +179,7 @@ args    = ["mcp"]
 | [architecture-decisions.md](docs/architecture-decisions.md) | 12 ADRs, each with alternatives and a revisit trigger |
 | [data-model.md](docs/data-model.md) | entities, the immutability doctrine, full SQLite DDL, indexes |
 | [memory-model.md](docs/memory-model.md) | project / code / historical / bug memory, and facts |
+| [capabilities.md](docs/capabilities.md) | the capability contract, and how to add one |
 | [change-analysis.md](docs/change-analysis.md) | change detection, impact analysis, bug fingerprinting |
 | [investigation.md](docs/investigation.md) | screenshot to suspect: UI anchoring, the cross-stack seam, the clarification protocol |
 | [verification-engine.md](docs/verification-engine.md) | plan → emit → run → run baseline → judge |
@@ -207,9 +198,10 @@ args    = ["mcp"]
 
 | Crate | State |
 |---|---|
-| `bh-types` · `bh-store` · `bh-vcs` · `bh-lang` · `bh-lang-java` · `bh-lang-ts` · `bh-core` · `bh-cli` | working |
-| `bh-mcp` | working — eight read tools |
-| `bh-lang-python` · `bh-lang-rust` · `bh-verify` · `bh-ai` | V1 |
+| `nexus-types` · `nexus-store` · `nexus-vcs` · `nexus-lang` · `nexus-lang-java` · `nexus-lang-ts` · `nexus-core` · `nexus-cli` | working |
+| `nexus-mcp` | working — sixteen tools |
+| `cap-bughunter` | working — four deterministic rules |
+| `nexus-lang-python` · `nexus-lang-rust` · `nexus-verify` | later |
 
 The store carries the **full 21-table schema** from day one — adding the bug and
 verification tables later would mean migrating a populated database for no reason.

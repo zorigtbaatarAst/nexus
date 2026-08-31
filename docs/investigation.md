@@ -368,13 +368,13 @@ Honest dependency list, all landing in V1:
 
 | Needed | Where it lands |
 |---|---|
-| frontend framework packs — Next.js, React Router, Angular, Vue | `bh-lang-ts` |
-| `ui_strings` table + FTS5 index over labels and i18n | `bh-store` |
-| HTTP call-site extraction — `fetch`, `axios`, generated clients | `bh-lang-ts` framework packs |
-| `calls_http` edge type and its contract resolution tier | `bh-core::resolve` |
+| frontend framework packs — Next.js, React Router, Angular, Vue | `nexus-lang-ts` |
+| `ui_strings` table + FTS5 index over labels and i18n | `nexus-store` |
+| HTTP call-site extraction — `fetch`, `axios`, generated clients | `nexus-lang-ts` framework packs |
+| `calls_http` edge type and its contract resolution tier | `nexus-core::resolve` |
 | `[http.rewrite]` and base-URL configuration | `config.toml` |
-| DTO shape extraction on both sides for mismatch detection | `bh-lang-java`, `bh-lang-ts` |
-| the clarification protocol | `bh-core`, surfaced by `bh-mcp` and `bh-cli` |
+| DTO shape extraction on both sides for mismatch detection | `nexus-lang-java`, `nexus-lang-ts` |
+| the clarification protocol | `nexus-core`, surfaced by `nexus-mcp` and `nexus-cli` |
 
 None of it changes an existing boundary or table classification. The seam is an edge type,
 the anchor index is one table, and the clarification protocol is a result variant — which is

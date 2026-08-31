@@ -1,4 +1,4 @@
-# BugHunter — Roadmap
+# Nexus — Roadmap
 
 Three releases. Each one ships a claim that is true and useful on its own — no release
 depends on the next one to be worth installing.
@@ -15,16 +15,25 @@ network connection.
 
 ### Scope
 
-**Delivered so far** — `init` `scan` `rescan` `status` `changes` `impact` `graph` `doctor`
-`mcp`; Java and TypeScript analyzers; the dependency graph with four resolution tiers; the
-GraphQL seam; symbol-level rename aliasing; four deterministic detectors with the full bug
-lifecycle (fingerprinting, recurrence, fixed, regressed, ignored); and an MCP server exposing
-twelve tools to Claude Code, Codex, Copilot and any other MCP client.
+**Delivered so far** — Nexus is a platform with one capability.
 
-Still absent: the verification engine, any AI integration, and the Python and Rust analyzers.
-Nothing is verified by reproduction yet, and the tool says so in its own output rather than
-leaving anyone to infer it. Measured on a 880-file Spring + Next.js project: 5,665 symbols and 96 % of in-project
-edges resolved in 641 ms.
+*Project intelligence:* `scan` `rescan` `status` `changes` `impact` `graph` `ask` `doctor`;
+Java, TypeScript and GraphQL analyzers; the dependency graph with five resolution tiers; the
+cross-stack GraphQL seam; symbol-level rename aliasing; persistent facts.
+
+*Capabilities:* the `Capability` contract with `Scope`, a registry, and `cap-bughunter` —
+four deterministic rules with the full finding lifecycle (identity, recurrence, fixed,
+regressed, ignored).
+
+*Agent surface:* an MCP server with sixteen tools, including `nexus_record_finding`, which is
+what makes any model a provider without a line of provider-specific code.
+
+Measured on a real 880-file Spring + Next.js project: 5,665 symbols, 96 % of in-project edges
+resolved, 641 ms.
+
+Still absent: the verification engine, Python and Rust analyzers, any capability beyond
+BugHunter, and any direct LLM provider. Nothing is verified by reproduction yet, and every
+surface says so rather than leaving anyone to infer it.
 
 | Area | In | Out |
 |---|---|---|

@@ -160,7 +160,7 @@ Introduced:
 a81f92c
 ```
 
-The rules behind that format, specified as a renderer contract in `bh-cli::render`:
+The rules behind that format, specified as a renderer contract in `nexus-cli::render`:
 
 - **Counts before details.** The first screen answers "how much changed and how bad is it".
   Nobody reads 40 findings; everybody reads three numbers.
@@ -252,7 +252,7 @@ has done half a job.
 
 ## 7. Implementation notes
 
-`clap` derive, one module per command in `bh-cli::commands`. Each command:
+`clap` derive, one module per command in `nexus-cli::commands`. Each command:
 
 ```rust
 pub struct RescanCmd { /* flags */ }
@@ -269,7 +269,7 @@ disagree about the facts because they render the same value — a JSON mode asse
 separately from the human mode drifts within a month, and the drift is always discovered by
 a CI script that silently stopped catching bugs.
 
-`bh-cli::main` is the composition root: parse flags → load config and policy → open the
+`nexus-cli::main` is the composition root: parse flags → load config and policy → open the
 store → build the analyzer registry → select the `AiProvider` → construct `Engine` → dispatch.
 It is the only place in the codebase that knows about all of those at once, and the only
 place `anyhow` is used.

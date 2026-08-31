@@ -54,7 +54,7 @@ would get natively. The `rmcp` SDK is less mature than the TypeScript one.
 ### When to change it
 If the Java/Spring analyzer plateaus at unacceptable precision *and* the LSP sidecar tier
 proves too heavy in practice, extracting the Java analyzer into a JVM sidecar speaking a
-small IPC protocol is the correct retreat — `bh-lang-java` becomes a client and nothing else
+small IPC protocol is the correct retreat — `nexus-lang-java` becomes a client and nothing else
 moves. That is a contained change precisely because of boundary rule 5.
 
 ---
@@ -66,7 +66,7 @@ Project memory must survive scans, sessions and machines; be queryable with join
 and transactions; and add zero operational burden to a developer tool.
 
 ### Decision
-One SQLite file per project at `.nexus/nexus.db`, WAL mode. `bh-store` is the only
+One SQLite file per project at `.nexus/nexus.db`, WAL mode. `nexus-store` is the only
 crate containing SQL.
 
 ### Alternatives considered
@@ -185,7 +185,7 @@ that do not speak MCP fall back to the CLI.
 
 ### When to change it
 Add an HTTP/SSE transport when a *hosted* or multi-client deployment appears — a shared team
-server, or CI agents talking to one BugHunter. That is a transport addition inside `bh-mcp`,
+server, or CI agents talking to one BugHunter. That is a transport addition inside `nexus-mcp`,
 not an architectural change, which is the point of keeping the adapter thin.
 
 ---
@@ -482,7 +482,7 @@ migration at all. The classification tells every future contributor which tables
 ### Disadvantages
 The database only grows; retention must be explicit (`bughunter prune`). Soft-deletes mean
 almost every query needs `WHERE deleted = 0` and forgetting it is a silent bug — mitigated
-by exposing only filtered views from `bh-store`. Three classes is more to explain than one.
+by exposing only filtered views from `nexus-store`. Three classes is more to explain than one.
 
 ### When to change it
 If ledger growth becomes a genuine problem on a busy monorepo, add archival — move ledger
@@ -505,7 +505,7 @@ marked `resolution = 'framework'`.
 
 ### Alternatives considered
 
-**Put Spring knowledge inside `bh-lang-java`.** Fewer moving parts, and it conflates two
+**Put Spring knowledge inside `nexus-lang-java`.** Fewer moving parts, and it conflates two
 independent axes: there is Java without Spring, and Spring-shaped DI reasoning recurs in
 NestJS and in Python DI containers. It also drifts toward the hard-coded Java-specific logic
 constraint 12 forbids.
@@ -521,7 +521,7 @@ implementation cannot answer the question users actually ask.
 ### Advantages
 Spring, NestJS, Django and axum packs evolve independently of their language analyzers.
 Framework-derived edges are visibly labelled, so their confidence can be judged separately.
-A new framework is a new pack, touching nothing else. Keeps `bh-core` free of framework
+A new framework is a new pack, touching nothing else. Keeps `nexus-core` free of framework
 knowledge, satisfying constraint 12 on both axes.
 
 ### Disadvantages
@@ -814,3 +814,142 @@ If monorepo users routinely scan one module at a time, promote external edges to
 first-class *cross-module* view rather than a footnote — at that point the interesting
 question becomes which unscanned modules this one depends on, which is exactly the V2
 cross-repo service graph.
+---
+
+## ADR-018 — Findings are a platform concept, not BugHunter's
+
+### Why it is needed
+Nexus is meant to grow capabilities — Code Review, Security, Dependency Analysis. Each will
+produce things that are wrong with the project. If those live in a table called `bugs`, the
+second capability either stores a security vulnerability under that name or duplicates the
+whole lifecycle to avoid it.
+
+### Decision
+`bugs` becomes `findings` with a `capability` column. Identity, the
+open/fixed/regressed/ignored lifecycle, `file:line` evidence, per-scan occurrence history and
+rename survival move to `nexus-core`. Uniqueness is `(project, capability, fingerprint)`.
+Display ids stay per-capability: `BUG-104`, `SEC-7`, `REV-12`.
+
+### Alternatives considered
+
+**Leave it as `bugs` and let capabilities share it.** Zero migration, and every future reader
+has to be told that a "bug" is sometimes a review comment. Names that lie cost more than
+migrations.
+
+**A table per capability.** Clean isolation, and it duplicates the lifecycle N times.
+Regression detection is subtle enough that a second implementation would be a second set of
+bugs, and cross-capability questions ("what is known about this file?") become N queries.
+
+**Capability as a label rather than part of the key.** Simpler, and wrong: two capabilities
+may legitimately flag the same line for different reasons, and a shared uniqueness key
+silently collapses one into the other.
+
+### Advantages
+The second capability is a few hundred lines rather than a re-argument about when a finding
+is new. `nexus findings` and `nexus_get_known` answer across every capability at once. The
+lifecycle has one implementation, so a fix to it fixes everything.
+
+### Disadvantages
+One table grows for every capability, and a query without a capability filter gets slower as
+they multiply — mitigated by `idx_findings_capability`. `finding_type` is now a shared
+taxonomy that a capability may not fit; it will need extending, and extending it is a
+migration.
+
+### When to change it
+If a capability's findings genuinely need columns the others do not, add a
+`capability_data JSON` column rather than a table — the lifecycle is the expensive part, and
+it is what must not fork.
+
+---
+
+## ADR-019 — One capability abstraction, and no plugin system
+
+### Why it is needed
+"Nexus understands the project; capabilities use that understanding" is only true if a
+capability can be added without restructuring anything. Today BugHunter's rules sit inside the
+core, which makes every future capability a core change.
+
+### Decision
+A `Capability` trait taking a prepared `ProjectContext` and a `Scope`, returning findings.
+Capabilities are registered by the composition root. `nexus-core` may not depend on any
+capability, and a capability may not depend on an adapter or on the store — both enforced by
+`tests/boundaries.rs`.
+
+Deliberately **not** built: a plugin loader, a manifest format, dynamic dispatch over dynamic
+libraries, an event bus, a capability dependency graph, or a lifecycle protocol.
+
+### Alternatives considered
+
+**A dynamic plugin system loading `.so` files.** Capabilities ship without recompiling Nexus,
+and it costs a stable ABI across a Rust version boundary, a versioning scheme, a sandbox for
+untrusted code, and debugging that crosses a dynamic boundary. Nothing asked for third-party
+capabilities; what was asked for was that adding one does not restructure the system.
+
+**A capability manifest with declared inputs and permissions.** Attractive once capabilities
+are untrusted. Until then it is configuration nobody writes and a parser nobody needs.
+
+**No trait — just more methods on `Engine`.** What exists today, and it means the core grows a
+method per capability and depends on every one of them.
+
+### Advantages
+Forty lines is a working capability: the test suite contains one, counting TODO comments,
+which gets identity, lifecycle, storage and presentation for free. The boundary is checked
+mechanically rather than remembered. `Scope` makes targeted analysis a parameter rather than
+an aspiration — and the test that a narrow scope examines fewer symbols caught every detector
+ignoring it on the first run.
+
+### Disadvantages
+Capabilities are compiled in, so adding one means a release. `ProjectContext` is a snapshot,
+so a capability wanting something not in it needs a core change — which is a feature while the
+set is small and a friction point later.
+
+### When to change it
+Add dynamic loading when someone outside this repository wants to ship a capability. That is
+the only thing it buys, and it is expensive enough not to buy early.
+
+---
+
+## ADR-020 — LLM independence is the write-back path
+
+### Why it is needed
+The requirement is that no single model is foundational. The obvious reading is "support many
+providers", which leads to an HTTP client per vendor and a configuration surface for each.
+
+### Decision
+The asymmetry that actually mattered was that an agent could *read* findings but not *record*
+one: only code compiled into Nexus could produce a finding. `nexus_record_finding` closes it.
+Any model becomes a provider, and Nexus contains no provider-specific code at all.
+
+A candidate arriving from a model is held to the rules a rule-produced one is held to:
+evidence pointing outside the index is rejected rather than stored, and confidence is capped
+at 0.75 because only reproduction should move a finding above that.
+
+### Alternatives considered
+
+**Four `AiProvider` implementations behind cargo features.** The obvious design, and it means
+every user configures billing for a second model when they are already paying for the agent in
+front of them, tokens are spent twice on the same reasoning, and Nexus inherits four vendor
+relationships to maintain. Still the right answer for headless CI, which is why the boundary is
+marked — but not the thing to build first.
+
+**A prompt-template system so capabilities can ask a model directly.** Puts prompts, and
+therefore model-specific behaviour, inside the platform. Precisely what "no single LLM is
+foundational" is meant to prevent.
+
+**Nothing — leave findings read-only.** Honest about the current state, and it means an agent's
+reasoning evaporates when its session ends, which is the opposite of persistent intelligence.
+
+### Advantages
+Zero provider code, zero API keys, identical behaviour for every MCP client. An agent's
+conclusion gets the same identity and history as a rule's, so the same observation next session
+is recognized rather than repeated — which is the difference between a finding and a chat
+message. The evidence and confidence rules mean a model cannot quietly lower the bar.
+
+### Disadvantages
+Reasoning quality varies with whichever agent is connected, and Nexus can neither control nor
+reproduce it. Headless CI has no path yet. An agent could record noise; the evidence
+requirement limits it but does not prevent it, and nothing yet measures the noise rate.
+
+### When to change it
+Add a direct provider when headless use is real — CI, cron, a terminal with no agent attached.
+The trait boundary exists for it; only the implementations are missing, deliberately.

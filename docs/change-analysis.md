@@ -144,7 +144,7 @@ proportional to the number of changed FQNs, not to graph size.
 `scans.tool_versions_json` records the version of every component whose output is cached:
 
 ```json
-{ "schema": 3, "bh-lang-java": "0.4.1", "grammar:java": "0.21.0",
+{ "schema": 3, "nexus-lang-java": "0.4.1", "grammar:java": "0.21.0",
   "grammar:tsx": "0.20.4", "normalizer:java": 2 }
 ```
 

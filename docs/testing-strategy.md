@@ -10,8 +10,8 @@ failures. If BugHunter is unsure, it must say so; if it gave up, it must say tha
 ### 1.1 Types
 
 `thiserror` for a typed error enum per crate; `anyhow` **only** at the two composition roots
-(`bh-cli::main`, `bh-mcp::serve`). A library that returns `anyhow::Error` has told its caller
-nothing, and `bh-core` is a library.
+(`nexus-cli::main`, `nexus-mcp::serve`). A library that returns `anyhow::Error` has told its caller
+nothing, and `nexus-core` is a library.
 
 ```rust
 #[derive(thiserror::Error, Debug)]
@@ -181,13 +181,13 @@ The architecture's module rules are tests, not documentation:
 #[test]
 fn boundaries_hold() {
     let g = cargo_metadata_graph();
-    assert!(!g.depends("bh-core", "bh-mcp"));
-    assert!(!g.depends("bh-core", "bh-cli"));
-    assert!(!g.depends("bh-mcp",  "bh-store"));
-    assert!(!g.depends("bh-mcp",  "bh-verify"));
-    assert!(!g.depends("bh-lang-java", "bh-store"));
+    assert!(!g.depends("nexus-core", "nexus-mcp"));
+    assert!(!g.depends("nexus-core", "nexus-cli"));
+    assert!(!g.depends("nexus-mcp",  "nexus-store"));
+    assert!(!g.depends("nexus-mcp",  "nexus-verify"));
+    assert!(!g.depends("nexus-lang-java", "nexus-store"));
     // AI is optional: the deterministic build has no HTTP client
-    assert!(!g.depends_with_default_features("bh-core", "reqwest"));
+    assert!(!g.depends_with_default_features("nexus-core", "reqwest"));
 }
 ```
 

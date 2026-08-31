@@ -1,13 +1,16 @@
-# BugHunter — briefing for an AI agent working in this repo
+# Nexus — briefing for an AI agent working in this repo
 
 Read this before touching anything. These are the facts that are expensive to rediscover and
 the constraints that will bite you if you do not know them.
 
 ## What this is
 
-A change-aware software intelligence system: index a codebase once, keep a baseline, detect
-what changed on rescan, compute the blast radius, find bugs in the affected region, and prove
-them by generating and running a reproduction test.
+A platform for persistent code intelligence. **Nexus understands the project; capabilities
+use that understanding.** BugHunter is the first capability, not the product.
+
+The directory and the GitHub repository are still called `bughunter` — the rename stopped at
+the code, because moving the repo breaks `install.sh`'s hardcoded paths and the v0.1.0 release
+URL. That is a separate decision, not an oversight.
 
 It has **two entry points**, and confusing them is the fastest way to design something wrong.
 `rescan` is change-driven — forward from a known changed symbol. `investigate` is
@@ -24,7 +27,11 @@ MCP server.
 
 ## The one idea the whole design rests on
 
-**BugHunter owns evidence, history and verification. The AI agent owns reasoning.**
+**Nexus owns evidence, history and verification. The AI agent owns reasoning.**
+
+The corollary that shapes the crate layout: identity, lifecycle and storage belong to the
+platform; only *rules* belong to a capability. That is why `bugs` became `findings` with a
+capability column rather than staying BugHunter's private table.
 
 If you find yourself adding reasoning to BugHunter, or evidence-gathering to the agent layer,
 you are working against the grain of the design. Check the layer you are in.
@@ -34,22 +41,27 @@ you are working against the grain of the design. Check the layer you are in.
 These are not style preferences. Each is pinned by a test, and violating one produces a bug
 that is hard to attribute.
 
-1. **`bh-core` must not depend on `bh-mcp`, `bh-cli`, or any concrete AI provider.** It
-   depends on `bh-ai` with `default-features = false`, which means the deterministic build
+0. **`nexus-core` must not depend on any `cap-*`, and no `cap-*` may depend on an adapter or
+   on `nexus-store`.** Capabilities are registered by the composition root — `nexus-cli::open`
+   and `nexus-mcp` — never compiled into the platform. Get this backwards and "add Code Review
+   later" becomes a core change.
+
+1. **`nexus-core` must not depend on `nexus-mcp`, `nexus-cli`, or any concrete AI provider.** It
+   depends on `nexus-ai` with `default-features = false`, which means the deterministic build
    has no HTTP client in its dependency tree at all. A `cargo metadata` test asserts this.
 
-2. **`bh-mcp` must not depend on `bh-store`, `bh-lang*` or `bh-verify`.** A handler reaches
-   them only through `bh-core`, so it physically cannot grow logic the CLI lacks. Every
+2. **`nexus-mcp` must not depend on `nexus-store`, `nexus-lang*` or `nexus-verify`.** A handler reaches
+   them only through `nexus-core`, so it physically cannot grow logic the CLI lacks. Every
    handler is: deserialize → one `Engine` call → serialize. If a handler needs two `Engine`
-   calls, the missing method belongs in `bh-core`.
+   calls, the missing method belongs in `nexus-core`.
 
-3. **Only `bh-store` contains SQL.** No exceptions, including "just this one query".
+3. **Only `nexus-store` contains SQL.** No exceptions, including "just this one query".
 
-4. **`bh-lang-*` must not depend on `bh-store` or `bh-core`.** An analyzer takes source text
+4. **`nexus-lang-*` must not depend on `nexus-store` or `nexus-core`.** An analyzer takes source text
    and returns a `ParsedFile`. It never learns about scans or baselines. This is also why
    parsing parallelizes cleanly.
 
-5. **`bh-verify` writes only through `SafeWriter`**, rooted at `.nexus/generated-tests/`,
+5. **`nexus-verify` writes only through `SafeWriter`**, rooted at `.nexus/generated-tests/`,
    canonicalizing the parent path *before* the prefix check. A jail that compares unresolved
    paths is not a jail.
 
@@ -110,7 +122,7 @@ that is hard to attribute.
   produce one.
 
 - **Soft-deletes mean nearly every query needs `WHERE deleted = 0`.** Forgetting it is silent.
-  `bh-store` should expose filtered views rather than raw tables.
+  `nexus-store` should expose filtered views rather than raw tables.
 
 - **`idx_edges_dst` and `idx_edges_unresolved` are load-bearing.** Without the first, every
   impact query is a table scan. Without the second, a rescan that adds a symbol scans the
@@ -164,6 +176,19 @@ that is hard to attribute.
   alias has the *old* fingerprint stored, so a fingerprint-based sweep closes the very bug it
   just found.
 
+- **A capability must iterate `scoped.symbols`, not `ctx.symbols`.** Narrowing is done once
+  in `ctx.scoped(scope)`; a rule that reaches past it makes a targeted analysis cost what a
+  full one costs, silently. Reaching past it is sometimes right — the self-invocation rule
+  needs the callee's annotations even when the callee is out of scope — which is why `ctx` is
+  passed alongside `scoped` rather than replaced by it.
+
+- **A narrowed analysis may not close what it did not examine.** The fixed-sweep runs only
+  under `Scope::Everything`. Absence is evidence only when something actually looked.
+
+- **The fixed-sweep matches bug ids, not fingerprints.** A finding matched through a rename
+  alias still carries the old fingerprint, so a fingerprint-based sweep closes the very
+  finding it just matched.
+
 - **A static import is not a call on the enclosing class.** `import static
   org.mockito.Mockito.when;` makes `when(...)` a call on Mockito. Attributing unqualified
   calls to the enclosing type without checking static imports invented ~600 edges to methods
@@ -210,4 +235,5 @@ that is hard to attribute.
 | how the GraphQL seam actually works | [ADR-014 revision](docs/architecture-decisions.md#adr-014-join-the-stack-at-the-http-contract) |
 | what can an agent call | [mcp-api.md](docs/mcp-api.md) |
 | what is safe to execute | [security.md](docs/security.md) §3–4 |
+| how to add a capability | [capabilities.md](docs/capabilities.md) |
 | what should I build first | [roadmap.md](docs/roadmap.md) |
