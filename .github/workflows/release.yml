@@ -1,0 +1,124 @@
+name: Release
+
+# install.sh downloads release assets and verifies their checksums, so every tag
+# must publish both. Doing it here rather than by hand keeps that guarantee.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux builds target musl, so the binary is fully static and runs on any
+          # distribution regardless of its glibc version. That is what makes
+          # "download it and run it" true rather than nearly true.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            asset: bughunter-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            asset: bughunter-linux-aarch64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            asset: bughunter-macos-x86_64
+          - os: macos-14
+            target: aarch64-apple-darwin
+            asset: bughunter-macos-aarch64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # The bundled SQLite and libgit2 are C, so a musl target needs a musl C compiler.
+      - name: Install the musl toolchain
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Verify the binary runs and is static
+        run: |
+          set -eu
+          bin="target/${{ matrix.target }}/release/bughunter"
+          "$bin" --version
+          file "$bin"
+          if [ "${{ contains(matrix.target, 'musl') }}" = "true" ]; then
+            # A dynamically linked "static" build would work on the runner and fail on a
+            # user's machine, which is the worst possible time to find out.
+            ldd "$bin" 2>&1 | grep -q "not a dynamic executable" || {
+              echo "musl build is not static:"; ldd "$bin"; exit 1; }
+          fi
+
+      - name: Stage the asset
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/bughunter" "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: staging
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          set -eu
+          mkdir -p dist && cp staging/bughunter-* dist/
+          chmod +x dist/bughunter-*
+          cd dist && sha256sum bughunter-* > checksums.txt
+          cat checksums.txt
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          version="${{ github.event.inputs.tag || github.ref_name }}"
+          # Re-running a release must update its assets rather than fail.
+          if gh release view "$version" >/dev/null 2>&1; then
+            gh release upload "$version" dist/* --clobber
+          else
+            gh release create "$version" dist/* \
+              --title "BugHunter $version" \
+              --notes "Install:
+
+          \`\`\`
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh
+          \`\`\`
+
+          Linux binaries are statically linked against musl and run on any distribution.
+          Every asset's SHA-256 is in \`checksums.txt\`; the installer refuses to install
+          a binary whose checksum does not match."
+          fi

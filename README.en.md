@@ -34,6 +34,45 @@ the evidence is deterministic, BugHunter is still a useful tool with the AI swit
 
 ---
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zorigtbaatarAst/bughunter/main/install.sh | sh
+```
+
+One static binary, checksum-verified. No Java, no Node, no Docker, no runtime of any kind.
+
+```bash
+cd /path/to/your/project
+bughunter scan       # index it and set a baseline
+bughunter rescan     # what changed, and what it touches
+```
+
+There is no separate setup step — `scan` initializes the project if it has not been set up,
+because requiring `init` first is a step whose only outcome is the error "you forgot to run
+init".
+
+<details>
+<summary>Other ways</summary>
+
+```bash
+# build from source (needs Rust)
+curl -fsSL .../install.sh | sh -s -- --from-source
+
+# a specific version, or a different directory
+... | sh -s -- --version v0.1.0 --dir ~/bin
+
+# remove it (project data in each repo's .bughunter/ is left alone)
+... | sh -s -- --uninstall
+
+# from a clone
+make install
+```
+</details>
+
+If anything looks wrong, run `bughunter doctor`. Every check names what it found, where, and
+the exact command that fixes it.
+
 ## How it works
 
 ```

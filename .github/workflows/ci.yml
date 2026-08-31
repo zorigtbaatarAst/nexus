@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  check:
+    name: fmt · clippy · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # The architecture's module boundaries are tests, not conventions:
+      # docs/architecture.md §4. They run with everything else.
+      - name: Tests
+        run: cargo test --workspace --locked
+
+      - name: Smoke-test against a real repository
+        run: |
+          set -eu
+          cargo build --release --locked
+          bh="$PWD/target/release/bughunter"
+          repo=$(mktemp -d)
+          out=$(mktemp -d)
+          git clone --depth 1 https://github.com/spring-projects/spring-petclinic.git "$repo" >/dev/null 2>&1
+
+          # Reports are written outside the scanned repository. Writing them inside makes
+          # the next rescan correctly report them as new files, which looks like a bug in
+          # the cascade and is a bug in the harness.
+          "$bh" --project "$repo" scan   --json > "$out/scan.json"
+          "$bh" --project "$repo" rescan --json > "$out/rescan.json"
+          "$bh" --project "$repo" graph
+          "$bh" --project "$repo" doctor || true
+
+          # A no-op rescan must report no changes. This is the assertion that the
+          # incremental cascade actually works, and it is cheap enough to run per commit.
+          python3 "$GITHUB_WORKSPACE/scripts/check_smoke.py" "$out/scan.json" "$out/rescan.json"

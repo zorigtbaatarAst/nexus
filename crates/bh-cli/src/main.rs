@@ -144,7 +144,12 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
         }
 
         Command::Scan => {
-            let mut engine = open(&root)?;
+            // `scan` on a fresh checkout should just work. Requiring `init` first is a step
+            // whose only outcome is the error "you forgot to run init".
+            let (mut engine, initialized) = Engine::open_or_init(&root)?;
+            if initialized && !cli.quiet && !cli.json {
+                eprintln!("initialized {}/{}", root.display(), bh_core::BH_DIR);
+            }
             if cli.verbose > 0 {
                 eprintln!("scanning {}", engine.root().display());
             }
@@ -156,7 +161,18 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
         }
 
         Command::Rescan => {
-            let mut engine = open(&root)?;
+            let (mut engine, initialized) = Engine::open_or_init(&root)?;
+            if initialized {
+                // Nothing to diff against yet, so a rescan on a fresh project is a scan.
+                let report = engine.scan()?;
+                emit!(&report, {
+                    render::banner(&mut out, &st)?;
+                    writeln!(out, "{}", st.dim("No baseline yet — ran a full scan."))?;
+                    writeln!(out)?;
+                    render::scan(&mut out, &st, &report)?;
+                });
+                return Ok(exit::OK);
+            }
             match engine.rescan() {
                 Ok(report) => {
                     emit!(&report, {

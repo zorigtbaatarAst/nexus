@@ -84,6 +84,22 @@ impl Engine {
         Self::open_at(&root)
     }
 
+    /// Open the project, initializing it first if it has never been set up.
+    ///
+    /// `init` exists as its own command for people who want to inspect the detected
+    /// profile before scanning, but requiring it is a step that only ever produces the
+    /// error "you forgot to run init". Returns whether it initialized.
+    pub fn open_or_init(root: &Path) -> Result<(Self, bool)> {
+        match Self::open(root) {
+            Ok(engine) => Ok((engine, false)),
+            Err(EngineError::NotInitialized(_)) => {
+                let (engine, _) = Self::init(root)?;
+                Ok((engine, true))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     fn open_at(root: &Path) -> Result<Self> {
         let store = Store::open(&root.join(BH_DIR).join("bughunter.db"))?;
         let repo = Repo::discover(root);
