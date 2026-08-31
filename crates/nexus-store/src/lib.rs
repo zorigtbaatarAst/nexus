@@ -17,10 +17,11 @@ use nexus_types::*;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::Path;
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_init.sql")),
     (2, include_str!("../migrations/0002_graphql_seam.sql")),
+    (3, include_str!("../migrations/0003_findings.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -180,13 +181,20 @@ pub struct FileFactRow {
 }
 
 #[derive(Debug, Clone)]
-pub struct NewBug {
+pub struct NewFinding {
+    /// Which capability produced this. Part of the uniqueness key: two capabilities may
+    /// legitimately flag the same line for different reasons, and collapsing those would
+    /// lose one of them.
+    pub capability: String,
+    /// Display-id prefix, e.g. `BUG`. A developer should never have to ask which subsystem
+    /// a number came from.
+    pub uid_prefix: String,
     pub fingerprint: String,
     /// Fingerprints this finding would have had under the anchor's previous names.
     pub alt_fingerprints: Vec<String>,
     pub slug: String,
     pub title: String,
-    pub bug_type: String,
+    pub finding_type: String,
     pub component: String,
     pub severity: String,
     pub confidence: f64,
@@ -207,7 +215,7 @@ pub struct NewOccurrence {
 }
 
 #[derive(Debug, Clone)]
-pub struct BugUpsert {
+pub struct FindingUpsert {
     pub id: i64,
     pub uid: String,
     pub is_new: bool,
@@ -216,7 +224,8 @@ pub struct BugUpsert {
 }
 
 #[derive(Debug, Clone)]
-pub struct OpenBugRow {
+pub struct OpenFindingRow {
+    pub capability: String,
     pub id: i64,
     pub uid: String,
     pub fingerprint: String,
@@ -225,13 +234,23 @@ pub struct OpenBugRow {
     pub file_path: Option<String>,
 }
 
+/// Filters for listing findings. A struct rather than three positional options: the next
+/// capability adds a filter and every call site would otherwise change.
+#[derive(Debug, Clone, Default)]
+pub struct FindingQuery<'a> {
+    pub status: Option<&'a str>,
+    pub severity: Option<&'a str>,
+    pub capability: Option<&'a str>,
+}
+
 #[derive(Debug, Clone)]
-pub struct BugRow {
+pub struct FindingRow {
+    pub capability: String,
     pub uid: String,
     pub fingerprint: String,
     pub slug: String,
     pub title: String,
-    pub bug_type: String,
+    pub finding_type: String,
     pub component: Option<String>,
     pub severity: String,
     pub confidence: f64,
@@ -244,11 +263,33 @@ pub struct BugRow {
 }
 
 #[derive(Debug, Clone)]
-pub struct BugEventRow {
+pub struct FindingEventRow {
     pub scan_uid: String,
     pub commit: Option<String>,
     pub status: String,
     pub confidence: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewFact {
+    pub key: String,
+    pub scope: String,
+    pub subject: Option<String>,
+    pub claim: String,
+    pub source: String,
+    pub evidence_json: Option<String>,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FactRow {
+    pub key: String,
+    pub scope: String,
+    pub subject: Option<String>,
+    pub claim: String,
+    pub source: String,
+    pub confidence: f64,
+    pub evidence_json: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -621,7 +662,7 @@ impl Store {
         )?)
     }
 
-    /// Soft-delete. Rows are never removed: `changes` and `bug_occurrences` reference them,
+    /// Soft-delete. Rows are never removed: `changes` and `finding_occurrences` reference them,
     /// and history must not develop holes.
     pub fn mark_file_deleted(
         tx: &Transaction<'_>,
@@ -1116,12 +1157,12 @@ impl Store {
     /// rather than application discipline: a bug seen again is an `ON CONFLICT` that
     /// advances `last_seen_scan_id`, never a second row.
     #[allow(clippy::too_many_arguments)]
-    pub fn upsert_bug(
+    pub fn upsert_finding(
         tx: &Transaction<'_>,
         project_id: ProjectId,
         scan_id: ScanId,
-        b: &NewBug,
-    ) -> Result<BugUpsert> {
+        b: &NewFinding,
+    ) -> Result<FindingUpsert> {
         // The primary fingerprint first, then any this finding would have had under a name
         // the symbol used to carry. Without the alternates a package move reports every
         // finding in it twice — once fixed, once new.
@@ -1129,9 +1170,16 @@ impl Store {
         for candidate in std::iter::once(&b.fingerprint).chain(b.alt_fingerprints.iter()) {
             existing = tx
                 .query_row(
-                    "SELECT id, bug_uid, status FROM bugs WHERE project_id = ?1 AND fingerprint = ?2",
-                    params![project_id, candidate],
-                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
+                    "SELECT id, finding_uid, status FROM findings
+                     WHERE project_id = ?1 AND capability = ?3 AND fingerprint = ?2",
+                    params![project_id, candidate, b.capability],
+                    |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                        ))
+                    },
                 )
                 .optional()?;
             if existing.is_some() {
@@ -1151,7 +1199,7 @@ impl Store {
             // Identity migrates forward: matched through an alias, the row now carries the
             // fingerprint of the name the symbol has today, so the next scan matches directly.
             tx.execute(
-                "UPDATE bugs SET status = ?2, severity = ?3, confidence = ?4,
+                "UPDATE findings SET status = ?2, severity = ?3, confidence = ?4,
                                  title = ?5, last_seen_scan_id = ?6, fingerprint = ?7,
                                  component = ?8
                  WHERE id = ?1",
@@ -1167,7 +1215,7 @@ impl Store {
                 ],
             )?;
             let next = next.to_string();
-            return Ok(BugUpsert {
+            return Ok(FindingUpsert {
                 id,
                 uid,
                 is_new: false,
@@ -1177,16 +1225,18 @@ impl Store {
         }
 
         let n: i64 = tx.query_row(
-            "SELECT COALESCE(MAX(CAST(SUBSTR(bug_uid, 5) AS INTEGER)), 0) FROM bugs WHERE project_id = ?1",
-            params![project_id],
+            "SELECT COALESCE(MAX(CAST(SUBSTR(finding_uid, ?3) AS INTEGER)), 0)
+             FROM findings WHERE project_id = ?1 AND capability = ?2",
+            params![project_id, b.capability, b.uid_prefix.len() as i64 + 2],
             |r| r.get(0),
         )?;
-        let uid = format!("BUG-{}", n + 1);
+        let uid = format!("{}-{}", b.uid_prefix, n + 1);
         tx.execute(
-            "INSERT INTO bugs (project_id, bug_uid, fingerprint, slug, title, bug_type, component,
-                               severity, confidence, status, detector, anchor_symbol_id,
-                               introduced_commit, first_seen_scan_id, last_seen_scan_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,
+            "INSERT INTO findings (project_id, capability, finding_uid, fingerprint, slug, title,
+                                   finding_type, component, severity, confidence, status, detector,
+                                   anchor_symbol_id, introduced_commit,
+                                   first_seen_scan_id, last_seen_scan_id)
+             VALUES (?1,?15,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,
                      (SELECT id FROM symbols WHERE project_id = ?1 AND fqn = ?12 AND deleted = 0),
                      ?13,?14,?14)",
             params![
@@ -1195,7 +1245,7 @@ impl Store {
                 b.fingerprint,
                 b.slug,
                 b.title,
-                b.bug_type,
+                b.finding_type,
                 b.component,
                 b.severity,
                 b.confidence,
@@ -1203,10 +1253,11 @@ impl Store {
                 b.detector,
                 b.anchor_fqn,
                 b.commit,
-                scan_id
+                scan_id,
+                b.capability,
             ],
         )?;
-        Ok(BugUpsert {
+        Ok(FindingUpsert {
             id: tx.last_insert_rowid(),
             uid,
             is_new: true,
@@ -1217,20 +1268,20 @@ impl Store {
 
     pub fn insert_occurrence(
         tx: &Transaction<'_>,
-        bug_id: i64,
+        finding_id: i64,
         scan_id: ScanId,
         o: &NewOccurrence,
     ) -> Result<()> {
         tx.execute(
-            "INSERT INTO bug_occurrences (bug_id, scan_id, file_path, start_line,
+            "INSERT INTO finding_occurrences (finding_id, scan_id, file_path, start_line,
                                           status_at_scan, confidence_at_scan, evidence_json, commit_sha)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
-             ON CONFLICT(bug_id, scan_id) DO UPDATE SET
+             ON CONFLICT(finding_id, scan_id) DO UPDATE SET
                status_at_scan = excluded.status_at_scan,
                confidence_at_scan = excluded.confidence_at_scan,
                evidence_json = excluded.evidence_json",
             params![
-                bug_id, scan_id, o.file_path, o.start_line, o.status, o.confidence,
+                finding_id, scan_id, o.file_path, o.start_line, o.status, o.confidence,
                 o.evidence_json, o.commit
             ],
         )?;
@@ -1240,21 +1291,26 @@ impl Store {
     /// Close a bug whose detector no longer fires over code it actually re-examined.
     pub fn mark_fixed(
         tx: &Transaction<'_>,
-        bug_id: i64,
+        finding_id: i64,
         scan_id: ScanId,
         commit: Option<&str>,
     ) -> Result<()> {
         tx.execute(
-            "UPDATE bugs SET status = 'FIXED', fixed_commit = ?3, last_seen_scan_id = ?2
+            "UPDATE findings SET status = 'FIXED', fixed_commit = ?3, last_seen_scan_id = ?2
              WHERE id = ?1 AND status IN ('SUSPECTED','UNVERIFIED','VERIFIED','REGRESSED')",
-            params![bug_id, scan_id, commit],
+            params![finding_id, scan_id, commit],
         )?;
         Ok(())
     }
 
-    pub fn set_bug_status(&self, project_id: ProjectId, uid: &str, status: &str) -> Result<bool> {
+    pub fn set_finding_status(
+        &self,
+        project_id: ProjectId,
+        uid: &str,
+        status: &str,
+    ) -> Result<bool> {
         let n = self.conn.execute(
-            "UPDATE bugs SET status = ?3 WHERE project_id = ?1 AND bug_uid = ?2",
+            "UPDATE findings SET status = ?3 WHERE project_id = ?1 AND finding_uid = ?2",
             params![project_id, uid, status],
         )?;
         Ok(n > 0)
@@ -1262,81 +1318,90 @@ impl Store {
 
     /// Open bugs by detector, so a detector pass can tell "no longer fires" from
     /// "never looked at".
-    pub fn open_bugs_by_detector(&self, project_id: ProjectId) -> Result<Vec<OpenBugRow>> {
+    /// Open findings belonging to one capability, so its sweep can tell "my rule no longer
+    /// fires" from "another capability did not run this time".
+    pub fn open_findings(
+        &self,
+        project_id: ProjectId,
+        capability: &str,
+    ) -> Result<Vec<OpenFindingRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT b.id, b.bug_uid, b.fingerprint, b.detector, b.status,
-                    (SELECT file_path FROM bug_occurrences o WHERE o.bug_id = b.id
-                     ORDER BY o.scan_id DESC LIMIT 1)
-             FROM bugs b
-             WHERE b.project_id = ?1
+            "SELECT b.id, b.finding_uid, b.fingerprint, b.detector, b.status,
+                    (SELECT file_path FROM finding_occurrences o WHERE o.finding_id = b.id
+                     ORDER BY o.scan_id DESC LIMIT 1),
+                    b.capability
+             FROM findings b
+             WHERE b.project_id = ?1 AND b.capability = ?2
                AND b.status IN ('SUSPECTED','UNVERIFIED','VERIFIED','REGRESSED')",
         )?;
         let rows = stmt
-            .query_map(params![project_id], |r| {
-                Ok(OpenBugRow {
+            .query_map(params![project_id, capability], |r| {
+                Ok(OpenFindingRow {
                     id: r.get(0)?,
                     uid: r.get(1)?,
                     fingerprint: r.get(2)?,
                     detector: r.get(3)?,
                     status: r.get(4)?,
                     file_path: r.get(5)?,
+                    capability: r.get(6)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
 
-    pub fn bugs(
-        &self,
-        project_id: ProjectId,
-        status: Option<&str>,
-        severity: Option<&str>,
-    ) -> Result<Vec<BugRow>> {
+    pub fn findings(&self, project_id: ProjectId, q: &FindingQuery<'_>) -> Result<Vec<FindingRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT bug_uid, fingerprint, slug, title, bug_type, component, severity,
+            "SELECT finding_uid, fingerprint, slug, title, finding_type, component, severity,
                     confidence, status, detector, introduced_commit, fixed_commit,
-                    (SELECT file_path FROM bug_occurrences o WHERE o.bug_id = bugs.id
+                    (SELECT file_path FROM finding_occurrences o WHERE o.finding_id = findings.id
                      ORDER BY o.scan_id DESC LIMIT 1),
-                    (SELECT start_line FROM bug_occurrences o WHERE o.bug_id = bugs.id
-                     ORDER BY o.scan_id DESC LIMIT 1)
-             FROM bugs
+                    (SELECT start_line FROM finding_occurrences o WHERE o.finding_id = findings.id
+                     ORDER BY o.scan_id DESC LIMIT 1),
+                    capability
+             FROM findings
              WHERE project_id = ?1
                AND (?2 IS NULL OR status = ?2)
                AND (?3 IS NULL OR severity = ?3)
+               AND (?4 IS NULL OR capability = ?4)
              ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1
                                     WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
                       confidence DESC",
         )?;
         let rows = stmt
-            .query_map(params![project_id, status, severity], |r| {
-                Ok(BugRow {
-                    uid: r.get(0)?,
-                    fingerprint: r.get(1)?,
-                    slug: r.get(2)?,
-                    title: r.get(3)?,
-                    bug_type: r.get(4)?,
-                    component: r.get(5)?,
-                    severity: r.get(6)?,
-                    confidence: r.get(7)?,
-                    status: r.get(8)?,
-                    detector: r.get(9)?,
-                    introduced_commit: r.get(10)?,
-                    fixed_commit: r.get(11)?,
-                    file: r.get(12)?,
-                    line: r.get(13)?,
-                })
-            })?
+            .query_map(
+                params![project_id, q.status, q.severity, q.capability],
+                |r| {
+                    Ok(FindingRow {
+                        uid: r.get(0)?,
+                        fingerprint: r.get(1)?,
+                        slug: r.get(2)?,
+                        title: r.get(3)?,
+                        finding_type: r.get(4)?,
+                        component: r.get(5)?,
+                        severity: r.get(6)?,
+                        confidence: r.get(7)?,
+                        status: r.get(8)?,
+                        detector: r.get(9)?,
+                        introduced_commit: r.get(10)?,
+                        fixed_commit: r.get(11)?,
+                        file: r.get(12)?,
+                        line: r.get(13)?,
+                        capability: r.get(14)?,
+                    })
+                },
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
 
-    pub fn bug_evidence(&self, project_id: ProjectId, uid: &str) -> Result<Option<String>> {
+    pub fn finding_evidence(&self, project_id: ProjectId, uid: &str) -> Result<Option<String>> {
         Ok(self
             .conn
             .query_row(
-                "SELECT o.evidence_json FROM bug_occurrences o
-                 JOIN bugs b ON b.id = o.bug_id
-                 WHERE b.project_id = ?1 AND b.bug_uid = ?2
+                "SELECT o.evidence_json FROM finding_occurrences o
+                 JOIN findings b ON b.id = o.finding_id
+                 WHERE b.project_id = ?1 AND b.finding_uid = ?2
                  ORDER BY o.scan_id DESC LIMIT 1",
                 params![project_id, uid],
                 |r| r.get(0),
@@ -1345,18 +1410,22 @@ impl Store {
     }
 
     /// Every sighting of one bug, oldest first. This is the regression history.
-    pub fn bug_history(&self, project_id: ProjectId, uid: &str) -> Result<Vec<BugEventRow>> {
+    pub fn finding_history(
+        &self,
+        project_id: ProjectId,
+        uid: &str,
+    ) -> Result<Vec<FindingEventRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT s.scan_uid, s.commit_sha, o.status_at_scan, o.confidence_at_scan
-             FROM bug_occurrences o
-             JOIN bugs b ON b.id = o.bug_id
+             FROM finding_occurrences o
+             JOIN findings b ON b.id = o.finding_id
              JOIN scans s ON s.id = o.scan_id
-             WHERE b.project_id = ?1 AND b.bug_uid = ?2
+             WHERE b.project_id = ?1 AND b.finding_uid = ?2
              ORDER BY o.scan_id",
         )?;
         let rows = stmt
             .query_map(params![project_id, uid], |r| {
-                Ok(BugEventRow {
+                Ok(FindingEventRow {
                     scan_uid: r.get(0)?,
                     commit: r.get(1)?,
                     status: r.get(2)?,
@@ -1367,12 +1436,132 @@ impl Store {
         Ok(rows)
     }
 
-    pub fn bug_counts(&self, project_id: ProjectId) -> Result<Vec<(String, i64)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT status, COUNT(*) FROM bugs WHERE project_id = ?1 GROUP BY status")?;
+    pub fn finding_counts(&self, project_id: ProjectId) -> Result<Vec<(String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT status, COUNT(*) FROM findings WHERE project_id = ?1 GROUP BY status",
+        )?;
         let rows = stmt
             .query_map(params![project_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Findings attached to a file or a symbol.
+    ///
+    /// Answers "what findings relate to this code?" — the question an agent asks when it is
+    /// about to change something and wants to know what is already known about it.
+    pub fn findings_for(&self, project_id: ProjectId, target: &str) -> Result<Vec<FindingRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT f.finding_uid, f.fingerprint, f.slug, f.title, f.finding_type,
+                    f.component, f.severity, f.confidence, f.status, f.detector,
+                    f.introduced_commit, f.fixed_commit, o.file_path, o.start_line, f.capability
+             FROM findings f
+             JOIN finding_occurrences o ON o.finding_id = f.id
+             LEFT JOIN symbols s ON s.id = f.anchor_symbol_id
+             WHERE f.project_id = ?1
+               AND (o.file_path = ?2 OR s.fqn = ?2 OR s.fqn LIKE '%' || ?2
+                    OR s.fqn LIKE '%' || ?2 || '(%' OR f.component = ?2)
+             ORDER BY CASE f.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1
+                                      WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id, target], |r| {
+                Ok(FindingRow {
+                    uid: r.get(0)?,
+                    fingerprint: r.get(1)?,
+                    slug: r.get(2)?,
+                    title: r.get(3)?,
+                    finding_type: r.get(4)?,
+                    component: r.get(5)?,
+                    severity: r.get(6)?,
+                    confidence: r.get(7)?,
+                    status: r.get(8)?,
+                    detector: r.get(9)?,
+                    introduced_commit: r.get(10)?,
+                    fixed_commit: r.get(11)?,
+                    file: r.get(12)?,
+                    line: r.get(13)?,
+                    capability: r.get(14)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    // ── facts: what Nexus has learned ────────────────────────
+
+    /// Record a fact, superseding any previous one under the same key.
+    ///
+    /// Facts are never edited — a newer row supersedes the old one — so project memory has
+    /// an audit trail and you can always ask what Nexus believed at a given scan and what
+    /// changed its mind.
+    pub fn record_fact(
+        &mut self,
+        project_id: ProjectId,
+        scan_id: ScanId,
+        f: &NewFact,
+    ) -> Result<i64> {
+        // Insert first, then point the old rows at the new one. A sentinel in
+        // `superseded_by` would violate its foreign key to `facts(id)` — the column means
+        // "the fact that replaced this", and there is no such thing as fact -1.
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO facts (project_id, fact_key, scope, subject, claim, source,
+                                evidence_json, confidence, created_scan_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+             ON CONFLICT(project_id, fact_key, created_scan_id) DO UPDATE SET
+               claim = excluded.claim, confidence = excluded.confidence,
+               evidence_json = excluded.evidence_json, superseded_by = NULL",
+            params![
+                project_id,
+                f.key,
+                f.scope,
+                f.subject,
+                f.claim,
+                f.source,
+                f.evidence_json,
+                f.confidence,
+                scan_id
+            ],
+        )?;
+        let id: i64 = tx.query_row(
+            "SELECT id FROM facts WHERE project_id = ?1 AND fact_key = ?2 AND created_scan_id = ?3",
+            params![project_id, f.key, scan_id],
+            |r| r.get(0),
+        )?;
+        tx.execute(
+            "UPDATE facts SET superseded_by = ?3
+             WHERE project_id = ?1 AND fact_key = ?2 AND id <> ?3 AND superseded_by IS NULL",
+            params![project_id, f.key, id],
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    /// Current facts, most relevant first. Superseded and invalidated rows stay on disk but
+    /// never surface: a fact about code that no longer exists is a trap.
+    pub fn facts(&self, project_id: ProjectId, subject: Option<&str>) -> Result<Vec<FactRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT fact_key, scope, subject, claim, source, confidence, evidence_json
+             FROM facts
+             WHERE project_id = ?1
+               AND superseded_by IS NULL AND invalidated_at IS NULL
+               AND (?2 IS NULL OR subject = ?2 OR subject LIKE ?2 || '%')
+             ORDER BY CASE source WHEN 'human' THEN 0 WHEN 'deterministic' THEN 1 ELSE 2 END,
+                      confidence DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id, subject], |r| {
+                Ok(FactRow {
+                    key: r.get(0)?,
+                    scope: r.get(1)?,
+                    subject: r.get(2)?,
+                    claim: r.get(3)?,
+                    source: r.get(4)?,
+                    confidence: r.get(5)?,
+                    evidence_json: r.get(6)?,
+                })
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -1643,6 +1832,108 @@ mod tests {
             0,
             "soft-deleted rows must not surface"
         );
+    }
+
+    #[test]
+    fn two_capabilities_may_flag_the_same_place_without_colliding() {
+        // Uniqueness is (project, capability, fingerprint). A security finding and a review
+        // finding on the same line are two different things, and collapsing them would lose
+        // one — which is why the capability is part of identity rather than a label.
+        let mut s = Store::open_in_memory().expect("open");
+        let p = s.ensure_project("/tmp/x", "x", "git").expect("project");
+        let (scan, _) = s
+            .begin_scan(p, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
+
+        let make = |cap: &str, prefix: &str| NewFinding {
+            capability: cap.into(),
+            uid_prefix: prefix.into(),
+            fingerprint: "same-fingerprint".into(),
+            slug: "x".into(),
+            title: "t".into(),
+            finding_type: "logic".into(),
+            component: "C".into(),
+            severity: "high".into(),
+            confidence: 0.9,
+            status: "UNVERIFIED".into(),
+            detector: "d".into(),
+            anchor_fqn: None,
+            commit: None,
+            alt_fingerprints: vec![],
+        };
+
+        let tx = s.transaction().expect("tx");
+        let a = Store::upsert_finding(&tx, p, scan, &make("bughunter", "BUG")).expect("a");
+        let b = Store::upsert_finding(&tx, p, scan, &make("security", "SEC")).expect("b");
+        tx.commit().expect("commit");
+
+        assert!(a.is_new && b.is_new, "both are new: {a:?} {b:?}");
+        assert_ne!(a.id, b.id, "one row each, not a collision");
+        assert_eq!(a.uid, "BUG-1");
+        assert_eq!(
+            b.uid, "SEC-1",
+            "ids are numbered per capability with its own prefix"
+        );
+
+        let all = s.findings(p, &FindingQuery::default()).expect("all");
+        assert_eq!(all.len(), 2);
+        let only_bh = s
+            .findings(
+                p,
+                &FindingQuery {
+                    capability: Some("bughunter"),
+                    ..Default::default()
+                },
+            )
+            .expect("filtered");
+        assert_eq!(only_bh.len(), 1);
+        assert_eq!(only_bh[0].capability, "bughunter");
+    }
+
+    #[test]
+    fn a_fact_is_superseded_rather_than_edited() {
+        let mut s = Store::open_in_memory().expect("open");
+        let p = s.ensure_project("/tmp/y", "y", "git").expect("project");
+        let (scan, _) = s
+            .begin_scan(p, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
+
+        let fact = |claim: &str| NewFact {
+            key: "arch.payment.idempotency".into(),
+            scope: "module".into(),
+            subject: Some("mn.pay".into()),
+            claim: claim.into(),
+            source: "human".into(),
+            evidence_json: Some("[]".into()),
+            confidence: 0.9,
+        };
+        s.record_fact(p, scan, &fact("enforced in the controller"))
+            .expect("first");
+
+        let (scan2, _) = s
+            .begin_scan(p, ScanKind::Incremental, None, None, "h2", false, "{}")
+            .expect("scan2");
+        s.record_fact(p, scan2, &fact("moved to the service"))
+            .expect("second");
+
+        let current = s.facts(p, None).expect("facts");
+        assert_eq!(
+            current.len(),
+            1,
+            "only the current belief surfaces: {current:?}"
+        );
+        assert_eq!(current[0].claim, "moved to the service");
+
+        // The old one is still on disk — memory has an audit trail, it is not overwritten.
+        let total: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM facts WHERE project_id = ?1",
+                params![p],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(total, 2, "the superseded belief is kept");
     }
 
     #[test]

@@ -1085,7 +1085,7 @@ impl Engine {
             alternates.insert(anchor.to_string(), olds);
         }
 
-        let open_before = self.store.open_bugs_by_detector(self.project_id)?;
+        let open_before = self.store.open_findings(self.project_id, "bughunter")?;
 
         // Which bugs this pass actually touched, by id rather than by fingerprint. A
         // fingerprint set would miss a bug matched through an alias — its stored fingerprint
@@ -1118,16 +1118,18 @@ impl Engine {
             let anchor_line = c.evidence.first().map(|e| e.line as i64);
             let anchor_file = c.evidence.first().map(|e| e.file.clone());
 
-            let up = Store::upsert_bug(
+            let up = Store::upsert_finding(
                 &tx,
                 self.project_id,
                 scan_id,
-                &nexus_store::NewBug {
+                &nexus_store::NewFinding {
+                    capability: "bughunter".into(),
+                    uid_prefix: "BUG".into(),
                     fingerprint,
                     alt_fingerprints,
                     slug: c.slug.clone(),
                     title: c.title.clone(),
-                    bug_type: c.bug_type.as_str().to_string(),
+                    finding_type: c.bug_type.as_str().to_string(),
                     component: c.component.clone(),
                     severity: c.severity.as_str().to_string(),
                     confidence: c.confidence,
@@ -1202,7 +1204,14 @@ impl Engine {
     pub fn bugs(&self, status: Option<&str>, severity: Option<&str>) -> Result<Vec<BugSummary>> {
         Ok(self
             .store
-            .bugs(self.project_id, status, severity)?
+            .findings(
+                self.project_id,
+                &nexus_store::FindingQuery {
+                    status,
+                    severity,
+                    capability: Some("bughunter"),
+                },
+            )?
             .into_iter()
             .map(to_summary)
             .collect())
@@ -1211,7 +1220,13 @@ impl Engine {
     pub fn bug(&self, uid: &str) -> Result<Option<BugDetail>> {
         let Some(row) = self
             .store
-            .bugs(self.project_id, None, None)?
+            .findings(
+                self.project_id,
+                &nexus_store::FindingQuery {
+                    capability: Some("bughunter"),
+                    ..Default::default()
+                },
+            )?
             .into_iter()
             .find(|b| b.uid.eq_ignore_ascii_case(uid))
         else {
@@ -1220,13 +1235,13 @@ impl Engine {
         let fingerprint = row.fingerprint.clone();
         let evidence: Vec<CodeRef> = self
             .store
-            .bug_evidence(self.project_id, &row.uid)?
+            .finding_evidence(self.project_id, &row.uid)?
             .as_deref()
             .and_then(|j| serde_json::from_str(j).ok())
             .unwrap_or_default();
         let history = self
             .store
-            .bug_history(self.project_id, &row.uid)?
+            .finding_history(self.project_id, &row.uid)?
             .into_iter()
             .map(|e| BugEvent {
                 scan_uid: e.scan_uid,
@@ -1245,7 +1260,9 @@ impl Engine {
 
     /// Dismiss a finding. A human decision is sticky: a later scan will not re-open it.
     pub fn ignore_bug(&self, uid: &str) -> Result<bool> {
-        Ok(self.store.set_bug_status(self.project_id, uid, "IGNORED")?)
+        Ok(self
+            .store
+            .set_finding_status(self.project_id, uid, "IGNORED")?)
     }
 
     // ── impact ───────────────────────────────────────────────
@@ -1682,12 +1699,12 @@ fn detect_renames(
     renames
 }
 
-fn to_summary(r: nexus_store::BugRow) -> BugSummary {
+fn to_summary(r: nexus_store::FindingRow) -> BugSummary {
     BugSummary {
         uid: r.uid,
         slug: r.slug,
         title: r.title,
-        bug_type: r.bug_type,
+        bug_type: r.finding_type,
         component: r.component,
         severity: r.severity,
         confidence: r.confidence,

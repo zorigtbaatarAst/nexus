@@ -197,7 +197,11 @@ fn a_pre_nexus_project_directory_is_migrated_in_place() {
     // The rename moves a user's scans, findings and history. A silent failure here loses
     // all of it, and the symptom would be an empty index rather than an error.
     let root = fixture("legacy");
-    write(&root, "src/a/S.java", "package a;\npublic class S { public void go() {} }\n");
+    write(
+        &root,
+        "src/a/S.java",
+        "package a;\npublic class S { public void go() {} }\n",
+    );
     commit(&root);
 
     let (mut engine, _) = Engine::init(&root).expect("init");
@@ -207,17 +211,28 @@ fn a_pre_nexus_project_directory_is_migrated_in_place() {
 
     // Put it back the way a pre-Nexus install left it.
     fs::rename(root.join(".nexus"), root.join(".bughunter")).expect("rename dir");
-    fs::rename(root.join(".bughunter/nexus.db"), root.join(".bughunter/bughunter.db")).expect("rename db");
+    fs::rename(
+        root.join(".bughunter/nexus.db"),
+        root.join(".bughunter/bughunter.db"),
+    )
+    .expect("rename db");
     for tail in ["-wal", "-shm"] {
         let from = root.join(format!(".bughunter/nexus.db{tail}"));
         if from.exists() {
-            fs::rename(from, root.join(format!(".bughunter/bughunter.db{tail}"))).expect("rename wal");
+            fs::rename(from, root.join(format!(".bughunter/bughunter.db{tail}")))
+                .expect("rename wal");
         }
     }
 
     let engine = Engine::open(&root).expect("open migrates");
-    assert!(root.join(".nexus/nexus.db").exists(), "the directory and database move together");
-    assert!(!root.join(".bughunter").exists(), "and the old one is gone, not duplicated");
+    assert!(
+        root.join(".nexus/nexus.db").exists(),
+        "the directory and database move together"
+    );
+    assert!(
+        !root.join(".bughunter").exists(),
+        "and the old one is gone, not duplicated"
+    );
 
     let after = engine.status().expect("status");
     assert_eq!(after.files, before.files, "the index survives");
