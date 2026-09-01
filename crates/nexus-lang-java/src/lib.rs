@@ -40,7 +40,7 @@ impl LanguageAnalyzer for JavaAnalyzer {
     fn grammar_version(&self) -> &'static str {
         // Bump on any change to extraction or normalization, not only on a grammar upgrade:
         // this value forces a re-parse when content hashes would otherwise say "unchanged".
-        "tree-sitter-java/0.23.5+extract7"
+        "tree-sitter-java/0.23.5+extract8"
     }
 
     fn parse(&self, src: &SourceFile<'_>) -> Result<ParsedFile, LangError> {
@@ -265,6 +265,23 @@ fn walk_type(
     // Emitted after the field environment exists, because an accessor's signature is the
     // field's declared type and nothing else knows it.
     if lombok_getters || lombok_setters {
+        // Lombok does not generate an accessor the class already declares, and neither may
+        // this. `AbstractAntPagination` is @Data and hand-writes `getCurrentPage()` with real
+        // logic in it; emitting a second symbol with the same FQN does not create a duplicate,
+        // because the store upserts on it — it silently overwrites the real method's body and
+        // signature with an empty stub, and which one survives depends on an ordering a
+        // reformat can perturb. That is how a whitespace-only change came to report 169
+        // symbol changes.
+        let mut declared: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut mc = body.walk();
+        for m in body.children(&mut mc) {
+            if m.kind() == "method_declaration" {
+                if let Some(n) = field_text(m, "name", src) {
+                    declared.insert(n);
+                }
+            }
+        }
+
         let mut fc = body.walk();
         for m in body.children(&mut fc) {
             if m.kind() != "field_declaration" {
@@ -307,11 +324,15 @@ fn walk_type(
                 };
                 if lombok_getters {
                     let n = accessor_name("get", &fname, &simple);
-                    emit(n.clone(), format!("public {simple} {n}()"));
+                    if !declared.contains(&n) {
+                        emit(n.clone(), format!("public {simple} {n}()"));
+                    }
                 }
                 if lombok_setters {
                     let n = accessor_name("set", &fname, &simple);
-                    emit(n.clone(), format!("public void {n}({simple})"));
+                    if !declared.contains(&n) {
+                        emit(n.clone(), format!("public void {n}({simple})"));
+                    }
                 }
             }
         }
@@ -1594,6 +1615,62 @@ public class Rec {
         assert!(
             !m.iter().any(|f| f.contains("KIND") || f.contains("Kind")),
             "{m:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod lombok_collision_tests {
+    use super::*;
+
+    fn parse(src: &str) -> ParsedFile {
+        JavaAnalyzer::new()
+            .parse(&SourceFile {
+                path: "T.java",
+                text: src,
+            })
+            .expect("parse")
+    }
+
+    #[test]
+    fn a_hand_written_accessor_is_not_replaced_by_a_generated_stub() {
+        // Lombok does not generate what the class declares. Neither may this: the store
+        // upserts on FQN, so a second symbol with the same name overwrites the real
+        // method's body and signature rather than sitting beside it.
+        let p = parse(
+            r#"
+package mn.a;
+@Data
+public class Page {
+    protected int currentPage;
+    protected int pageSize;
+
+    public int getCurrentPage() {
+        return currentPage > 0 ? currentPage - 1 : 0;
+    }
+}
+"#,
+        );
+        let getters: Vec<_> = p
+            .symbols
+            .iter()
+            .filter(|s| s.fqn == "mn.a.Page#getCurrentPage()")
+            .collect();
+        assert_eq!(
+            getters.len(),
+            1,
+            "exactly one symbol may own this FQN, got {getters:#?}"
+        );
+        assert_ne!(
+            getters[0].body_hash,
+            hash(""),
+            "the surviving symbol must be the real method, not an empty generated stub"
+        );
+
+        // The field with no hand-written accessor is still generated for.
+        assert!(
+            p.symbols.iter().any(|s| s.fqn == "mn.a.Page#getPageSize()"),
+            "pageSize has no declared accessor, so it still needs one"
         );
     }
 }
