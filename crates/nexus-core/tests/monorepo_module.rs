@@ -191,3 +191,65 @@ public class VehicleController {
          stated, not left to be inferred from an empty list"
     );
 }
+
+/// An inherited method is declared once and called on every subtype. Without a supertype
+/// walk, a `@Data` base class makes every `child.getId()` in the codebase unresolvable.
+#[test]
+fn a_call_to_an_inherited_method_resolves_to_where_it_is_declared() {
+    let root = fixture("inherited");
+    write(
+        &root,
+        "build.gradle",
+        "dependencies { implementation 'org.springframework.boot:spring-boot-starter:3.5.0' }\n",
+    );
+    write(
+        &root,
+        "src/main/java/mn/autoland/model/BaseEntity.java",
+        "package mn.autoland.model;\n\n@Data\npublic class BaseEntity { private String id; }\n",
+    );
+    write(
+        &root,
+        "src/main/java/mn/autoland/model/Issue.java",
+        "package mn.autoland.model;\n\npublic class Issue extends BaseEntity { private String title; }\n",
+    );
+    write(
+        &root,
+        "src/main/java/mn/autoland/sales/IssueReader.java",
+        r#"
+package mn.autoland.sales;
+
+import mn.autoland.model.Issue;
+
+public class IssueReader {
+    public String idOf(Issue issue) {
+        return issue.getId();
+    }
+}
+"#,
+    );
+
+    let (mut engine, _) = Engine::open_or_init(&root).expect("init");
+    engine.scan().expect("scan");
+
+    // getId is declared on BaseEntity via @Data and called on Issue. The blast radius of
+    // changing it must include the caller, or an edit to a base class looks free.
+    let q = nexus_core::impact::ImpactQuery {
+        target: "BaseEntity#getId".into(),
+        direction: nexus_core::impact::Direction::Reverse,
+        max_depth: 5,
+        min_score: 0.0,
+        fan_out_cap: 200,
+        body_only: false,
+        limit: 50,
+    };
+    let report = match engine.impact(&q).expect("impact") {
+        nexus_core::report::Resolved::One(r) => r,
+        other => panic!("expected one match, got {other:?}"),
+    };
+
+    assert!(
+        report.items.iter().any(|i| i.fqn.contains("IssueReader")),
+        "a call to the inherited getId() must reach the accessor on BaseEntity; got {:?}",
+        report.items.iter().map(|i| &i.fqn).collect::<Vec<_>>()
+    );
+}

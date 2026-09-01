@@ -908,6 +908,26 @@ impl Store {
         // Computed once: it is a property of the index, not of any one edge.
         let owner = package_root(&project_packages);
 
+        // `extends`/`implements` hints are already qualified when the analyzer emits them,
+        // so the chain is walkable before any of it has been resolved.
+        let mut supertypes: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        {
+            let mut stmt = tx.prepare(
+                "SELECT s.fqn, e.dst_fqn_hint FROM symbol_edges e
+                 JOIN live_symbols s ON s.id = e.src_symbol_id
+                 WHERE e.project_id = ?1 AND e.edge_type IN ('extends','implements')
+                   AND e.dst_fqn_hint IS NOT NULL",
+            )?;
+            let rows = stmt.query_map(params![project_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (sub, sup) = row?;
+                supertypes.entry(sub).or_default().push(sup);
+            }
+        }
+
         let mut stats = ResolveStats {
             total: unresolved.len(),
             owner: owner.clone(),
@@ -962,6 +982,19 @@ impl Store {
                     }
                 }
                 _ => {
+                    // An inherited member is declared on a supertype and called on the
+                    // subtype, so `Issue#getId` names a method that exists — on
+                    // `BaseEntity`. Tried before the simple-name tier below because a
+                    // declared `extends` is evidence and a name collision is not.
+                    if let Some(dst) = through_supertypes(&hint, &supertypes, &by_prefix, &by_fqn) {
+                        stats.heuristic += 1;
+                        tx.execute(
+                            "UPDATE symbol_edges SET dst_symbol_id = ?2, resolution = 'heuristic', confidence = 0.85
+                             WHERE id = ?1",
+                            params![edge_id, dst],
+                        )?;
+                        continue;
+                    }
                     // Last resort: match on the simple name alone, and only when it is
                     // unique across the project. A wildcard import or a nested type means
                     // the package qualification guessed wrong, but the simple name is still
@@ -1808,6 +1841,61 @@ fn package_root(project_packages: &std::collections::HashSet<String>) -> Option<
     // Strictly more than half, so a tie between two owners yields nothing rather than a
     // coin flip that silently mislabels one of them.
     (hits * 2 > considered).then(|| root.to_string())
+}
+
+/// Find `Type#member` on a supertype of `Type`.
+///
+/// An inherited method is declared once and called on every subtype, so the hint names a
+/// method that genuinely exists — one level up. Without this walk a `@Data` base class makes
+/// every `child.getId()` in the codebase unresolvable, which was 193 of the 214 distinct
+/// unresolved accessors left after Lombok synthesis.
+///
+/// Breadth-first with a visited set, because `implements` makes the graph a lattice rather
+/// than a chain and a cycle in bad input must not hang a scan. Depth is capped: a hierarchy
+/// deeper than this is not a hierarchy, it is a mistake, and walking it forever to find out
+/// costs a scan.
+fn through_supertypes(
+    hint: &str,
+    supertypes: &std::collections::HashMap<String, Vec<String>>,
+    by_prefix: &std::collections::HashMap<String, Vec<i64>>,
+    by_fqn: &std::collections::HashMap<String, i64>,
+) -> Option<i64> {
+    const MAX_DEPTH: usize = 8;
+
+    let (ty, member) = hint.split_once('#')?;
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    seen.insert(ty);
+    let mut frontier: Vec<&str> = supertypes
+        .get(ty)
+        .map(|v| v.iter().map(String::as_str).collect())?;
+
+    for _ in 0..MAX_DEPTH {
+        let mut next: Vec<&str> = Vec::new();
+        for sup in frontier {
+            if !seen.insert(sup) {
+                continue;
+            }
+            let candidate = format!("{sup}#{member}");
+            if let Some(&id) = by_fqn.get(&candidate) {
+                return Some(id);
+            }
+            // A method FQN carries its parameter types and a call site does not, so the
+            // prefix map is what an inherited call actually matches. Ambiguity declines:
+            // two overloads inherited from the same supertype cannot be told apart here,
+            // and picking one would attribute the call to a method it may never reach.
+            if let Some([only]) = by_prefix.get(&candidate).map(Vec::as_slice) {
+                return Some(*only);
+            }
+            if let Some(more) = supertypes.get(sup) {
+                next.extend(more.iter().map(String::as_str));
+            }
+        }
+        if next.is_empty() {
+            return None;
+        }
+        frontier = next;
+    }
+    None
 }
 
 /// Whether a package the index does not contain still belongs to this project's owner.
