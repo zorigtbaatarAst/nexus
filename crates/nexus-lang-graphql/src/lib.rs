@@ -48,8 +48,11 @@ impl LanguageAnalyzer for GraphQlSchemaAnalyzer {
 
     fn parse(&self, src: &SourceFile<'_>) -> Result<ParsedFile, LangError> {
         let mut out = ParsedFile::default();
+        // The schema is the contract, and in a monorepo each service has its own. Without
+        // the module every service's Query.notifications is the same symbol.
+        let module = nexus_lang::module_of(src.path);
         for def in root_fields(src.text) {
-            let fqn = format!("graphql:{}.{}", def.type_name, def.field);
+            let fqn = nexus_types::graphql_fqn(module, &format!("{}.{}", def.type_name, def.field));
             out.symbols.push(RawSymbol {
                 kind: SymbolKind::Route,
                 name: def.field.clone(),

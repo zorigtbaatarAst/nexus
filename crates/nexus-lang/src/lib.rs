@@ -131,3 +131,74 @@ impl Registry {
             .collect()
     }
 }
+
+/// The module a source file belongs to, for namespacing symbols whose names are only
+/// unique within one deployable unit.
+///
+/// A GraphQL schema coordinate is the clearest case. `Query.notifications` is unique inside
+/// one service and says nothing across six of them: on a real monorepo, six services each
+/// declared it, `symbols` is `UNIQUE (project_id, fqn)`, and five resolvers were silently
+/// overwritten by the sixth — so every frontend calling it was wired to whichever service
+/// happened to be scanned last.
+///
+/// The key is the path above the source root, because that is the one boundary every JVM
+/// and Node layout agrees on: `sales/backend/src/main/java/…` and
+/// `sales/backend/src/main/resources/graphql/…` are the same module, which is what lets a
+/// schema and its resolver still meet.
+///
+/// A single-module project yields `""` and the caller emits exactly what it emits today.
+/// That is deliberate: the common case must not pay for the monorepo case, and every
+/// existing index stays joinable.
+pub fn module_of(path: &str) -> &str {
+    match path.find("/src/") {
+        Some(i) => &path[..i],
+        // A leading `src/` means the module *is* the repository root.
+        None => "",
+    }
+}
+
+#[cfg(test)]
+mod module_tests {
+    use super::module_of;
+
+    #[test]
+    fn a_schema_and_its_resolver_land_in_the_same_module() {
+        // They must, or the contract join stops working — which is the whole seam.
+        assert_eq!(
+            module_of("sales/backend/src/main/java/mn/a/C.java"),
+            "sales/backend"
+        );
+        assert_eq!(
+            module_of("sales/backend/src/main/resources/graphql/n.graphqls"),
+            "sales/backend"
+        );
+    }
+
+    #[test]
+    fn a_single_module_project_is_unnamespaced() {
+        // The common case keeps today's exact FQNs, so existing indexes stay joinable.
+        assert_eq!(module_of("src/main/java/mn/a/C.java"), "");
+        assert_eq!(module_of("build.gradle"), "");
+    }
+
+    #[test]
+    fn a_coordinate_survives_namespacing() {
+        use nexus_types::{graphql_coordinate, graphql_fqn};
+        let ns = graphql_fqn("sales/backend", "Query.notifications");
+        assert_eq!(ns, "graphql:sales/backend:Query.notifications");
+        assert_eq!(graphql_coordinate(&ns), Some("Query.notifications"));
+
+        let plain = graphql_fqn("", "Query.notifications");
+        assert_eq!(plain, "graphql:Query.notifications");
+        assert_eq!(graphql_coordinate(&plain), Some("Query.notifications"));
+        assert_eq!(graphql_coordinate("mn.a.C#m()"), None);
+    }
+
+    #[test]
+    fn sibling_services_are_told_apart() {
+        assert_ne!(
+            module_of("sales/backend/src/main/java/C.java"),
+            module_of("ceo/backend/src/main/java/C.java")
+        );
+    }
+}

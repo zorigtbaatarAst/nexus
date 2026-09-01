@@ -532,3 +532,38 @@ impl FindingStatus {
         )
     }
 }
+
+// ─────────────────────── GraphQL symbol naming ───────────────────────
+
+/// Build a GraphQL symbol FQN, namespaced by module when there is one.
+///
+/// Both the schema analyzer and the Java resolver analyzer call this, because a schema
+/// coordinate and the resolver that serves it must produce the *same* string or the seam
+/// stops joining. That is the whole reason it lives here rather than in either crate.
+pub fn graphql_fqn(module: &str, rest: &str) -> String {
+    if module.is_empty() {
+        format!("graphql:{rest}")
+    } else {
+        format!("graphql:{module}:{rest}")
+    }
+}
+
+/// The module inside a namespaced GraphQL FQN, if it carries one.
+pub fn graphql_module(fqn: &str) -> Option<&str> {
+    fqn.strip_prefix("graphql:")?
+        .rsplit_once(':')
+        .map(|(m, _)| m)
+}
+
+/// The schema coordinate inside a possibly-namespaced GraphQL FQN.
+///
+/// `graphql:sales/backend:Query.notifications` -> `Query.notifications`, and the
+/// unnamespaced form is returned unchanged. A frontend knows the coordinate it calls and
+/// not the service that serves it, so this is what its hint is matched on.
+pub fn graphql_coordinate(fqn: &str) -> Option<&str> {
+    let rest = fqn.strip_prefix("graphql:")?;
+    Some(match rest.rsplit_once(':') {
+        Some((_, coord)) => coord,
+        None => rest,
+    })
+}

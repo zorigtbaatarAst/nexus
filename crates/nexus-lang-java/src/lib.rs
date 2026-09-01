@@ -124,6 +124,7 @@ impl LanguageAnalyzer for JavaAnalyzer {
             package: &prefix,
             statics: &static_map,
             static_wildcards: &static_wildcards,
+            module: nexus_lang::module_of(src.path),
         };
 
         let mut cursor = root.walk();
@@ -143,6 +144,9 @@ struct Ctx<'a> {
     package: &'a str,
     statics: &'a HashMap<String, String>,
     static_wildcards: &'a [String],
+    /// The deployable unit this file belongs to. Only GraphQL route symbols use it: a
+    /// schema coordinate is unique inside one service and ambiguous across six.
+    module: &'a str,
 }
 
 fn type_kind(kind: &str) -> Option<SymbolKind> {
@@ -424,21 +428,23 @@ fn push_method(
     // Spring for GraphQL: the handler becomes reachable from a schema field, which is the
     // join key the frontend also points at. See docs/investigation.md §3.
     if let Some(field) = graphql_field(&annotations, &name, params, src) {
+        // Namespaced identically to the schema that declares it, or the two stop meeting.
+        let route_fqn = nexus_types::graphql_fqn(ctx.module, &field);
         out.symbols.push(RawSymbol {
             kind: SymbolKind::Route,
             name: field.clone(),
-            fqn: format!("graphql:{field}"),
+            fqn: route_fqn.clone(),
             parent_fqn: Some(owner.to_string()),
             signature: Some(format!("graphql {field}")),
             visibility: Some("public".into()),
             start_line: line,
             end_line: line,
-            sig_hash: hash(&format!("graphql:{field}")),
+            sig_hash: hash(&route_fqn),
             body_hash: hash(""),
             annotations: annotations.clone(),
         });
         out.edges.push(RawEdge {
-            src_fqn: format!("graphql:{field}"),
+            src_fqn: route_fqn,
             dst_hint: fqn.clone(),
             edge_type: EdgeType::Routes,
             site_line: line,

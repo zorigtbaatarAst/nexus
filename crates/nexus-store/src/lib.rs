@@ -860,6 +860,10 @@ impl Store {
         // Simple `Type#member` and bare `Type`, for the last-resort tier below.
         let mut by_simple: std::collections::HashMap<String, Vec<i64>> =
             std::collections::HashMap::new();
+        let mut by_graphql: std::collections::HashMap<String, Vec<i64>> =
+            std::collections::HashMap::new();
+        let mut route_modules: std::collections::HashMap<i64, String> =
+            std::collections::HashMap::new();
         {
             let mut stmt = tx.prepare("SELECT id, fqn FROM live_symbols WHERE project_id = ?1")?;
             let rows = stmt.query_map(params![project_id], |r| {
@@ -876,18 +880,32 @@ impl Store {
                         .push(id);
                 }
                 by_simple.entry(simple_key(&fqn)).or_default().push(id);
+                // A frontend knows the coordinate it calls and not the service that serves
+                // it, so route symbols are also reachable by coordinate alone.
+                if let Some(coord) = nexus_types::graphql_coordinate(&fqn) {
+                    by_graphql.entry(coord.to_string()).or_default().push(id);
+                    // Remembered per symbol so a seam edge can prefer the service that
+                    // ships alongside its caller instead of fanning out over all six.
+                    if let Some(m) = nexus_types::graphql_module(&fqn) {
+                        route_modules.insert(id, m.to_string());
+                    }
+                }
                 by_fqn.insert(fqn, id);
             }
         }
 
-        let unresolved: Vec<(i64, String, String)> = {
+        let unresolved: Vec<(i64, String, String, String)> = {
             let mut stmt = tx.prepare(
-                "SELECT id, dst_fqn_hint, edge_type FROM symbol_edges
-                 WHERE project_id = ?1 AND dst_symbol_id IS NULL AND dst_fqn_hint IS NOT NULL",
+                "SELECT e.id, e.dst_fqn_hint, e.edge_type, f.path
+                 FROM symbol_edges e
+                 JOIN symbols s ON s.id = e.src_symbol_id
+                 JOIN files f ON f.id = s.file_id
+                 WHERE e.project_id = ?1 AND e.dst_symbol_id IS NULL
+                   AND e.dst_fqn_hint IS NOT NULL",
             )?;
             let rows = stmt
                 .query_map(params![project_id], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
                 })?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             rows
@@ -933,7 +951,7 @@ impl Store {
             owner: owner.clone(),
             ..Default::default()
         };
-        for (edge_id, hint, edge_type) in unresolved {
+        for (edge_id, hint, edge_type, src_path) in unresolved {
             if let Some(&dst) = by_fqn.get(&hint) {
                 // A GraphQL field is a real contract that both sides name identically —
                 // an exact join, not a guess, so it is labelled `contract`.
@@ -982,6 +1000,70 @@ impl Store {
                     }
                 }
                 _ => {
+                    // A frontend names a schema coordinate; six services may serve one.
+                    // Exactly one candidate is the contract join it has always been. More
+                    // than one is a genuine ambiguity — the frontend does not say which
+                    // service it talks to — so every candidate gets an edge at reduced
+                    // confidence rather than the scan picking a winner, which is what
+                    // silently wired every caller to whichever service was scanned last.
+                    if hint.starts_with("graphql:") {
+                        if let Some(coord) = nexus_types::graphql_coordinate(&hint) {
+                            if let Some(ids) = by_graphql.get(coord) {
+                                // A frontend and the backend it talks to ship together:
+                                // `backoffice/frontend` calls `backoffice/backend`. When
+                                // exactly one candidate shares the caller's top-level
+                                // directory that is the join, and fanning out over five
+                                // other services instead would bury it under noise. When
+                                // none or several do, the honest answer is still every
+                                // candidate at reduced confidence.
+                                let near: Vec<i64> = ids
+                                    .iter()
+                                    .filter(|id| {
+                                        route_modules
+                                            .get(id)
+                                            .is_some_and(|m| same_service(m, &src_path))
+                                    })
+                                    .copied()
+                                    .collect();
+                                let ids: &Vec<i64> = if near.len() == 1 { &near } else { ids };
+                                match ids.as_slice() {
+                                    [] => {}
+                                    [only] => {
+                                        stats.contract += 1;
+                                        tx.execute(
+                                            "UPDATE symbol_edges SET dst_symbol_id = ?2, resolution = 'contract', confidence = 0.95
+                                             WHERE id = ?1",
+                                            params![edge_id, only],
+                                        )?;
+                                        continue;
+                                    }
+                                    many => {
+                                        let conf = 1.0 / many.len() as f64;
+                                        stats.ambiguous += 1;
+                                        for (n, dst) in many.iter().enumerate() {
+                                            if n == 0 {
+                                                tx.execute(
+                                                    "UPDATE symbol_edges SET dst_symbol_id = ?2, resolution = 'heuristic', confidence = ?3
+                                                     WHERE id = ?1",
+                                                    params![edge_id, dst, conf],
+                                                )?;
+                                            } else {
+                                                tx.execute(
+                                                    "INSERT INTO symbol_edges (project_id, src_symbol_id, dst_symbol_id, dst_fqn_hint,
+                                                                               edge_type, resolution, confidence, site_line, last_seen_scan_id)
+                                                     SELECT project_id, src_symbol_id, ?2, dst_fqn_hint, ?3, 'heuristic', ?4,
+                                                            site_line, last_seen_scan_id
+                                                     FROM symbol_edges WHERE id = ?1",
+                                                    params![edge_id, dst, edge_type, conf],
+                                                )?;
+                                            }
+                                        }
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // An inherited member is declared on a supertype and called on the
                     // subtype, so `Issue#getId` names a method that exists — on
                     // `BaseEntity`. Tried before the simple-name tier below because a
@@ -1129,6 +1211,35 @@ impl Store {
         target: &str,
         limit: usize,
     ) -> Result<Vec<SymbolRef>> {
+        // A GraphQL target is checked first: a namespaced FQN contains a slash, and the
+        // path branch below would take `graphql:sales/backend:Query.x` for a file. Callers
+        // also name the coordinate they know — `graphql:Query.vehicles` — without the
+        // service that serves it, which is the only form that existed before modules and
+        // the only one a frontend developer can be expected to type.
+        if let Some(coord) = target.strip_prefix("graphql:") {
+            let coord = coord.rsplit_once(':').map_or(coord, |(_, c)| c);
+            let mut stmt = self.conn.prepare(
+                "SELECT s.id, s.fqn, s.kind, f.path, s.start_line
+                 FROM live_symbols s JOIN files f ON f.id = s.file_id
+                 WHERE s.project_id = ?1
+                   AND (s.fqn = ?2 OR s.fqn = 'graphql:' || ?3
+                        OR s.fqn LIKE 'graphql:%:' || ?3)
+                 ORDER BY LENGTH(s.fqn) LIMIT ?4",
+            )?;
+            let rows = stmt
+                .query_map(params![project_id, target, coord, limit as i64], |r| {
+                    Ok(SymbolRef {
+                        id: r.get(0)?,
+                        fqn: r.get(1)?,
+                        kind: r.get(2)?,
+                        file_path: r.get(3)?,
+                        start_line: r.get(4)?,
+                    })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            return Ok(rows);
+        }
+
         let looks_like_path =
             target.contains('/') || target.ends_with(".java") || target.ends_with(".ts");
         let sql = if looks_like_path {
@@ -1896,6 +2007,20 @@ fn through_supertypes(
         frontier = next;
     }
     None
+}
+
+/// Whether a route's module and a calling file belong to the same service.
+///
+/// Compared on the top-level directory, because that is the unit a monorepo deploys:
+/// `backoffice/backend` serves `backoffice/frontend/src/lib/graphql/notification.ts`. A
+/// single-module project has no top-level directory to compare and matches nothing, which
+/// is correct — there is only one candidate there anyway.
+fn same_service(route_module: &str, caller_path: &str) -> bool {
+    fn head(s: &str) -> &str {
+        s.split('/').next().unwrap_or("")
+    }
+    let a = head(route_module);
+    !a.is_empty() && a == head(caller_path)
 }
 
 /// Whether a package the index does not contain still belongs to this project's owner.

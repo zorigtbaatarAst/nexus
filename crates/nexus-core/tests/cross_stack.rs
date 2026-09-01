@@ -128,7 +128,9 @@ fn a_backend_change_reaches_the_frontend_through_the_graphql_seam() {
 
     for expected in [
         "mn.sales.vehicle.VehicleGraphQLController#vehicles(AntPageable)",
-        "graphql:Query.vehicles",
+        // Namespaced by module: the fixture's backend is `backend/`, and six services in
+        // one repository cannot all own `Query.vehicles`.
+        "graphql:backend:Query.vehicles",
         "graphql:op:Vehicles",
         "frontend/src/app/vehicles/page#VehiclesPage",
     ] {
