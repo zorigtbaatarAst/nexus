@@ -163,6 +163,12 @@ pub fn run(
     let (tests, items): (Vec<_>, Vec<_>) =
         items.into_iter().partition(|i| is_test(&i.file, &i.fqn));
 
+    // A symbol nothing reaches is not "uncovered" in any useful sense — it is unused, or
+    // an entry point, and saying "no test covers this" about it would be noise. The claim
+    // is only worth making about code something actually depends on.
+    let uncovered =
+        matches!(q.direction, Direction::Reverse) && tests.is_empty() && !items.is_empty();
+
     let mut items = items;
     items.truncate(q.limit);
 
@@ -183,6 +189,7 @@ pub fn run(
             .collect(),
         items,
         tests,
+        uncovered,
         crossed_seam,
         truncated_at,
         visited,

@@ -153,6 +153,12 @@ pub struct ImpactReport {
     pub seeds: Vec<SeedRef>,
     pub items: Vec<ImpactItem>,
     pub tests: Vec<ImpactItem>,
+    /// Reverse queries only: nothing in the index that looks like a test reaches this
+    /// symbol. Stated as a field rather than left to be inferred from an empty list,
+    /// because it is the answer most likely to change what happens next and an absent
+    /// thing is the easiest kind to not notice. Always `false` for a forward query, where
+    /// the tests list answers a different question.
+    pub uncovered: bool,
     pub crossed_seam: usize,
     /// Nodes whose fan-out exceeded the cap. Reported, never silently dropped: returning
     /// 200 of 3,000 and calling it the impact set is the quiet lie that makes a tool

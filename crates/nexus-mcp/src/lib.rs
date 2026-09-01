@@ -285,7 +285,10 @@ impl Nexus {
         description = "Blast radius: who breaks if this symbol changes, or with forward=true \
                        what it reaches. Crosses the frontend/backend seam, so a backend service \
                        method reaches the UI components that render it. Every result carries the \
-                       edge chain that produced it and the weakest confidence along that chain."
+                       edge chain that produced it and the weakest confidence along that chain. \
+                       `uncovered: true` means no test in the index reaches this symbol while \
+                       other code depends on it — a change here will not fail loudly, so treat \
+                       it as the strongest reason to be careful that this tool can give you."
     )]
     async fn nexus_get_impact(
         &self,

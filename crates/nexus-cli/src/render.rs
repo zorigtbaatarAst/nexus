@@ -434,7 +434,18 @@ pub fn impact(
     }
 
     writeln!(w, "  {} affected symbols", r.items.len())?;
-    writeln!(w, "  {} related tests", r.tests.len())?;
+    // A zero in a list of counts is skimmed past. The whole value of this answer is that
+    // it changes what someone does next, so it is stated rather than counted.
+    if r.uncovered {
+        writeln!(
+            w,
+            "  {} {}",
+            st.warn("no test reaches this"),
+            st.dim("— a change here fails silently")
+        )?;
+    } else {
+        writeln!(w, "  {} related tests", r.tests.len())?;
+    }
     if r.crossed_seam > 0 {
         writeln!(
             w,

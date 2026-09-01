@@ -139,3 +139,55 @@ public class BaseEntity {
         "with the sibling module present there is nothing unscanned to report"
     );
 }
+
+/// Coverage is a pre-edit signal, so its absence has to be stated rather than counted.
+/// The data was always in the impact report; nothing announced it.
+#[test]
+fn code_no_test_reaches_says_so() {
+    let root = fixture("uncovered");
+    service_module_only(&root);
+    // A caller, so the target is depended upon — otherwise "no test covers this" is noise
+    // about something nothing uses.
+    write(
+        &root,
+        "src/main/java/mn/autoland/sales/VehicleController.java",
+        r#"
+package mn.autoland.sales;
+
+public class VehicleController {
+    private final VehicleService service;
+
+    public Object show(String id) {
+        return service.load(id);
+    }
+}
+"#,
+    );
+
+    let (mut engine, _) = Engine::open_or_init(&root).expect("init");
+    engine.scan().expect("scan");
+
+    let q = nexus_core::impact::ImpactQuery {
+        target: "VehicleService#load".into(),
+        direction: nexus_core::impact::Direction::Reverse,
+        max_depth: 5,
+        min_score: 0.0,
+        fan_out_cap: 200,
+        body_only: false,
+        limit: 50,
+    };
+    let report = match engine.impact(&q).expect("impact") {
+        nexus_core::report::Resolved::One(r) => r,
+        other => panic!("expected one match, got {other:?}"),
+    };
+
+    assert!(
+        !report.items.is_empty(),
+        "the controller depends on this method, so something is affected"
+    );
+    assert!(
+        report.uncovered,
+        "no test reaches VehicleService#load and something depends on it — that must be \
+         stated, not left to be inferred from an empty list"
+    );
+}
