@@ -1113,15 +1113,23 @@ impl Engine {
                 .store
                 .changes_for_scan(*since_scan, Some("symbol"))?
                 .into_iter()
-                .filter_map(|(_, _, target, _)| target)
-                .map(|fqn| ChangedSymbol {
-                    path: symbols
-                        .iter()
-                        .find(|s| s.fqn == fqn)
-                        .map(|s| s.file.clone())
-                        .unwrap_or_default(),
-                    fqn,
-                    kind: ChangeKind::BodyChanged,
+                // The kind is what a capability decides on — an API break ripples to every
+                // caller where a body edit does not — and it is already in the ledger.
+                // Hardcoding BODY_CHANGED here made every rule that asks "did the contract
+                // move?" permanently unreachable, silently, with no test able to see it
+                // because no capability asked until now.
+                .filter_map(|(_, change_type, target, detail)| {
+                    let fqn = target?;
+                    let kind = ChangeKind::from_ledger(&change_type, detail.as_deref())?;
+                    Some(ChangedSymbol {
+                        path: symbols
+                            .iter()
+                            .find(|s| s.fqn == fqn)
+                            .map(|s| s.file.clone())
+                            .unwrap_or_default(),
+                        fqn,
+                        kind,
+                    })
                 })
                 .collect(),
             _ => Vec::new(),

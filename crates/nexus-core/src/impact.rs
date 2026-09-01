@@ -197,7 +197,12 @@ pub fn run(
     })
 }
 
-fn is_test(file: &str, fqn: &str) -> bool {
+/// Whether a symbol is test code.
+///
+/// Public because Review asks the same question — "does anything test this?" — and two
+/// definitions of what a test is would let the impact report and the review capability
+/// disagree about the same symbol.
+pub fn is_test(file: &str, fqn: &str) -> bool {
     file.contains("/test/")
         || file.contains("/tests/")
         || file.ends_with(".test.ts")

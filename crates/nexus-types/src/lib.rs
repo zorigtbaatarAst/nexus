@@ -363,6 +363,18 @@ pub enum ChangeKind {
 }
 
 impl ChangeKind {
+    /// Every kind, for exhaustive tests. Adding a variant without adding it here makes the
+    /// round-trip test fail, which is the point.
+    pub const ALL: &'static [ChangeKind] = &[
+        ChangeKind::ApiChanged,
+        ChangeKind::BodyChanged,
+        ChangeKind::ContractChanged,
+        ChangeKind::ApiAndBodyChanged,
+        ChangeKind::Added,
+        ChangeKind::Deleted,
+        ChangeKind::Renamed,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             ChangeKind::ApiChanged => "API_CHANGED",
@@ -373,6 +385,27 @@ impl ChangeKind {
             ChangeKind::Deleted => "DELETED",
             ChangeKind::Renamed => "RENAMED",
         }
+    }
+
+    /// Reconstruct the kind from the two columns the ledger splits it across.
+    ///
+    /// `change_type` and `detail` are written by `change_type()` and `detail()` below; this
+    /// is their joint inverse, and it lives beside them so the three cannot drift. Without
+    /// it, everything read back out of the ledger was `BODY_CHANGED`, which made every rule
+    /// that asks "did the contract move?" silently unreachable.
+    pub fn from_ledger(change_type: &str, detail: Option<&str>) -> Option<Self> {
+        Some(match change_type {
+            "added" => ChangeKind::Added,
+            "deleted" => ChangeKind::Deleted,
+            "renamed" => ChangeKind::Renamed,
+            "modified" => match detail {
+                Some("signature") => ChangeKind::ApiChanged,
+                Some("annotations") => ChangeKind::ContractChanged,
+                Some("both") => ChangeKind::ApiAndBodyChanged,
+                _ => ChangeKind::BodyChanged,
+            },
+            _ => return None,
+        })
     }
 
     /// The `changes.detail` column: which component of the symbol moved.
@@ -582,4 +615,33 @@ pub fn graphql_coordinate(fqn: &str) -> Option<&str> {
         Some((_, coord)) => coord,
         None => rest,
     })
+}
+
+#[cfg(test)]
+mod change_kind_tests {
+    use super::ChangeKind;
+
+    #[test]
+    fn every_kind_survives_the_ledger() {
+        // The ledger splits a kind across `change_type` and `detail`, and reading it back
+        // wrongly is silent: every capability simply sees BODY_CHANGED and every rule that
+        // asks about a contract change becomes unreachable. That is what happened, and this
+        // is what would have caught it.
+        for &k in ChangeKind::ALL {
+            let round = ChangeKind::from_ledger(k.change_type().as_str(), k.detail());
+            assert_eq!(
+                round,
+                Some(k),
+                "{k:?} did not survive: stored as ({}, {:?})",
+                k.change_type().as_str(),
+                k.detail()
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_change_type_yields_nothing_rather_than_a_default() {
+        // Defaulting would put a wrong kind in front of a rule that acts on it.
+        assert_eq!(ChangeKind::from_ledger("teleported", None), None);
+    }
 }

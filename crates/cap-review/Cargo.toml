@@ -1,0 +1,12 @@
+[package]
+name = "cap-review"
+description = "Review: is this change safe, judged by the graph and the history rather than by taste."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nexus-core.workspace = true
+nexus-types.workspace = true
+serde_json.workspace = true

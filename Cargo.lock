@@ -153,6 +153,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-review"
+version = "0.2.0"
+dependencies = [
+ "nexus-core",
+ "nexus-types",
+ "serde_json",
+]
+
+[[package]]
 name = "cc"
 version = "1.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -789,6 +798,7 @@ dependencies = [
  "anyhow",
  "cap-architect",
  "cap-bughunter",
+ "cap-review",
  "clap",
  "nexus-core",
  "nexus-mcp",
@@ -864,6 +874,7 @@ dependencies = [
  "anyhow",
  "cap-architect",
  "cap-bughunter",
+ "cap-review",
  "nexus-core",
  "rmcp",
  "schemars",

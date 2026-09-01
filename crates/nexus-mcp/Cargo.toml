@@ -10,6 +10,7 @@ repository.workspace = true
 nexus-core.workspace = true
 cap-bughunter.workspace = true
 cap-architect.workspace = true
+cap-review.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

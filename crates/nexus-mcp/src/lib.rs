@@ -15,6 +15,7 @@ pub mod budget;
 
 use cap_architect::Architect as ArchitectCapability;
 use cap_bughunter::BugHunter as BugHunterCapability;
+use cap_review::Review as ReviewCapability;
 use nexus_core::capability::Scope;
 use nexus_core::impact::{Direction, ImpactQuery};
 use nexus_core::Engine;
@@ -161,6 +162,7 @@ impl Nexus {
                 // compiling them in, which is what lets BugHunter ship separately.
                 e.register_capability(Box::new(BugHunterCapability::new()));
                 e.register_capability(Box::new(ArchitectCapability::new()));
+                e.register_capability(Box::new(ReviewCapability::new()));
                 *guard = Some(e);
             }
             let e = guard

@@ -12,6 +12,7 @@ mod render;
 
 use cap_architect::Architect;
 use cap_bughunter::BugHunter;
+use cap_review::Review;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use nexus_core::capability::Scope;
 use nexus_core::impact::{Direction, ImpactQuery};
@@ -574,6 +575,7 @@ fn open(root: &std::path::Path) -> Result<Engine, EngineError> {
     let mut engine = Engine::open(root)?;
     engine.register_capability(Box::new(BugHunter::new()));
     engine.register_capability(Box::new(Architect::new()));
+    engine.register_capability(Box::new(Review::new()));
     Ok(engine)
 }
 
@@ -581,6 +583,7 @@ fn open_or_init(root: &std::path::Path) -> Result<(Engine, bool), EngineError> {
     let (mut engine, fresh) = Engine::open_or_init(root)?;
     engine.register_capability(Box::new(BugHunter::new()));
     engine.register_capability(Box::new(Architect::new()));
+    engine.register_capability(Box::new(Review::new()));
     Ok((engine, fresh))
 }
 
