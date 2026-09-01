@@ -9,12 +9,20 @@ affected region only.
 
 > **Nexus understands the project; capabilities use that understanding.**
 
-**BugHunter** is the first capability: deterministic bug detection. It works on its own and
-through Nexus, and it is the shape every later capability takes — read the index, return
-findings, get identity, lifecycle and history for free.
+**Three capabilities read that one index**, one for each moment of working with a coding agent:
+
+| Moment | Capability | The question it answers |
+|---|---|---|
+| the first scan | **Architect** | What is this project built from, and what does working in it lack? |
+| after an edit | **Review** | What does this change reach, and what covers it? |
+| a suspected bug | **BugHunter** | Where is it, and what proves it? |
+
+Each is a crate that depends on the platform and nothing else. Each returns findings and gets
+identity, lifecycle and history for free — so the same observation next week is recognised
+rather than repeated.
 
 > **Status: working, incomplete.** Scanning, change detection, impact across the
-> frontend/backend seam, four deterministic rules with the full finding lifecycle, persistent
+> frontend/backend seam, three capabilities with the full finding lifecycle, persistent
 > memory, and an MCP server. Nothing is verified by reproduction yet, and every surface says
 > so. See [`docs/roadmap.md`](docs/roadmap.md).
 
@@ -94,7 +102,7 @@ nexus scan             index files, symbols, dependencies → establish a baseli
 nexus rescan           diff against the baseline → changed symbols → impact
 nexus impact <target>  blast radius of a symbol, a file or a name — across the stack
 nexus graph            dependency graph size and how much of it resolved
-nexus analyze [cap]    run a capability (BugHunter by default)
+nexus analyze [cap]    run a capability: architect | review | bughunter
 nexus findings         findings from every capability
 nexus ask <question>   changed · affected X · known X · facts · next
 nexus fact <key> <..>  remember something for the next session
@@ -102,6 +110,26 @@ nexus mcp              run as an MCP server for Claude Code, Codex or Copilot
 bughunter investigate  a described screenshot → UI anchor → across the seam → suspects
 bughunter verify       generate a reproduction test, run it, run it on the baseline, judge
 ```
+
+### The loop
+
+```
+nexus scan                     → Architect: what this is, and what it lacks
+  … the agent edits something …
+nexus rescan                     what moved, down to the symbol
+nexus analyze review --changed → Review: what it reaches, and what covers it
+nexus analyze bughunter        → BugHunter, when a bug is suspected
+```
+
+**Architect** runs automatically with the first scan. It reports a datastore with no MCP
+server configured to reach it, a project with no CI, and — the one that invalidates every
+other answer — a scan that is looking at one module of something larger.
+
+**Review** runs on what changed and nothing else. It reports a change no test reaches, a
+contract change that reaches frontend code nobody touched, and a signature whose callers did
+not move with it. None of those are visible in the diff, because none of them are in the files
+that were edited. It has no opinion about naming, formatting or structure: those are taste,
+and taste is what this deliberately stays out of.
 
 There are two entry points. `rescan` answers *what did this commit break*. `investigate`
 answers the way bugs actually arrive — someone points at a screen and says *this number is
