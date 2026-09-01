@@ -48,7 +48,11 @@ pub struct ScanReport {
     pub symbols_indexed: usize,
     pub edges_total: usize,
     pub edges_resolved: usize,
+    /// A third-party library, correctly outside the index. ADR-017.
     pub edges_external: usize,
+    /// Code this project owns that was not scanned — a sibling module of the same
+    /// monorepo. Separate from `edges_external` because an edit here can break it.
+    pub edges_sibling: usize,
     pub health: Health,
     pub warnings: Vec<String>,
     pub duration_ms: u128,
@@ -162,8 +166,11 @@ pub struct ImpactReport {
 pub struct GraphReport {
     pub edges_total: i64,
     pub edges_resolved: i64,
-    /// Pointing at a library or an unscanned sibling module. Correctly outside the index.
+    /// A third-party library, correctly outside the index. ADR-017.
     pub edges_external: i64,
+    /// Code this project owns that was not scanned. Fixable by widening the scan, which
+    /// is exactly what makes it worth separating from `edges_external`.
+    pub edges_sibling: i64,
     pub by_resolution: Vec<(String, i64)>,
 }
 

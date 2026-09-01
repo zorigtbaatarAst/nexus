@@ -51,7 +51,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Detect the project, create .bughunter/, migrate the database
+    /// Detect the project, create .nexus/, migrate the database
     Init,
     /// Full scan: index files and symbols, and establish the baseline
     Scan,
@@ -224,8 +224,15 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                 render::banner(&mut out, &st)?;
                 render::profile(&mut out, &st, &profile)?;
                 writeln!(out)?;
-                writeln!(out, "Initialized {}/.bughunter", root.display())?;
-                writeln!(out, "  next: bughunter scan")?;
+                // The directory is named once, in nexus-core. Spelling it here again is how
+                // it came to report a directory the tool has not created since the rename.
+                writeln!(
+                    out,
+                    "Initialized {}/{}",
+                    root.display(),
+                    nexus_core::NEXUS_DIR
+                )?;
+                writeln!(out, "  next: {} scan", render::binary_name())?;
             });
         }
 

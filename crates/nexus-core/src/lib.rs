@@ -25,7 +25,7 @@ pub mod project;
 pub mod report;
 pub mod walk;
 
-pub use engine::{Engine, EngineError, Result, DB_FILE, NEXUS_DIR};
+pub use engine::{Engine, EngineError, Result, DB_FILE, NEXUS_DIR, SIBLING_WARN_FLOOR};
 pub use report::*;
 
 /// Re-exported so adapters can name storage row aliases without taking a dependency on
