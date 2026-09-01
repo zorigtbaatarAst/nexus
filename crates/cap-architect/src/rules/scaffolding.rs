@@ -53,9 +53,12 @@ impl Rule for NoContinuousIntegration {
         }
 
         // The finding is about something absent, so it anchors on the file that would have
-        // driven it. Pointing at nothing is not evidence, and a finding with no evidence is
-        // rejected at the platform boundary anyway — ADR-021.
-        let anchor = build_file(ctx).unwrap_or_else(|| "README.md".to_string());
+        // driven it. If there is no such file in the index there is nowhere honest to point,
+        // and a guess at `README.md` would be evidence naming a file that may not exist —
+        // worse than saying nothing. ADR-021.
+        let Some(anchor) = build_file(ctx) else {
+            return Vec::new();
+        };
         let (file, line) = split_evidence(&anchor);
 
         vec![Finding {
@@ -162,6 +165,15 @@ mod tests {
             &["build.gradle", ".github/workflows/ci.yml"],
             &profile(Some("gradle")),
         );
+        assert!(found.is_empty(), "{found:#?}");
+    }
+
+    #[test]
+    fn no_build_file_in_the_index_means_nowhere_to_point() {
+        // A build system was detected but its file is not indexed — before the first scan,
+        // for instance. Guessing at a filename would be evidence naming a file that may
+        // not exist.
+        let found = run(&["src/main/java/A.java"], &profile(Some("gradle")));
         assert!(found.is_empty(), "{found:#?}");
     }
 

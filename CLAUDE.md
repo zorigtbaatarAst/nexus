@@ -62,7 +62,9 @@ nexus-lang-java  tree-sitter-java: symbols, sig_hash, body_hash, Spring pack
 nexus-lang-ts    TypeScript/TSX + the GraphQL operations that cross the seam
 nexus-lang-graphql  indexes .graphqls — the schema is the contract, not the annotations
 nexus-core       the Engine: index, graph, change detection, impact, facts, finding lifecycle
-cap-bughunter    detectors only. Depends on nexus-core and nothing else
+cap-bughunter    BugHunter's detectors. Depends on nexus-core and nothing else
+cap-architect    Architect: what the project is, and what working in it lacks
+cap-review       Review: what a change reaches, and what covers it
 nexus-mcp        rmcp adapter. deserialize -> one Engine call -> serialize
 nexus-cli        composition root: parse flags, open store, register capabilities, dispatch
 ```
@@ -74,9 +76,13 @@ belongs in `nexus-core`.
 `Capability` (`nexus-core/src/capability.rs`) is the one extension point: it is handed a
 `ProjectContext` snapshot plus a `Scope`, and returns `Finding`s. Nexus owns identity,
 lifecycle, storage and presentation; a capability owns only rules. Capabilities are
-registered by the composition root, never compiled into the core. BugHunter currently ships
-four detectors (`crates/cap-bughunter/src/detectors/`): `TransactionalNonPublic`,
-`SelfInvocation`, `OrphanOperation`, `HardcodedSecret`.
+registered by the composition root, never compiled into the core. Three capabilities ship, one per moment of the loop: **Architect** at the first scan (what the
+project is, what working in it lacks), **Review** after an edit (what it reaches, what covers
+it), **BugHunter** for a suspected defect. Their rules live in `crates/cap-*/src/`.
+
+Two capability outputs are *advisory* rather than defects — a recommendation is still a
+finding, with evidence and a lifecycle (ADR-021), and anything the platform has no opinion
+about rides in the `capability_data` JSON column.
 
 State lives in the scanned project's `.nexus/` (`nexus.db`, `config.toml`, `policy.toml`),
 not here. Nexus writes `.nexus/.gitignore` itself.

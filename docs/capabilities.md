@@ -26,6 +26,40 @@ pub trait Capability: Send + Sync {
 `id` is stored on every finding it produces. **Renaming it orphans them**, so it is chosen
 once.
 
+## The three that exist
+
+| Capability | Prefix | Moment | Reports |
+|---|---|---|---|
+| `architect` | `ARC` | the first scan | what the project is built from and what working in it lacks |
+| `review` | `REV` | after an edit | what a change reaches and what covers it |
+| `bughunter` | `BUG` | a suspected defect | Spring proxy mistakes, orphan GraphQL fields, committed credentials |
+
+Architect returns nothing under a narrowed scope — "this project has no CI" is not a statement
+about three edited files. Review returns nothing when nothing changed. Neither is a special
+case in the platform; both are the capability deciding it has nothing to say, which is always
+available to one.
+
+## Advisory findings
+
+A recommendation is a finding. Architect's output is not a defect — "MongoDB is used here and
+no MongoDB MCP server is configured" describes something the project *lacks* — and it still
+carries evidence, still has identity across scans, and still becomes `FIXED` when the
+situation is resolved and `REGRESSED` when it comes back. ADR-021.
+
+Two things change for an advisory rule, and both are load-bearing:
+
+- **Evidence anchors where the missing thing belongs.** No CI points at the build file CI
+  would have invoked; a datastore without tooling points at the line that proved the
+  datastore. A rule that cannot name such a place does not ship. The evidence requirement is
+  *not* relaxed — a finding with none is rejected at the boundary whatever produced it.
+- **`severity` and `confidence` answer a different question.** For a defect they mean "how
+  bad" and "how sure this is real". For an advisory they mean "how much this matters" and
+  "how sure the rule is that the situation applies".
+
+Anything a capability needs to carry that the platform has no opinion about goes in
+`capability_data`, a JSON column the store writes, reads and never interprets. It is excluded
+from the fingerprint: rewording a recommendation must not invent a second finding.
+
 ## What a capability is given
 
 `ProjectContext` is a snapshot, not the store. That keeps capabilities pure and testable, and
@@ -40,6 +74,7 @@ reach the database would grow queries the CLI cannot answer.
 | `changed` | what moved in the scan under analysis |
 | `commit` | the revision this snapshot describes |
 | `by_fqn` | an index, built once — scanning the symbol list per edge turns a linear pass quadratic |
+| `profile` | what `detect` already established: languages, frameworks, build system, datastores, each with the file and line that proved it. `None` before the first scan, which a rule must tolerate rather than assume away |
 
 ## Scope, and why narrowing is not optional
 

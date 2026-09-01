@@ -208,6 +208,23 @@ that is hard to attribute.
   the index; counting it as a failure hides real bugs inside a large constant. See
   [ADR-017](docs/architecture-decisions.md#adr-017-external-is-a-resolution-outcome-not-a-failure).
 
+- **A changed symbol's `ChangeKind` was hardcoded, and nothing could see it.**
+  `Engine::analyze` built every `ChangedSymbol` with `kind: BodyChanged`, discarding what the
+  ledger knew — so every capability rule asking "did the contract move?" was unreachable, with
+  no error anywhere. It survived because BugHunter never looks at `ChangeKind`; the second
+  capability found it in an afternoon. The kind is stored across two columns, `change_type`
+  and `detail`, and `ChangeKind::from_ledger` is their joint inverse, kept beside the two
+  functions that write it. **A value written by one function and read by another that is not
+  its inverse is a silent-failure machine** — pin the round trip with a test over every
+  variant.
+
+- **An advisory finding still needs `file:line`.** A rule about something the project *lacks*
+  has no obvious line, and the temptation is to relax the evidence requirement for it. Do not:
+  anchor on where the missing thing belongs — the build file CI would have invoked, the
+  compose line that proved the datastore — and if no such place is in the index, emit nothing.
+  A guessed filename is evidence naming a file that may not exist, which is worse than
+  silence. ADR-021.
+
 - **`sibling` is not `external` either.** The same reasoning applied twice: an edge to a
   module of *this* project that was not scanned is outside the index, but it is code an edit
   here can break and a wider scan resolves. Both were `external` until 2026-09-01, and on a

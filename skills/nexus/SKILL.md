@@ -1,8 +1,8 @@
 ---
 name: nexus
-description: "Use when working in a codebase that Nexus has indexed (a .nexus/ directory exists), and especially before changing code you have not read: it answers what changed since the last scan, what a change touches across the frontend/backend seam, what is already known about a file or symbol, and which Spring proxy mistakes, orphaned GraphQL fields or committed credentials exist. NOT for writing code, running tests, or general Java/TypeScript questions."
+description: "Use when working in a codebase Nexus has indexed (a .nexus/ directory exists), at three moments: starting in an unfamiliar project, to learn what it is built from and what tooling working in it needs; after finishing an edit and before saying it is done, to see what the change reaches and whether anything tests it; and when a bug is suspected. It answers what changed since the last scan, what a change touches across the frontend/backend seam, what is already known about a file or symbol, and which Spring proxy mistakes, orphaned GraphQL fields or committed credentials exist. NOT for writing code, running tests, general Java/TypeScript questions, or opinions about style."
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
   user-invocable: "true"
 ---
 
@@ -27,6 +27,31 @@ connects `fetch('/api/x')` to `@QueryMapping`.
 distinguishes `API_CHANGED` from `BODY_CHANGED` from `CONTRACT_CHANGED` — the last being an
 annotation change a compiler never notices and that, in Spring, often matters most.
 
+## Three capabilities, three moments
+
+Nexus understands the project once; each capability uses that understanding at a different
+point in the work. Reach for the one that matches the moment rather than running all three.
+
+| Moment | Capability | The question it answers |
+|---|---|---|
+| Starting in an unfamiliar project | **Architect** | What is this, and what does working in it need that is missing? |
+| An edit is finished, before it is accepted | **Review** | What does this change reach, and what covers it? |
+| A bug is suspected or reported | **BugHunter** | Where is it, and what proves it? |
+
+**Architect** runs automatically with the first `nexus_scan`. It reports what the project is
+built from and what an agent working in it lacks — a datastore with no MCP server configured
+to reach it, no CI, or a scan that is looking at one module of something larger. That last one
+matters most: it means every impact answer here is understated, and you should say so rather
+than trusting the number.
+
+**Review** runs on what changed and nothing else. Call it after editing, before telling anyone
+the work is done. It reports a change no test reaches, a contract change that reaches frontend
+code nobody touched, and a signature whose callers did not move with it — none of which the
+diff shows, because none of them are in the files you edited.
+
+**BugHunter** is for a suspected defect, not for a routine check. Its rules are deterministic:
+Spring proxy mistakes, GraphQL fields no resolver serves, credentials in source.
+
 ## A normal sequence
 
 ```
@@ -34,7 +59,8 @@ nexus_get_project_context     what is this, and has the baseline drifted
 nexus_rescan                  what changed since it was last indexed
 nexus_get_impact <symbol>     what breaks, including on the other side of the stack
 nexus_get_known <file>        what is already known about this code
-bughunter_analyze             run the deterministic rules over it
+  … make the change …
+analyze review --changed      what the edit reaches, and what covers it
 ```
 
 ## Reading the answers honestly
@@ -73,3 +99,7 @@ be reached once.
 It does not run tests, so no finding is verified by reproduction. It does not analyze Python
 or Rust yet. And it does not reason: the index, the graph and the history are evidence, and
 what they mean is your job.
+
+Review in particular has no opinion about how code is written. It will not comment on naming,
+formatting or structure, and it is not trying to — those are taste, and taste is what the tool
+deliberately stays out of. Every rule it has reports something the index can prove.

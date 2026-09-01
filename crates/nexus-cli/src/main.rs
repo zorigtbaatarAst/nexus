@@ -253,6 +253,23 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                 render::banner(&mut out, &st)?;
                 render::scan(&mut out, &st, &report)?;
             });
+
+            // The first scan is when someone learns what this tool thinks their project is,
+            // and it is the only moment they are certainly paying attention. Architect runs
+            // here rather than at `init` because two of its three rules need an index —
+            // before one exists it could only report the datastore rule, and its
+            // missing-scaffolding rule would have no indexed build file to point at.
+            //
+            // Failure is not fatal: a capability that cannot run must not cost someone their
+            // scan, which is the expensive part.
+            if let Ok(arc) = engine.analyze("architect", Scope::Everything) {
+                if !arc.findings.is_empty() {
+                    emit!(&arc, {
+                        writeln!(out)?;
+                        render::analyze(&mut out, &st, &arc)?;
+                    });
+                }
+            }
         }
 
         Command::Rescan => {

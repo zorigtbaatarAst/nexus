@@ -192,6 +192,12 @@ Things BugHunter will not do, in any version, so the scope stays honest:
   they cannot express.
 - **Run arbitrary commands on request.** There is no such tool over MCP, and there will not
   be one. The allowlist is the whole surface.
-- **Be a code review tool.** It analyzes changes against a baseline, not diffs against
-  a reviewer's taste.
+- **Review code against a reviewer's taste.** *Revised 2026-09-01 — the original wording was
+  "be a code review tool", and `cap-review` now exists.* What the non-goal was protecting is
+  worth keeping and the wording was not: nothing here comments on naming, formatting,
+  structure or how code ought to be written, because none of that is checkable and a tool
+  that guesses at it gets switched off. What Review does report is what the index can prove
+  about a change — that nothing tests it, that it crosses the frontend/backend seam into code
+  nobody touched, that a signature moved while its callers did not. That is evidence about a
+  change, which is what this tool has always claimed to deal in.
 - **Send telemetry.** No usage reporting, no update checks, no crash reporting. Ever.
