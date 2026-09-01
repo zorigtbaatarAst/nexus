@@ -54,6 +54,16 @@ const RULE: &str = "────────────────────
 ///
 /// One binary under two names: which one the user typed is the only thing that should
 /// differ, so it is read from argv[0] rather than compiled in twice.
+/// The command the user actually typed, for messages that tell them what to run next.
+/// Derived from the product name so the two names cannot drift apart.
+pub fn binary_name() -> &'static str {
+    if product_name() == "BugHunter" {
+        "bughunter"
+    } else {
+        "nexus"
+    }
+}
+
 pub fn product_name() -> &'static str {
     static NAME: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
     NAME.get_or_init(|| {
@@ -137,8 +147,10 @@ pub fn scan(w: &mut impl Write, st: &Style, r: &ScanReport) -> std::io::Result<(
     writeln!(w, "  files        {}", r.files_scanned)?;
     writeln!(w, "  symbols      {}", r.symbols_indexed)?;
     if r.edges_total > 0 {
-        // The honest denominator excludes edges pointing outside the project: an edge to
+        // The honest denominator excludes third-party libraries — an edge to
         // org.springframework is correctly not in this index, not a resolution failure.
+        // It does NOT exclude sibling modules: that is code this project owns, and
+        // discounting it made the rate rise as coverage fell.
         let in_scope = r.edges_total.saturating_sub(r.edges_external);
         let pct = if in_scope > 0 {
             (r.edges_resolved as f64 / in_scope as f64) * 100.0
@@ -154,6 +166,18 @@ pub fn scan(w: &mut impl Write, st: &Style, r: &ScanReport) -> std::io::Result<(
                 r.edges_external
             ))
         )?;
+        // Reported only when it means something. The graph breakdown always shows the raw
+        // count; this line exists to interrupt someone, and interrupting over one edge is
+        // how a warning becomes noise people learn to scroll past.
+        if r.edges_sibling >= nexus_core::SIBLING_WARN_FLOOR {
+            writeln!(
+                w,
+                "  {}      {} {}",
+                st.warn("sibling"),
+                r.edges_sibling,
+                st.dim("edges point at code you own that was not scanned")
+            )?;
+        }
     }
     if r.files_skipped > 0 {
         writeln!(
@@ -516,8 +540,20 @@ pub fn graph(w: &mut impl Write, st: &Style, g: &GraphReport) -> std::io::Result
         w,
         "  {} external {}",
         g.edges_external,
-        st.dim("(libraries, unscanned sibling modules)")
+        st.dim("(third-party libraries)")
     )?;
+    // Kept on its own line rather than folded into `external`, because the two call for
+    // opposite reactions: one is correctly outside the index, the other means the index
+    // is missing code an edit here can break.
+    if g.edges_sibling > 0 {
+        writeln!(
+            w,
+            "  {} {} {}",
+            g.edges_sibling,
+            st.warn("sibling"),
+            st.dim("(code you own, not scanned — scan from the repository root)")
+        )?;
+    }
     if !g.by_resolution.is_empty() {
         writeln!(w)?;
         for (res, n) in &g.by_resolution {

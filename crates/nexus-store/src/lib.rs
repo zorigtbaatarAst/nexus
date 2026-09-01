@@ -17,11 +17,12 @@ use nexus_types::*;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::Path;
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_init.sql")),
     (2, include_str!("../migrations/0002_graphql_seam.sql")),
     (3, include_str!("../migrations/0003_findings.sql")),
+    (4, include_str!("../migrations/0004_sibling_resolution.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -120,6 +121,14 @@ pub struct Neighbour {
     pub site_line: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct EdgeCounts {
+    pub total: i64,
+    pub resolved: i64,
+    pub external: i64,
+    pub sibling: i64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ResolveStats {
     pub total: usize,
@@ -127,10 +136,18 @@ pub struct ResolveStats {
     pub contract: usize,
     pub heuristic: usize,
     pub ambiguous: usize,
-    /// Genuinely outside the index: a library, or a sibling module that was not scanned.
-    /// Not a failure — counting it as one makes the resolution rate a lie.
+    /// Genuinely outside the index: a third-party library. Not a failure — counting it as
+    /// one makes the resolution rate a lie. ADR-017.
     pub external: usize,
+    /// Code this project owns that was not scanned — a sibling module of the same
+    /// monorepo. Outside the index like `external`, but for a reason the caller can fix,
+    /// and unlike a library it is code an edit here can actually break. Conflating the two
+    /// is what lets an agent read "external" as "not my problem" about a module you own.
+    pub sibling: usize,
     pub unresolved: usize,
+    /// The package root the sibling classification was made against, so a caller can name
+    /// it rather than telling someone their scan is incomplete without saying how.
+    pub owner: Option<String>,
 }
 
 impl ResolveStats {
@@ -888,8 +905,12 @@ impl Store {
             }
         }
 
+        // Computed once: it is a property of the index, not of any one edge.
+        let owner = package_root(&project_packages);
+
         let mut stats = ResolveStats {
             total: unresolved.len(),
+            owner: owner.clone(),
             ..Default::default()
         };
         for (edge_id, hint, edge_type) in unresolved {
@@ -957,10 +978,19 @@ impl Store {
                     let type_part = hint.split('#').next().unwrap_or(&hint);
                     let pkg = type_part.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
                     if !pkg.is_empty() && !project_packages.contains(pkg) {
-                        stats.external += 1;
+                        // Outside the index either way — but a library and an unscanned
+                        // module of this same project are different facts, and only one of
+                        // them is something the caller can fix by widening the scan.
+                        let resolution = if is_sibling(pkg, owner.as_deref()) {
+                            stats.sibling += 1;
+                            "sibling"
+                        } else {
+                            stats.external += 1;
+                            "external"
+                        };
                         tx.execute(
-                            "UPDATE symbol_edges SET resolution = 'external' WHERE id = ?1",
-                            params![edge_id],
+                            "UPDATE symbol_edges SET resolution = ?2 WHERE id = ?1",
+                            params![edge_id, resolution],
                         )?;
                     } else {
                         // In a project package but no such symbol: BugHunter looked and
@@ -974,20 +1004,24 @@ impl Store {
         Ok(stats)
     }
 
-    pub fn edge_counts(&self, project_id: ProjectId) -> Result<(i64, i64, i64)> {
+    /// Four counts rather than a tuple, because `(total, resolved, external, sibling)` at
+    /// a call site is four chances to transpose two of them.
+    pub fn edge_counts(&self, project_id: ProjectId) -> Result<EdgeCounts> {
         let mut stmt = self.conn.prepare(
             "SELECT
                COUNT(*),
                SUM(dst_symbol_id IS NOT NULL),
-               SUM(resolution = 'external')
+               SUM(resolution = 'external'),
+               SUM(resolution = 'sibling')
              FROM symbol_edges WHERE project_id = ?1",
         )?;
         let row = stmt.query_row(params![project_id], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, Option<i64>>(1)?.unwrap_or(0),
-                r.get::<_, Option<i64>>(2)?.unwrap_or(0),
-            ))
+            Ok(EdgeCounts {
+                total: r.get::<_, i64>(0)?,
+                resolved: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                external: r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                sibling: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+            })
         })?;
         Ok(row)
     }
@@ -1743,6 +1777,51 @@ impl Store {
 }
 
 /// `mn.pay.PaymentService#createPayment(String)` -> `PaymentService#createPayment`.
+/// The organisation's package root, inferred from the packages this project defines.
+///
+/// Java and Kotlin packages are reverse-DNS, so the first two segments name the owner
+/// (`mn.autoland`, `com.example`) and everything beneath belongs to that owner. A hint
+/// under this root that the index does not contain is therefore **a module of this project
+/// that was not scanned**, not a third-party library — and those are the two things
+/// `external` has always conflated.
+///
+/// `None` when no root holds a majority. A project whose packages share no common owner
+/// gives no signal, and inventing one would relabel every library as a sibling — which is
+/// worse than the status quo, because it would understate what is genuinely outside.
+fn package_root(project_packages: &std::collections::HashSet<String>) -> Option<String> {
+    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut considered = 0usize;
+    for pkg in project_packages {
+        // Two segments, by convention the owner. A one-segment package names no owner.
+        let Some(end) = pkg
+            .match_indices('.')
+            .nth(1)
+            .map(|(i, _)| i)
+            .or_else(|| pkg.contains('.').then_some(pkg.len()))
+        else {
+            continue;
+        };
+        considered += 1;
+        *counts.entry(&pkg[..end]).or_default() += 1;
+    }
+    let (root, hits) = counts.into_iter().max_by_key(|&(_, n)| n)?;
+    // Strictly more than half, so a tie between two owners yields nothing rather than a
+    // coin flip that silently mislabels one of them.
+    (hits * 2 > considered).then(|| root.to_string())
+}
+
+/// Whether a package the index does not contain still belongs to this project's owner.
+fn is_sibling(pkg: &str, root: Option<&str>) -> bool {
+    let Some(root) = root else {
+        return false;
+    };
+    // The dot matters: `mn.autolandia` must not match the root `mn.autoland`.
+    pkg == root
+        || pkg
+            .strip_prefix(root)
+            .is_some_and(|rest| rest.starts_with('.'))
+}
+
 fn simple_key(fqn: &str) -> String {
     let (type_part, member) = match fqn.split_once('#') {
         Some((t, m)) => (t, Some(m)),
@@ -1953,5 +2032,51 @@ mod tests {
     fn timestamps_are_iso8601() {
         assert_eq!(format_iso8601(0), "1970-01-01T00:00:00Z");
         assert_eq!(format_iso8601(1_756_600_000), "2025-08-31T00:26:40Z");
+    }
+
+    fn packages(of: &[&str]) -> std::collections::HashSet<String> {
+        of.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn one_module_of_a_monorepo_still_names_its_owner() {
+        // Every package sits under mn.autoland.sales, but the owner is mn.autoland — which
+        // is what makes mn.autoland.model recognisable as a module rather than a library.
+        let root = package_root(&packages(&[
+            "mn.autoland.sales.vehicle",
+            "mn.autoland.sales.order",
+            "mn.autoland.sales.web.graphql",
+        ]));
+        assert_eq!(root.as_deref(), Some("mn.autoland"));
+    }
+
+    #[test]
+    fn no_majority_owner_yields_no_root() {
+        // Guessing here would relabel every library as a sibling module, which understates
+        // what is genuinely outside the project — worse than saying nothing.
+        assert_eq!(package_root(&packages(&["com.a.one", "org.b.two"])), None);
+        assert_eq!(package_root(&packages(&["flat"])), None);
+    }
+
+    #[test]
+    fn a_sibling_module_is_not_a_library() {
+        let root = Some("mn.autoland");
+        assert!(
+            is_sibling("mn.autoland.model", root),
+            "the shared model is code this project owns and did not scan"
+        );
+        assert!(is_sibling("mn.autoland", root), "the root itself counts");
+        assert!(
+            !is_sibling("org.springframework.stereotype", root),
+            "Spring is correctly outside the index — ADR-017"
+        );
+        assert!(
+            !is_sibling("mn.autolandia.thing", root),
+            "a prefix match without the dot is a different owner"
+        );
+        assert!(
+            !is_sibling("mn.autoland.model", None),
+            "without a majority owner nothing may be claimed as a sibling"
+        );
     }
 }

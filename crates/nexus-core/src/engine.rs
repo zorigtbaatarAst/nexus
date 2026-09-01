@@ -64,6 +64,12 @@ pub const NEXUS_DIR: &str = ".nexus";
 pub const MODEL_CONFIDENCE_CAP: f64 = 0.75;
 pub const DB_FILE: &str = "nexus.db";
 
+/// One stray reference to a package the index does not hold is a typo, a generated
+/// artifact, or a package that genuinely exists nowhere. A module's worth of them is a
+/// module. Below this the count is still reported — it is never hidden — but it does not
+/// earn a warning telling someone their scan is too narrow when it is not.
+pub const SIBLING_WARN_FLOOR: usize = 20;
+
 /// What the directory was called before this was a platform. See `migrate_legacy_dir`.
 const LEGACY_DIR: &str = ".bughunter";
 const LEGACY_DB: &str = "bughunter.db";
@@ -78,7 +84,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Create `.bughunter/`, migrate the database, and record what this project is.
+    /// Create `.nexus/`, migrate the database, and record what this project is.
     pub fn init(root: &Path) -> Result<(Self, Profile)> {
         let root = canonical(root);
         if Self::migrate_legacy_dir(&root)? {
@@ -363,6 +369,17 @@ impl Engine {
                 resolve.unresolved
             ));
         }
+        // The most consequential thing a scan can discover about itself: it is looking at
+        // one module of something larger. Silence here is what lets an impact query report
+        // a small blast radius with total confidence.
+        if resolve.sibling >= SIBLING_WARN_FLOOR {
+            let owner = resolve.owner.as_deref().unwrap_or("this project");
+            warnings.push(format!(
+                "{} edges point at {owner}.* code that was not scanned — this looks like one \
+                 module of a larger project; scan from the repository root to see it",
+                resolve.sibling
+            ));
+        }
 
         let health = if failed > 0 {
             Health::Degraded
@@ -391,6 +408,7 @@ impl Engine {
             edges_resolved: resolve.resolved(),
             edges_total: resolve.total,
             edges_external: resolve.external,
+            edges_sibling: resolve.sibling,
             health,
             warnings,
             duration_ms: started.elapsed().as_millis(),
@@ -1595,11 +1613,12 @@ impl Engine {
     }
 
     pub fn graph(&self) -> Result<GraphReport> {
-        let (total, resolved, external) = self.store.edge_counts(self.project_id)?;
+        let counts = self.store.edge_counts(self.project_id)?;
         Ok(GraphReport {
-            edges_total: total,
-            edges_resolved: resolved,
-            edges_external: external,
+            edges_total: counts.total,
+            edges_resolved: counts.resolved,
+            edges_external: counts.external,
+            edges_sibling: counts.sibling,
             by_resolution: self.store.edges_by_resolution(self.project_id)?,
         })
     }
@@ -1673,7 +1692,7 @@ impl Engine {
                 remedy: p
                     .build_system
                     .is_none()
-                    .then(|| "set build_system in .bughunter/config.toml".into()),
+                    .then(|| "set build_system in .nexus/config.toml".into()),
             });
             let unanalyzed: Vec<&str> = p
                 .languages
