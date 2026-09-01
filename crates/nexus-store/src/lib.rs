@@ -1107,6 +1107,26 @@ impl Store {
                             "UPDATE symbol_edges SET resolution = ?2 WHERE id = ?1",
                             params![edge_id, resolution],
                         )?;
+                    } else if let Some(sup) =
+                        inherited_from_outside(type_part, &supertypes, &project_packages)
+                    {
+                        // The type is this project's; the member is not. It is inherited
+                        // from a supertype the index does not hold — a Spring Data
+                        // repository method, or a base class in a module nobody scanned.
+                        // Counting that as a failure hides real resolution bugs inside a
+                        // large constant, which is the whole argument of ADR-017.
+                        let sup_pkg = sup.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
+                        let resolution = if is_sibling(sup_pkg, owner.as_deref()) {
+                            stats.sibling += 1;
+                            "sibling"
+                        } else {
+                            stats.external += 1;
+                            "external"
+                        };
+                        tx.execute(
+                            "UPDATE symbol_edges SET resolution = ?2 WHERE id = ?1",
+                            params![edge_id, resolution],
+                        )?;
                     } else {
                         // In a project package but no such symbol: BugHunter looked and
                         // failed. The hint is kept so a later scan can resolve it once the
@@ -1996,6 +2016,50 @@ fn through_supertypes(
             // and picking one would attribute the call to a method it may never reach.
             if let Some([only]) = by_prefix.get(&candidate).map(Vec::as_slice) {
                 return Some(*only);
+            }
+            if let Some(more) = supertypes.get(sup) {
+                next.extend(more.iter().map(String::as_str));
+            }
+        }
+        if next.is_empty() {
+            return None;
+        }
+        frontier = next;
+    }
+    None
+}
+
+/// The supertype outside the index that a member is most likely inherited from.
+///
+/// `IdempotencyRecordRepository#save` names a type this project declares and a method it
+/// does not: `save` comes from `JpaRepository`. The type being in a project package sent it
+/// to `unresolved` — counted as a failure — when it is exactly what `external` is for. 1,209
+/// edges on a six-service monorepo, and the largest remaining category after the supertype
+/// walk lands.
+///
+/// Returns the first supertype hint whose package the index does not define, so the caller
+/// can tell a library apart from an unscanned sibling module the same way it does anywhere
+/// else. `None` when every supertype is indexed, which means the member genuinely was not
+/// found and `unresolved` is the honest answer.
+fn inherited_from_outside<'a>(
+    ty: &str,
+    supertypes: &'a std::collections::HashMap<String, Vec<String>>,
+    project_packages: &std::collections::HashSet<String>,
+) -> Option<&'a str> {
+    const MAX_DEPTH: usize = 8;
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    seen.insert(ty);
+    let mut frontier: Vec<&str> = supertypes.get(ty)?.iter().map(String::as_str).collect();
+
+    for _ in 0..MAX_DEPTH {
+        let mut next: Vec<&str> = Vec::new();
+        for sup in frontier {
+            if !seen.insert(sup) {
+                continue;
+            }
+            let pkg = sup.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
+            if !pkg.is_empty() && !project_packages.contains(pkg) {
+                return Some(sup);
             }
             if let Some(more) = supertypes.get(sup) {
                 next.extend(more.iter().map(String::as_str));

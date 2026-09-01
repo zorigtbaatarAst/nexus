@@ -253,3 +253,67 @@ public class IssueReader {
         report.items.iter().map(|i| &i.fqn).collect::<Vec<_>>()
     );
 }
+
+/// A repository method inherited from Spring Data is outside the index, not a failure.
+/// It was the largest remaining unresolved category once the supertype walk landed.
+#[test]
+fn a_member_inherited_from_a_library_is_external_not_unresolved() {
+    let root = fixture("libinherit");
+    write(
+        &root,
+        "build.gradle",
+        "dependencies { implementation 'org.springframework.boot:spring-boot-starter:3.5.0' }\n",
+    );
+    write(
+        &root,
+        "src/main/java/mn/autoland/repository/ThingRepository.java",
+        r#"
+package mn.autoland.repository;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface ThingRepository extends JpaRepository<Thing, String> {
+}
+"#,
+    );
+    write(
+        &root,
+        "src/main/java/mn/autoland/sales/ThingService.java",
+        r#"
+package mn.autoland.sales;
+
+import mn.autoland.repository.ThingRepository;
+
+public class ThingService {
+    private final ThingRepository repo;
+
+    public Object persist(Object t) {
+        return repo.save(t);
+    }
+}
+"#,
+    );
+
+    let (mut engine, _) = Engine::open_or_init(&root).expect("init");
+    engine.scan().expect("scan");
+    let graph = engine.graph().expect("graph");
+
+    let by: std::collections::HashMap<&str, i64> = graph
+        .by_resolution
+        .iter()
+        .map(|(k, v)| (k.as_str(), *v))
+        .collect();
+
+    // ThingRepository is this project's type; `save` is JpaRepository's method.
+    assert_eq!(
+        by.get("unresolved").copied().unwrap_or(0),
+        0,
+        "a member inherited from a library is not a resolution failure: {:?}",
+        graph.by_resolution
+    );
+    assert!(
+        by.get("external").copied().unwrap_or(0) > 0,
+        "it belongs with the other edges that are correctly outside the index: {:?}",
+        graph.by_resolution
+    );
+}

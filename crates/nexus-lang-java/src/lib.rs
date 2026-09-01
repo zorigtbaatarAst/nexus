@@ -40,7 +40,7 @@ impl LanguageAnalyzer for JavaAnalyzer {
     fn grammar_version(&self) -> &'static str {
         // Bump on any change to extraction or normalization, not only on a grammar upgrade:
         // this value forces a re-parse when content hashes would otherwise say "unchanged".
-        "tree-sitter-java/0.23.5+extract8"
+        "tree-sitter-java/0.23.5+extract9"
     }
 
     fn parse(&self, src: &SourceFile<'_>) -> Result<ParsedFile, LangError> {
@@ -204,6 +204,26 @@ fn walk_type(
     });
 
     // extends / implements
+    //
+    // `interface A extends B` is none of these: the grammar gives a class `superclass` and
+    // `interfaces` fields, and an interface an `extends_interfaces` *child* reachable by no
+    // field name. So no interface hierarchy was indexed at all — every
+    // `Repository extends JpaRepository` looked like a type with no supertype, which is
+    // what left 1,209 Spring Data calls counted as resolution failures.
+    let mut ic = node.walk();
+    for child in node.children(&mut ic) {
+        if child.kind() != "extends_interfaces" {
+            continue;
+        }
+        for name in type_names(child, src) {
+            out.edges.push(RawEdge {
+                src_fqn: fqn.clone(),
+                dst_hint: qualify(&name, ctx),
+                edge_type: EdgeType::Extends,
+                site_line: child.start_position().row as u32 + 1,
+            });
+        }
+    }
     for (field, edge) in [
         ("superclass", EdgeType::Extends),
         ("interfaces", EdgeType::Implements),
@@ -1678,5 +1698,33 @@ public class Page {
             p.symbols.iter().any(|s| s.fqn == "mn.a.Page#getPageSize()"),
             "pageSize has no declared accessor, so it still needs one"
         );
+    }
+}
+
+#[cfg(test)]
+mod interface_hierarchy_tests {
+    use super::*;
+
+    #[test]
+    fn an_interface_extending_an_interface_is_an_edge() {
+        // The grammar gives an interface an `extends_interfaces` child reachable by no
+        // field name, so this was silently absent for every interface in every project.
+        let p = JavaAnalyzer::new()
+            .parse(&SourceFile {
+                path: "R.java",
+                text: "package mn.a;\nimport org.springframework.data.jpa.repository.JpaRepository;\npublic interface R extends JpaRepository<T, String>, Other {}\n",
+            })
+            .expect("parse");
+        let extends: Vec<&str> = p
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::Extends)
+            .map(|e| e.dst_hint.as_str())
+            .collect();
+        assert!(
+            extends.contains(&"org.springframework.data.jpa.repository.JpaRepository"),
+            "the imported supertype must be qualified: {extends:?}"
+        );
+        assert!(extends.contains(&"mn.a.Other"), "{extends:?}");
     }
 }
