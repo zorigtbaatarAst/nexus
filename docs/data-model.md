@@ -234,9 +234,14 @@ CREATE TABLE symbol_edges (             -- the dependency graph
   edge_type         TEXT    NOT NULL CHECK (edge_type IN
                       ('calls','implements','extends','injects','routes',
                        'persists','reads','writes','emits','imports','tests',
-                       'calls_http','renders')),
+                       'calls_http','calls_graphql','renders')),
+  -- 'external': a third-party library, correctly outside the index (ADR-017).
+  -- 'sibling':  this project's own code, in a module that was not scanned. Outside the
+  --             index like 'external', but an edit here can break it, and widening the
+  --             scan resolves it — so it counts in the denominator and 'external' does not.
   resolution        TEXT    NOT NULL CHECK (resolution IN
-                      ('exact','framework','heuristic','contract','unresolved')),
+                      ('exact','framework','contract','heuristic',
+                       'external','sibling','unresolved')),
   confidence        REAL    NOT NULL CHECK (confidence BETWEEN 0 AND 1),
   site_line         INTEGER,
   last_seen_scan_id INTEGER NOT NULL REFERENCES scans(id)

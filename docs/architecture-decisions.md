@@ -798,6 +798,45 @@ static-import bugs were both invisible at 20 % and obvious at 68 %.
 `mn.autoland.model` is external today and internal tomorrow. Deriving project packages from
 the indexed symbols themselves needs no configuration and self-corrects.
 
+### Revision — 2026-09-01: the founding measurement conflated two things
+
+The decision stands. The outcome it created was too coarse for the case the paragraph above
+had already named, and the evidence for that is the ADR's own number.
+
+Of the 9,514 edges cited as `org.springframework`, `org.mockito` **and sibling Gradle
+modules that were never scanned**, re-measuring on the same repository shows **6,247 — 66 % —
+were sibling modules.** Only 3,267 were third-party. `mn.autoland.model` was not a
+hypothetical; it was two thirds of the evidence.
+
+Those two facts call for opposite reactions. A library is correctly outside the index and
+nothing can be done about it. A sibling module is code the project owns, that an edit here
+can break, and that a wider scan resolves — and an agent reading `external` reasonably
+concludes "not my problem", which is right about the library and wrong about the module.
+`impact` on `mn.autoland.model.BaseEntity`, the class every entity extends, answered **"no
+symbol matches"** from inside one module and **768 affected symbols across all six
+services** from the repository root.
+
+Excluding both from the denominator also made the metric move the wrong way: one module read
+**96 %** while resolving 4,275 edges, and the whole repository read **64 %** while resolving
+18,265. The rate rose as coverage fell.
+
+What was added, as `resolution='sibling'`:
+
+| | `external` | `sibling` |
+|---|---|---|
+| Means | outside the project entirely | the project's own code, not scanned |
+| Denominator | excluded, as decided above | **included** — it is resolvable, just not resolved |
+| Remedy | none; correct as it is | widen the scan, which the CLI now says |
+
+The discriminator needs no configuration, in keeping with the paragraph above. Reverse-DNS
+package naming means the first two segments name the owner, so the owner root is inferred
+from the packages the index already holds: a hint beneath that root the index lacks is a
+module, and one outside it is a library. Where no owner holds a majority the classification
+declines entirely — inventing one would relabel every library as a sibling, understating
+what is genuinely outside, which is worse than the original conflation. It also disappears
+on its own when the whole repository is scanned: **1** sibling edge, against 6,247 from
+inside a single module.
+
 ### Advantages
 The metric means something, so it can be used as a regression signal. Diagnosing resolution
 becomes possible: `bughunter graph` breaks the count down by tier, which is how the two bugs

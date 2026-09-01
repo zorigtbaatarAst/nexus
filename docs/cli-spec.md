@@ -231,7 +231,7 @@ The highest-value command in the tool, and the first thing to ask anyone reporti
 BugHunter doctor
 ────────────────────────────────────────
   ✓ git                 2.55.0, repository at /srv/autoland
-  ✓ database            .nexus/nexus.db, schema 3 (current)
+  ✓ database            .nexus/nexus.db, schema 4 (current)
   ✓ config              config.toml, policy.toml valid
   ✓ languages           java (tree-sitter-java 0.21.0), typescript (0.20.4)
   ✓ frameworks          spring-boot 3.5 (build.gradle:24)

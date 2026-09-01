@@ -208,6 +208,17 @@ that is hard to attribute.
   the index; counting it as a failure hides real bugs inside a large constant. See
   [ADR-017](docs/architecture-decisions.md#adr-017-external-is-a-resolution-outcome-not-a-failure).
 
+- **`sibling` is not `external` either.** The same reasoning applied twice: an edge to a
+  module of *this* project that was not scanned is outside the index, but it is code an edit
+  here can break and a wider scan resolves. Both were `external` until 2026-09-01, and on a
+  six-service monorepo **6,247 of 9,514 "external" edges were the project's own code** —
+  `impact` on the base class every entity extends answered "no symbol matches". Sibling
+  edges count in the resolution denominator; `external` still does not. The owner root is
+  *inferred*, never configured: reverse-DNS means the first two package segments name the
+  owner, and where no owner holds a majority the classification declines rather than
+  guesses. A high `sibling` count means the scan is too narrow, not that the analyzer is
+  broken.
+
 - **`.nexus/` must be excluded wherever candidates come from.** The walker filters it
   structurally, but Tier 1 candidates also come from `git diff`, which knows nothing about
   that filter — so `walk::is_excluded` exists for both paths to consult. Without it
