@@ -90,6 +90,7 @@ impl Detector for HardcodedSecret {
                         // The value is deliberately absent.
                         note: format!("{why}. Rotate the credential, then remove it from history."),
                     }],
+                    capability_data: None,
                 });
             }
         }

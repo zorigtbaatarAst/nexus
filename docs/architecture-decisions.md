@@ -992,3 +992,68 @@ requirement limits it but does not prevent it, and nothing yet measures the nois
 ### When to change it
 Add a direct provider when headless use is real — CI, cron, a terminal with no agent attached.
 The trait boundary exists for it; only the implementations are missing, deliberately.
+
+---
+
+## ADR-021 — A recommendation is a finding
+
+### Why it is needed
+Nexus is growing two capabilities whose output is not a defect. Architect reports what a
+project is and what it lacks — "MongoDB is configured here and no MongoDB MCP server is",
+"there is no CI workflow". Review reports what a change touches — "this alters a symbol
+nothing tests".
+
+Neither fits the shape the platform enforces. `Finding` requires at least one `file:line` or
+it is rejected at the boundary, and `FindingType`'s twelve variants are all defect kinds:
+`concurrency`, `null-safety`, `resource-leak`. A recommendation about something that is *not
+in the code* has no obvious line to point at, and no obvious type.
+
+The tempting answer is a second output type, or a second trait, or Architect living in
+`nexus-core` as an extension of `detect`. Each of those forks something the platform split
+exists to keep whole.
+
+### Decision
+Advisory output is a finding, with the ordinary lifecycle.
+
+Three consequences make this more than a naming choice:
+
+1. **Evidence anchors where the missing thing belongs.** "No CI workflow" points at the build
+   file; "MongoDB with no MCP server" points at the `docker-compose.yml` line that proves
+   MongoDB is there. A rule that cannot name such a place does not ship. The evidence rule is
+   not relaxed for advisories — relaxing it would let every capability claim anything.
+2. **The ledger earns its keep.** "There is no CI" becoming `FIXED` when a workflow appears,
+   and `REGRESSED` when someone deletes it, is exactly what identity-across-scans is for. A
+   report printed and forgotten cannot do that.
+3. **`severity` and `confidence` change meaning, and say so.** For a defect they mean "how bad"
+   and "how sure this is real". For an advisory they mean "how much this matters" and "how sure
+   the rule is that the situation applies". The same numbers, a different question — recorded
+   here because a reader will otherwise assume the first reading.
+
+Three shared `FindingType` variants carry the kind — `architecture`, `review`, `tooling` — and
+anything capability-specific goes in `capability_data`, the column ADR-018 chose over a second
+table.
+
+### Alternatives considered
+
+**A second trait returning a report.** Two extension points where ADR-019 argues hard for one.
+It also gives up recurrence: the second capability would immediately want to know whether it
+said this last week, and would grow a private half-copy of the lifecycle — the exact
+duplication ADR-018 exists to prevent.
+
+**Architect inside `nexus-core`, extending `Profile`.** Cheapest by a wide margin, and it puts
+capability rules back in the platform, which is the coupling the split was performed to remove.
+"Add Code Review later" becomes a core change again.
+
+**Relax the evidence rule for advisory findings.** A finding with no evidence is an assertion
+nobody can check. The whole product rests on not storing those, and carving out an exception
+for the newest capability is how that guarantee erodes.
+
+### What it costs
+`FindingType` is now two taxonomies wearing one enum, and a reader has to know which half they
+are in. The alternative was a second column nobody wanted, and the split is legible from the
+variant names.
+
+### When to change it
+If a third advisory capability needs a kind that is neither architecture, review nor tooling,
+stop adding variants and give `capability_data` a typed schema per capability instead. The
+signal is a variant that means something different to two capabilities.

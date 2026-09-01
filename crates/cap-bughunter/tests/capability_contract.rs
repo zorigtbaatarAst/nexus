@@ -60,6 +60,7 @@ impl Capability for TodoHunter {
                         line: i as u32 + 1,
                         note: "a TODO comment".into(),
                     }],
+                    capability_data: None,
                 });
             }
         }

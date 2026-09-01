@@ -77,6 +77,7 @@ impl Detector for OrphanOperation {
                          request will fail at runtime with a validation error"
                     ),
                 }],
+                capability_data: None,
             });
         }
         out

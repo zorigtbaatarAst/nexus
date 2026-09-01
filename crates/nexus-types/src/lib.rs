@@ -413,6 +413,16 @@ pub enum FindingType {
     ResourceLeak,
     Regression,
     UiState,
+    // Advisory kinds. A recommendation is a finding — it has evidence, it can be dismissed,
+    // and it can come back — but it describes something the project lacks rather than
+    // something the code does wrong. ADR-021.
+    /// How the project is put together: its shape, its modules, its missing scaffolding.
+    Architecture,
+    /// An observation about a change, grounded in the graph and the history rather than in
+    /// a reviewer's taste.
+    Review,
+    /// Tooling an agent working in this project should have and does not.
+    Tooling,
 }
 
 impl FindingType {
@@ -430,6 +440,9 @@ impl FindingType {
             FindingType::ResourceLeak => "resource-leak",
             FindingType::Regression => "regression",
             FindingType::UiState => "ui-state",
+            FindingType::Architecture => "architecture",
+            FindingType::Review => "review",
+            FindingType::Tooling => "tooling",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -446,6 +459,9 @@ impl FindingType {
             "resource-leak" => FindingType::ResourceLeak,
             "regression" => FindingType::Regression,
             "ui-state" => FindingType::UiState,
+            "architecture" => FindingType::Architecture,
+            "review" => FindingType::Review,
+            "tooling" => FindingType::Tooling,
             _ => return None,
         })
     }

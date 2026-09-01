@@ -17,12 +17,13 @@ use nexus_types::*;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::Path;
 
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_init.sql")),
     (2, include_str!("../migrations/0002_graphql_seam.sql")),
     (3, include_str!("../migrations/0003_findings.sql")),
     (4, include_str!("../migrations/0004_sibling_resolution.sql")),
+    (5, include_str!("../migrations/0005_capability_data.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -219,6 +220,10 @@ pub struct NewFinding {
     pub detector: String,
     pub anchor_fqn: Option<String>,
     pub commit: Option<String>,
+    /// The capability's own shape, already serialized. The store carries it and does not
+    /// read it — ADR-018 traded a second table for a column precisely so the platform would
+    /// not have to know what is in here.
+    pub capability_data: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -277,6 +282,8 @@ pub struct FindingRow {
     pub fixed_commit: Option<String>,
     pub file: Option<String>,
     pub line: Option<i64>,
+    /// The capability's own shape, as it was written. Carried, never interpreted.
+    pub capability_data: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1446,10 +1453,10 @@ impl Store {
             "INSERT INTO findings (project_id, capability, finding_uid, fingerprint, slug, title,
                                    finding_type, component, severity, confidence, status, detector,
                                    anchor_symbol_id, introduced_commit,
-                                   first_seen_scan_id, last_seen_scan_id)
+                                   first_seen_scan_id, last_seen_scan_id, capability_data)
              VALUES (?1,?15,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,
                      (SELECT id FROM symbols WHERE project_id = ?1 AND fqn = ?12 AND deleted = 0),
-                     ?13,?14,?14)",
+                     ?13,?14,?14,?16)",
             params![
                 project_id,
                 uid,
@@ -1466,6 +1473,7 @@ impl Store {
                 b.commit,
                 scan_id,
                 b.capability,
+                b.capability_data,
             ],
         )?;
         Ok(FindingUpsert {
@@ -1569,7 +1577,7 @@ impl Store {
                      ORDER BY o.scan_id DESC LIMIT 1),
                     (SELECT start_line FROM finding_occurrences o WHERE o.finding_id = findings.id
                      ORDER BY o.scan_id DESC LIMIT 1),
-                    capability
+                    capability, capability_data
              FROM findings
              WHERE project_id = ?1
                AND (?2 IS NULL OR status = ?2)
@@ -1599,6 +1607,7 @@ impl Store {
                         file: r.get(12)?,
                         line: r.get(13)?,
                         capability: r.get(14)?,
+                        capability_data: r.get(15)?,
                     })
                 },
             )?
@@ -1665,7 +1674,8 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT f.finding_uid, f.fingerprint, f.slug, f.title, f.finding_type,
                     f.component, f.severity, f.confidence, f.status, f.detector,
-                    f.introduced_commit, f.fixed_commit, o.file_path, o.start_line, f.capability
+                    f.introduced_commit, f.fixed_commit, o.file_path, o.start_line, f.capability,
+                    f.capability_data
              FROM findings f
              JOIN finding_occurrences o ON o.finding_id = f.id
              LEFT JOIN symbols s ON s.id = f.anchor_symbol_id
@@ -1693,6 +1703,7 @@ impl Store {
                     file: r.get(12)?,
                     line: r.get(13)?,
                     capability: r.get(14)?,
+                    capability_data: r.get(15)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -2229,6 +2240,7 @@ mod tests {
             anchor_fqn: None,
             commit: None,
             alt_fingerprints: vec![],
+            capability_data: None,
         };
 
         let tx = s.transaction().expect("tx");
@@ -2303,6 +2315,54 @@ mod tests {
             )
             .expect("count");
         assert_eq!(total, 2, "the superseded belief is kept");
+    }
+
+    #[test]
+    fn a_capability_payload_survives_the_round_trip() {
+        // The column is write-and-read, never interpreted. If it did not come back, a
+        // capability could carry nothing and ADR-018's column would buy nothing.
+        let mut store = Store::open_in_memory().expect("open");
+        let project = store
+            .ensure_project("/tmp/capdata", "x", "git")
+            .expect("project");
+        let (scan, _) = store
+            .begin_scan(project, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
+        let payload = r#"{"recommends":"mongodb-mcp"}"#;
+        let tx = store.conn.transaction().expect("tx");
+        Store::upsert_finding(
+            &tx,
+            project,
+            scan,
+            &NewFinding {
+                capability: "architect".into(),
+                uid_prefix: "ARC".into(),
+                fingerprint: "fp-cap-data".into(),
+                alt_fingerprints: Vec::new(),
+                slug: "mongo-mcp".into(),
+                title: "MongoDB detected with no MCP server configured".into(),
+                finding_type: "tooling".into(),
+                component: "docker".into(),
+                severity: "info".into(),
+                confidence: 0.9,
+                status: "UNVERIFIED".into(),
+                detector: "architect:tooling".into(),
+                anchor_fqn: None,
+                commit: None,
+                capability_data: Some(payload.to_string()),
+            },
+        )
+        .expect("upsert");
+        tx.commit().expect("commit");
+
+        let rows = store
+            .findings(project, &FindingQuery::default())
+            .expect("findings");
+        let row = rows
+            .iter()
+            .find(|r| r.uid.starts_with("ARC"))
+            .expect("the architect finding");
+        assert_eq!(row.capability_data.as_deref(), Some(payload));
     }
 
     #[test]

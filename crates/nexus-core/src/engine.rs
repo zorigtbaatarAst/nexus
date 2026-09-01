@@ -1202,6 +1202,7 @@ impl Engine {
                     detector: c.detector.clone(),
                     anchor_fqn: c.anchor_fqn.clone(),
                     commit: commit.clone(),
+                    capability_data: c.capability_data.as_ref().map(|v| v.to_string()),
                 },
             )?;
             touched.insert(up.id);
@@ -1322,6 +1323,9 @@ impl Engine {
                 detector: f.detector.clone(),
                 anchor_fqn: f.anchor_fqn.clone(),
                 commit: commit.clone(),
+                // An agent-recorded finding may carry its own shape too — the write-back
+                // path is not a lesser citizen than a compiled capability.
+                capability_data: f.capability_data.as_ref().map(|v| v.to_string()),
             },
         )?;
         Store::insert_occurrence(

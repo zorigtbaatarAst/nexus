@@ -41,6 +41,15 @@ pub struct Finding {
     /// Human-readable identity, shown instead of the hash. Never used *as* identity.
     pub slug: String,
     pub evidence: Vec<CodeRef>,
+    /// Whatever shape this capability needs and the platform has promised not to know
+    /// about — a recommended plugin, the module a change crossed into. ADR-018 chose a
+    /// column over a second table because the lifecycle is the expensive part and it is
+    /// what must not fork.
+    ///
+    /// **Excluded from the fingerprint.** Rewording a recommendation must not invent a
+    /// second finding, for the same reason the title and the severity are excluded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_data: Option<serde_json::Value>,
 }
 
 /// What a finding recorded from outside is attributed to when it names no detector.
@@ -148,7 +157,26 @@ mod tests {
                 line: 1,
                 note: "n".into(),
             }],
+            capability_data: None,
         }
+    }
+
+    #[test]
+    fn a_capability_payload_is_not_part_of_identity() {
+        // ADR-021. A recommendation's payload gets reworded — a plugin is renamed, a
+        // rationale improves — and none of that makes it a different finding. Identity
+        // moving on a rewording is how one recommendation becomes five.
+        let plain = candidate("mn.a.C#m()", "k");
+        let mut carrying = candidate("mn.a.C#m()", "k");
+        carrying.capability_data = Some(serde_json::json!({
+            "recommends": "mongodb-mcp",
+            "because": "docker-compose.yml:12"
+        }));
+        assert_eq!(
+            plain.fingerprint(),
+            carrying.fingerprint(),
+            "capability_data must be carried, not identifying"
+        );
     }
 
     #[test]

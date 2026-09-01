@@ -76,6 +76,7 @@ impl Detector for TransactionalNonPublic {
                          @Transactional is never applied and the work runs outside a transaction"
                     ),
                 }],
+                capability_data: None,
             });
         }
         out
@@ -157,6 +158,7 @@ impl Detector for SelfInvocation {
                         note: format!("{} is annotated @Transactional", dst.name),
                     },
                 ],
+                capability_data: None,
             });
         }
         out
