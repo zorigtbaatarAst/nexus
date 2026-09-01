@@ -20,6 +20,7 @@ path = "src/main.rs"
 [dependencies]
 nexus-core.workspace = true
 cap-bughunter.workspace = true
+cap-architect.workspace = true
 nexus-mcp.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread"] }
 nexus-types.workspace = true

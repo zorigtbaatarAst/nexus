@@ -136,6 +136,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
+name = "cap-architect"
+version = "0.2.0"
+dependencies = [
+ "nexus-core",
+ "nexus-types",
+ "serde_json",
+]
+
+[[package]]
 name = "cap-bughunter"
 version = "0.2.0"
 dependencies = [
@@ -778,6 +787,7 @@ name = "nexus-cli"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "cap-architect",
  "cap-bughunter",
  "clap",
  "nexus-core",
@@ -852,6 +862,7 @@ name = "nexus-mcp"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "cap-architect",
  "cap-bughunter",
  "nexus-core",
  "rmcp",

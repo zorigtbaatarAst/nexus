@@ -78,6 +78,12 @@ pub struct ProjectContext<'a> {
     pub changed: &'a [ChangedSymbol],
     /// The commit this snapshot describes, when the project is under version control.
     pub commit: Option<&'a str>,
+    /// What the platform already worked out about this project: languages, frameworks,
+    /// build system, datastores, containers — each with the file and line that proved it.
+    /// Carried so a capability does not re-derive what `detect` has already established;
+    /// `None` when no profile has been saved yet, which a rule must tolerate rather than
+    /// assume away.
+    pub profile: Option<&'a crate::report::Profile>,
     /// Indexed lookup, built once: a capability that scans the symbol list per edge turns a
     /// linear pass into a quadratic one, and the graph is the biggest thing here.
     pub by_fqn: BTreeMap<&'a str, &'a SymbolFacts>,
@@ -98,6 +104,7 @@ impl<'a> ProjectContext<'a> {
             files,
             changed: &[],
             commit: None,
+            profile: None,
             by_fqn,
         }
     }
@@ -105,6 +112,11 @@ impl<'a> ProjectContext<'a> {
     pub fn with_changes(mut self, changed: &'a [ChangedSymbol], commit: Option<&'a str>) -> Self {
         self.changed = changed;
         self.commit = commit;
+        self
+    }
+
+    pub fn with_profile(mut self, profile: Option<&'a crate::report::Profile>) -> Self {
+        self.profile = profile;
         self
     }
 

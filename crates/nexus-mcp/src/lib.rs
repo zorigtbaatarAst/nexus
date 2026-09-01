@@ -13,6 +13,7 @@
 
 pub mod budget;
 
+use cap_architect::Architect as ArchitectCapability;
 use cap_bughunter::BugHunter as BugHunterCapability;
 use nexus_core::capability::Scope;
 use nexus_core::impact::{Direction, ImpactQuery};
@@ -159,6 +160,7 @@ impl Nexus {
                 // The composition root: Nexus is handed its capabilities here rather than
                 // compiling them in, which is what lets BugHunter ship separately.
                 e.register_capability(Box::new(BugHunterCapability::new()));
+                e.register_capability(Box::new(ArchitectCapability::new()));
                 *guard = Some(e);
             }
             let e = guard

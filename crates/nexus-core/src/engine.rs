@@ -1127,8 +1127,12 @@ impl Engine {
             _ => Vec::new(),
         };
 
+        // Loaded once and handed over: a capability that re-derived the profile would be
+        // re-reading build files the platform already read.
+        let profile = self.load_profile().ok().flatten();
         let ctx = ProjectContext::new(&self.root, &symbols, &edges, &files)
-            .with_changes(&changed, commit.as_deref());
+            .with_changes(&changed, commit.as_deref())
+            .with_profile(profile.as_ref());
 
         let mut candidates = capability
             .analyze(&ctx, &scope)

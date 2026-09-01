@@ -678,9 +678,18 @@ pub fn findings(w: &mut impl Write, st: &Style, list: &[FindingSummary]) -> std:
     writeln!(
         w,
         "{}",
+        // Both halves follow the name the user typed. Under `nexus` the subcommand is
+        // `finding`; `bug` is BugHunter's alias for it, and printing the alias to someone
+        // running the platform tells them to use the other tool.
         st.dim(&format!(
-            "  {} findings — see one with: bughunter bug <id>",
-            list.len()
+            "  {} findings — see one with: {} {} <id>",
+            list.len(),
+            binary_name(),
+            if product_name() == "BugHunter" {
+                "bug"
+            } else {
+                "finding"
+            }
         ))
     )
 }

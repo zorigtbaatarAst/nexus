@@ -1,0 +1,12 @@
+[package]
+name = "cap-architect"
+description = "Architect: what this project is, and what working in it needs. The second Nexus capability."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nexus-core.workspace = true
+nexus-types.workspace = true
+serde_json.workspace = true

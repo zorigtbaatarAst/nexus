@@ -10,6 +10,7 @@
 mod ask;
 mod render;
 
+use cap_architect::Architect;
 use cap_bughunter::BugHunter;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use nexus_core::capability::Scope;
@@ -572,12 +573,14 @@ fn is_broken_pipe(e: &(dyn std::error::Error + 'static)) -> bool {
 fn open(root: &std::path::Path) -> Result<Engine, EngineError> {
     let mut engine = Engine::open(root)?;
     engine.register_capability(Box::new(BugHunter::new()));
+    engine.register_capability(Box::new(Architect::new()));
     Ok(engine)
 }
 
 fn open_or_init(root: &std::path::Path) -> Result<(Engine, bool), EngineError> {
     let (mut engine, fresh) = Engine::open_or_init(root)?;
     engine.register_capability(Box::new(BugHunter::new()));
+    engine.register_capability(Box::new(Architect::new()));
     Ok((engine, fresh))
 }
 
