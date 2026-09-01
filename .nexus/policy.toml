@@ -1,0 +1,32 @@
+# BugHunter permissions — committed, so they are reviewed in a pull request
+# rather than depending on whoever happens to run the tool.
+#
+# Defaults are the safe end of every axis: a freshly initialized project can index,
+# diff and analyze, but cannot run anything and cannot call any API until someone
+# commits a change saying otherwise.
+
+[permissions]
+read_paths    = ["**"]
+deny_paths    = ["**/.env*", "**/*.pem", "**/*.key", "**/secrets/**", "**/credentials*"]
+execute       = "none"     # docker | host | none
+allow_network = false
+ai            = "agent"    # agent | provider | off
+
+[execute]
+timeout_seconds = 600
+memory_limit    = "4g"
+
+[execute.allowlist]
+# Templates with typed holes, expanded into an explicit argv. Never a shell string.
+commands = [
+  "./gradlew test --tests {test}",
+  "mvn -q test -Dtest={test}",
+  "npm test -- {test}",
+  "pytest {test}",
+  "cargo test {test}",
+]
+
+[ai]
+provider           = "none"
+max_context_tokens = 24000
+redact             = true

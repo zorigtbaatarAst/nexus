@@ -1,0 +1,8 @@
+# BugHunter project configuration — committed, shared team intent.
+
+[scan]
+# Extra path prefixes to exclude, on top of .gitignore and .bughunterignore.
+exclude = []
+
+[languages]
+# Override auto-detection when a directory needs pinning to one language.

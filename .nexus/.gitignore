@@ -1,0 +1,6 @@
+nexus.db
+nexus.db-wal
+nexus.db-shm
+cache/
+generated-tests/
+audit.log
