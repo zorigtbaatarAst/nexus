@@ -304,7 +304,7 @@ the only probabilistic component, and it sits outside the box.
 |---|---|---|---|
 | 1 | Task Intelligence | `core::context::intent` | New — deterministic classifier, no LLM |
 | 2 | Context Engine | `core::context` | New — the spine |
-| 3 | Graphify integration | `core::context::seeds` (optional source) | New, optional; see §7 |
+| 3 | Graphify integration | `core::context::seeds` (optional source) | New, optional; see §8 |
 | 4 | Engineering Memory | `facts` + `findings` + `core::context::retrieve` | Exists; needs lifecycle + invalidation |
 | 5 | Skill / Workflow | `commands/`, `skills/`, `hooks/` | Exists; hooks are new |
 | 6 | Agent Integration | `nexus-mcp`, `nexus-cli`, `hooks/` | Exists; hooks are new |
@@ -323,5 +323,5 @@ expand stages may consult it for files whose language has no `LanguageAnalyzer`,
 `resolution = "external-graph"` and a confidence ceiling below tree-sitter-derived edges.
 
 It is never required, never invoked automatically, and never mixed into the resolution
-denominator. If Nexus gains a Rust analyzer (Phase 3), this path is dead weight and gets
+denominator. If Nexus gains a Rust analyzer (Phase 5.2), this path is dead weight and gets
 deleted — which is the test of whether it was ever an integration or just a crutch.
