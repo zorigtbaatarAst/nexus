@@ -1628,6 +1628,126 @@ impl Engine {
         (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
+    /// The questions a person or an agent actually has, each answered from the index.
+    ///
+    /// This lives here rather than in an adapter because every answer needs more than one
+    /// query, and the rule is that a caller needing two `Engine` calls has found a missing
+    /// `Engine` method.
+    pub fn ask(&self, q: &Question) -> Result<Answer> {
+        match q {
+            Question::Changed => Ok(Answer::Changed {
+                since: self.status()?.baseline.and_then(|b| b.scan_uid),
+                symbols: self
+                    .changes(Some("symbol"))?
+                    .into_iter()
+                    .filter_map(|(_, _, t, _)| t)
+                    .collect(),
+                files: self.changes(Some("file"))?.len(),
+            }),
+
+            // "What is affected by this change?" and "Where is this symbol used?" are the
+            // same traversal asked from two directions, so they share an answer.
+            Question::Affected(target) => {
+                let query = ImpactQuery {
+                    target: target.clone(),
+                    direction: crate::impact::Direction::Reverse,
+                    ..Default::default()
+                };
+                match self.impact(&query)? {
+                    Resolved::One(r) => Ok(Answer::Affected {
+                        target: target.clone(),
+                        crossed_seam: r.crossed_seam,
+                        symbols: r
+                            .items
+                            .into_iter()
+                            .map(|i| Affected {
+                                fqn: i.fqn,
+                                score: i.score,
+                                min_confidence: i.min_confidence,
+                            })
+                            .collect(),
+                    }),
+                    _ => Ok(Answer::Affected {
+                        target: target.clone(),
+                        symbols: Vec::new(),
+                        crossed_seam: 0,
+                    }),
+                }
+            }
+
+            // "Have we seen this problem before?" — the question worth asking before changing
+            // anything, and the one persistent knowledge exists to answer.
+            Question::Known(target) => Ok(Answer::Known {
+                findings: self.findings_for(target)?,
+                facts: self.facts(Some(target))?,
+                target: target.clone(),
+            }),
+
+            Question::Facts => Ok(Answer::Facts {
+                facts: self.facts(None)?,
+            }),
+
+            Question::Next => Ok(Answer::Next {
+                suggestions: self.suggest()?,
+            }),
+        }
+    }
+
+    /// What to look at next: changed symbols, ranked by how much they affect and by whether
+    /// anything has gone wrong there before.
+    ///
+    /// Both halves are already indexed, so this is a ranking rather than an analysis — which
+    /// is the point. Nexus does not need to think about what to examine; it already knows.
+    ///
+    /// **Two queries per candidate, up to forty candidates.** That is worth naming rather
+    /// than leaving to be rediscovered. `impact` is inherently one traversal per seed and has
+    /// no batched form. `findings_for` looks batchable and is not: it matches on five
+    /// conditions — the occurrence's file path, an exact fqn, two `LIKE` forms over the fqn,
+    /// and the component — so collapsing it into one query grouped by component would change
+    /// which findings count, and reimplementing all five in Rust would leave two definitions
+    /// of "a finding about this symbol" free to disagree. Batching it properly needs a store
+    /// method that keeps the matching in SQL, where it already is.
+    fn suggest(&self) -> Result<Vec<Suggestion>> {
+        let changed: Vec<String> = self
+            .changes(Some("symbol"))?
+            .into_iter()
+            .filter_map(|(_, _, target, _)| target)
+            .take(40)
+            .collect();
+
+        let mut out = Vec::new();
+        for fqn in changed {
+            let reach = match self.impact(&ImpactQuery {
+                target: fqn.clone(),
+                ..Default::default()
+            })? {
+                Resolved::One(r) => r.items.len(),
+                _ => 0,
+            };
+            let prior = self.findings_for(&fqn)?.len();
+            // Reach is the cost of being wrong; prior findings are evidence that this code
+            // has been wrong before. Neither alone is a good reason to look.
+            let score = reach as f64 + prior as f64 * 3.0;
+            if score <= 0.0 {
+                continue;
+            }
+            out.push(Suggestion {
+                why: match (reach, prior) {
+                    (r, 0) => format!("changed, and {r} symbols depend on it"),
+                    (0, p) => format!("changed, and {p} findings already exist here"),
+                    (r, p) => {
+                        format!("changed, {r} symbols depend on it, {p} findings already here")
+                    }
+                },
+                target: fqn,
+                score,
+            });
+        }
+        out.sort_by(|a, b| b.score.total_cmp(&a.score));
+        out.truncate(10);
+        Ok(out)
+    }
+
     pub fn graph(&self) -> Result<GraphReport> {
         let counts = self.store.edge_counts(self.project_id)?;
         Ok(GraphReport {

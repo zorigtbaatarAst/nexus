@@ -188,3 +188,71 @@ fn identity_survives_a_package_move() {
     assert_eq!(status_of(&engine, &uid), "UNVERIFIED");
     let _ = fs::remove_dir_all(&root);
 }
+
+/// `ask next` ranks a changed symbol that already carries a finding above one that does not.
+///
+/// The N+1 that `Engine::suggest` documents is not observable from outside, so it is a
+/// code-review property. What this test protects is the *ranking*, which is the part a user
+/// sees — and which the "prior findings are worth three symbols of reach" weight decides.
+#[test]
+fn ask_next_ranks_a_symbol_with_prior_findings_above_a_clean_one() {
+    use nexus_core::report::{Answer, Question};
+
+    let root = fixture("asknext");
+    let (mut engine, _) = Engine::init(&root).expect("init");
+    engine.register_capability(Box::new(BugHunter::new()));
+    engine.scan().expect("scan");
+    let found = analyze(&mut engine);
+    assert_eq!(found.new, 1, "the fixture plants exactly one finding");
+
+    // Change both classes, so both are in the changed set and only the finding separates
+    // them. A body edit, not a comment: `normalize_body` strips comments, correctly, and a
+    // comment-only edit would produce no changed symbol at all.
+    // Edit the method the finding anchors on — `create`, whose `this.persist(key)` is the
+    // self-invocation — while keeping that call, so the finding survives the edit and the
+    // changed symbol is the one it is attached to. Editing `persist` instead would change a
+    // symbol the finding does not anchor on, and `findings_for` would correctly return
+    // nothing: the first draft of this test did exactly that and caught itself.
+    write(
+        &root,
+        "src/mn/pay/PaymentService.java",
+        &SELF_INVOCATION.replace(
+            "return this.persist(key);",
+            "String k = key.trim();\n        return this.persist(k);",
+        ),
+    );
+    write(
+        &root,
+        "src/mn/pay/PaymentRepository.java",
+        "package mn.pay;\n@Repository\npublic class PaymentRepository { public Payment save(String k) { return this.k(); } }\n",
+    );
+    engine.rescan().expect("rescan");
+
+    let Answer::Next { suggestions } = engine.ask(&Question::Next).expect("ask next") else {
+        panic!("Question::Next must answer with Answer::Next");
+    };
+    assert!(
+        !suggestions.is_empty(),
+        "two classes changed; something should be worth looking at"
+    );
+
+    let service = suggestions
+        .iter()
+        .position(|s| s.target.contains("PaymentService"))
+        .expect("the class carrying the finding must be suggested");
+
+    if let Some(repository) = suggestions
+        .iter()
+        .position(|s| s.target.contains("PaymentRepository"))
+    {
+        assert!(
+            service < repository,
+            "a changed symbol with a finding on it outranks one without: {suggestions:?}"
+        );
+    }
+    assert!(
+        suggestions[service].why.contains("findings already"),
+        "the reason must say why it ranked, not merely that it did: {:?}",
+        suggestions[service].why
+    );
+}

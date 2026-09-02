@@ -327,3 +327,62 @@ pub struct Fact {
     pub source: String,
     pub confidence: f64,
 }
+
+// --- `ask`: the questions a person or an agent actually has -------------------------------
+
+/// A question, as a value rather than a string.
+///
+/// Verb parsing stays in the adapter: `"what-changed"` and `"changed"` are the same question
+/// spelled two ways, and which spellings a surface accepts is that surface's business.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Question {
+    Changed,
+    Affected(String),
+    Known(String),
+    Facts,
+    Next,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "question", rename_all = "snake_case")]
+pub enum Answer {
+    Changed {
+        since: Option<String>,
+        symbols: Vec<String>,
+        files: usize,
+    },
+    Affected {
+        target: String,
+        symbols: Vec<Affected>,
+        crossed_seam: usize,
+    },
+    Known {
+        target: String,
+        findings: Vec<FindingSummary>,
+        facts: Vec<Fact>,
+    },
+    Facts {
+        facts: Vec<Fact>,
+    },
+    Next {
+        suggestions: Vec<Suggestion>,
+    },
+    Unknown {
+        asked: String,
+        understood: Vec<&'static str>,
+    },
+}
+
+#[derive(Debug, Serialize)]
+pub struct Affected {
+    pub fqn: String,
+    pub score: f64,
+    pub min_confidence: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Suggestion {
+    pub target: String,
+    pub why: String,
+    pub score: f64,
+}
