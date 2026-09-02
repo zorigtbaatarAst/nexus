@@ -83,7 +83,7 @@ make install
 ```
 </details>
 
-Ямар нэг зүйл болохгүй бол `bughunter doctor` ажиллуулаарай. Юу дутуу байгааг, яаж засахыг тухайн
+Ямар нэг зүйл болохгүй бол `nexus doctor` ажиллуулаарай. Юу дутуу байгааг, яаж засахыг тухайн
 командтай нь хамт хэлж өгнө.
 
 ---
@@ -120,15 +120,22 @@ provider-т зориулсан нэг ч мөр код байхгүй. Аген�
 ## Юу хийдэг вэ
 
 ```
-bughunter scan         төслийг индекслээд baseline тавина
-bughunter rescan       baseline-тай харьцуулж → өөрчлөгдсөн симбол → нөлөөлөл
-bughunter impact       нэг метод/файл өөрчлөгдвөл юу эвдрэхийг харуулна
-bughunter graph        dependency граф хэр том, хэдэн хувь нь холбогдсон
-bughunter hunt         детерминистик шалгуурууд ажиллуулах
-bughunter bugs         олдворуудын жагсаалт
-bughunter bug <id>     нэг олдвор — нотолгоо, түүхтэй нь
-bughunter mcp          Claude Code, Codex, Copilot-д зориулсан MCP сервер
-bughunter doctor       тохиргоо, орчны шалгалт
+nexus init             хэл, framework, build систем, өгөгдлийн сан, контейнер илрүүлнэ
+nexus scan             төслийг индекслээд baseline тавина
+nexus rescan           baseline-тай харьцуулж → өөрчлөгдсөн симбол → нөлөөлөл
+nexus impact <target>  нэг метод/файл өөрчлөгдвөл юу эвдрэхийг харуулна — бүх stack-аар
+nexus graph            dependency граф хэр том, хэдэн хувь нь холбогдсон
+nexus analyze [cap]    capability ажиллуулна: architect | review | bughunter
+nexus findings         бүх capability-ийн олдворууд
+nexus finding <id>     нэг олдвор — нотолгоо, түүхтэй нь
+nexus ask <асуулт>     changed · affected X · known X · facts · next
+nexus fact <key> <..>  дараагийн session-д зориулж санана
+nexus doctor           тохиргоо, орчны шалгалт
+nexus mcp              Claude Code, Codex, Copilot-д зориулсан MCP сервер
+
+# төлөвлөгдсөн — V1, одоогоор баригдаагүй. docs/roadmap.md
+nexus investigate      дэлгэцийн зургийн тайлбар → UI anchor → seam → сэжигтнүүд
+nexus verify           reproduction тест үүсгэж, ажиллуулж, baseline дээр давтаж, дүгнэнэ
 ```
 
 Бүх repo-г уншдаг цорын ганц удаа бол эхний `scan`. Дараа нь **байгаа кодын хэмжээгээр биш,
@@ -167,7 +174,7 @@ BODY_CHANGED    mn.life.wellbeing.service.WellbeingService#saveMeal(SaveMealInpu
 Autoland-ийн `sales` төсөл дээр ажиллуулсан бодит үр дүн:
 
 ```
-$ bughunter impact 'mn.autoland.sales.vehicle.service.VehicleService#list' --paths
+$ nexus impact 'mn.autoland.sales.vehicle.service.VehicleService#list' --paths
 
   0.81  VehicleGraphQLController#vehicles(...)
   0.57  graphql:Query.vehicles
@@ -191,6 +198,9 @@ Java методын нэг мөр өөрчлөхөд **зургаан React ко
 
 Бодит амьдрал дээр алдаа ингэж ирдэг: хүн дэлгэц рүү заагаад *"энэ тоо буруу байна"* гэдэг.
 Ямар коммит буруутайг нь хэн ч мэдэхгүй.
+
+**V1-ийн зорилт.** Доорх урсгал бол зорилт, одоогийн гаралт биш — `investigate` команд
+одоогоор баригдаагүй, [`docs/roadmap.md`](docs/roadmap.md)-д төлөвлөгдсөн:
 
 ```
 хүн → агент     [дэлгэцийн зураг] "Сагсны нийт дүн 0 харагдаж байна, гэтэл 3 бараа байна"
@@ -277,16 +287,27 @@ MCP сервер аль хэдийн ажиллаж байна: найман too
 
 Rust · нэг статик binary · SQLite · tree-sitter · git2.
 
-Java, TypeScript одоо ажиллаж байна. Python, Rust V1-д. Хэл бүр `LanguageAnalyzer`
+Java, TypeScript, GraphQL одоо ажиллаж байна. Python, Rust V1-д. Хэл бүр `LanguageAnalyzer`
 интерфейсийн ард байрлана. Framework мэдлэг (Spring, Next.js, Django) нь тусдаа өргөтгөлийн
 цэг — Spring гэдэг Java биш шүү дээ.
 
 | Crate | Төлөв |
 |---|---|
-| `nexus-types` · `nexus-store` · `nexus-vcs` · `nexus-lang` · `nexus-lang-java` · `nexus-lang-ts` · `nexus-core` · `nexus-cli` | ажиллаж байна |
-| `nexus-mcp` | ажиллаж байна — 16 tool |
-| `cap-bughunter` | ажиллаж байна — 4 дүрэм |
+| `nexus-types` · `nexus-store` · `nexus-vcs` · `nexus-lang` · `nexus-lang-java` · `nexus-lang-ts` · `nexus-lang-graphql` · `nexus-core` · `nexus-cli` | ажиллаж байна |
+| `nexus-mcp` | ажиллаж байна — 19 tool |
+| `cap-architect` · `cap-review` · `cap-bughunter` | ажиллаж байна — 3, 3, 4 дүрэм |
+| `nexus-fixtures` | ажиллаж байна — benchmark fixture-үүдийг тодорхойлолтоос үүсгэнэ, дандаа адилхан sha |
 | `nexus-lang-python` · `nexus-lang-rust` · `nexus-verify` | дараа |
+
+---
+
+## Nexus өөр дээр нь ажиллах
+
+`make check` — CI-ийн ажиллуулдаг зүйл: fmt, clippy (warning = алдаа), бүх тест. `make fixtures`
+benchmark корпусыг `target/fixtures/` дотор үүсгэнэ; `make fixtures-verify` хоёр удаа үүсгээд
+нэг ч sha хөдөлсөн бол унана. `/nexus-architect` кодоос одоогийн байдлыг тогтоогоод
+`docs/architecture/`-ийн төлөвлөгөөнөөс нэг даалгавар төлөвлөнө эсвэл хийнэ. Эхлээд
+[`AGENTS.md`](AGENTS.md)-г унш.
 
 ---
 
@@ -296,16 +317,22 @@ Java, TypeScript одоо ажиллаж байна. Python, Rust V1-д. Хэл 
 
 | Файл | Тухай |
 |---|---|
+| [AGENTS.md](AGENTS.md) | агентад зориулсан танилцуулга: өөрчлөгдөшгүй дүрмүүд, санаатай сонин зүйлс, цаг үрдэг урхинууд |
 | [architecture.md](docs/architecture.md) | давхаргууд, crate-үүд, модулийн хил, repo бүтэц |
-| [architecture-decisions.md](docs/architecture-decisions.md) | 17 ADR — яагаад ийм болсон, өөр ямар сонголт байсан, хэзээ өөрчлөх вэ |
+| [architecture-decisions.md](docs/architecture-decisions.md) | 21 ADR — яагаад ийм болсон, өөр ямар сонголт байсан, хэзээ өөрчлөх вэ |
 | [data-model.md](docs/data-model.md) | SQLite схем, 21 хүснэгт, өөрчлөгдөшгүй байдлын дүрэм |
 | [change-analysis.md](docs/change-analysis.md) | өөрчлөлт хэрхэн илрүүлэх, нөлөөлөл хэрхэн тооцох, алдааны fingerprint |
+| [memory-model.md](docs/memory-model.md) | төслийн санах ой: fact-ууд хэрхэн хадгалагдаж, хүчингүй болдог |
 | [capabilities.md](docs/capabilities.md) | capability-ийн гэрээ, шинийг хэрхэн нэмэх вэ |
 | [investigation.md](docs/investigation.md) | дэлгэцийн зургаас сэжигтэн хүртэл; frontend, backend хоёрыг холбох |
 | [verification-engine.md](docs/verification-engine.md) | тест үүсгэж, ажиллуулж, дүгнэх |
 | [mcp-api.md](docs/mcp-api.md) | MCP tool-ууд, зөвшөөрлийн хяналт |
+| [ai-integration.md](docs/ai-integration.md) | AI хэрхэн орох вэ: агент өөрөө provider, redaction |
 | [security.md](docs/security.md) | аюулгүй байдал, зөвшөөрөл, sandbox, нууц түлхүүр |
+| [testing-strategy.md](docs/testing-strategy.md) | алдаа боловсруулалт, golden fixture, property тест |
 | [cli-spec.md](docs/cli-spec.md) · [performance.md](docs/performance.md) · [roadmap.md](docs/roadmap.md) | CLI, гүйцэтгэл, төлөвлөгөө |
+| [docs/architecture/](docs/architecture/README.md) | **Nexus юу болох ёстой вэ**: Context Engine, санах ойн амьдралын мөчлөг, баталгаажуулалт, үнэлгээ, 0–5 үе шаттай төлөвлөгөө. Төлөвлөгөө, тайлбар биш |
+| [tests/fixtures/README.md](tests/fixtures/README.md) | benchmark корпус: тодорхойлолтоос детерминистик үүсгэдэг дөрвөн repo |
 
 ---
 

@@ -91,13 +91,13 @@ make install
 ```
 </details>
 
-If anything looks wrong, run `bughunter doctor`. Every check names what it found, where, and
+If anything looks wrong, run `nexus doctor`. Every check names what it found, where, and
 the exact command that fixes it.
 
 ## How it works
 
 ```
-bughunter init         detect language, framework, build system, databases, containers
+nexus init             detect language, framework, build system, databases, containers
 nexus scan             index files, symbols, dependencies → establish a baseline
 nexus rescan           diff against the baseline → changed symbols → impact
 nexus impact <target>  blast radius of a symbol, a file or a name — across the stack
@@ -106,9 +106,13 @@ nexus analyze [cap]    run a capability: architect | review | bughunter
 nexus findings         findings from every capability
 nexus ask <question>   changed · affected X · known X · facts · next
 nexus fact <key> <..>  remember something for the next session
+nexus status           baseline, drift, index size
+nexus doctor           diagnose the environment and configuration
 nexus mcp              run as an MCP server for Claude Code, Codex or Copilot
-bughunter investigate  a described screenshot → UI anchor → across the seam → suspects
-bughunter verify       generate a reproduction test, run it, run it on the baseline, judge
+
+# planned — V1, not built yet. See docs/roadmap.md
+nexus investigate      a described screenshot → UI anchor → across the seam → suspects
+nexus verify           generate a reproduction test, run it, run it on the baseline, judge
 ```
 
 ### The loop
@@ -139,6 +143,9 @@ screenshot; BugHunter never receives it.
 
 The first scan is the only one that reads the whole repository. A rescan costs what changed,
 not what exists: a no-op rescan on a 5 MLOC monorepo targets under two seconds.
+
+**What V1 will show.** The report below is the target, not current output — the verification
+engine that produces `VERIFIED` does not exist yet, and every surface says so:
 
 ```
 BugHunter
@@ -227,8 +234,9 @@ args    = ["mcp"]
 
 | Document | Contents |
 |---|---|
+| [AGENTS.md](AGENTS.md) | the briefing: invariants, deliberate oddities, and the traps that cost real time |
 | [architecture.md](docs/architecture.md) | layers, crates, module boundaries, repo structure, constraint traceability |
-| [architecture-decisions.md](docs/architecture-decisions.md) | 12 ADRs, each with alternatives and a revisit trigger |
+| [architecture-decisions.md](docs/architecture-decisions.md) | 21 ADRs, each with alternatives and a revisit trigger |
 | [data-model.md](docs/data-model.md) | entities, the immutability doctrine, full SQLite DDL, indexes |
 | [memory-model.md](docs/memory-model.md) | project / code / historical / bug memory, and facts |
 | [capabilities.md](docs/capabilities.md) | the capability contract, and how to add one |
@@ -243,6 +251,8 @@ args    = ["mcp"]
 | [testing-strategy.md](docs/testing-strategy.md) | error handling, golden fixtures, property tests |
 | [roadmap.md](docs/roadmap.md) | MVP → V1 → V2, with triggers rather than dates |
 | [diagrams/](docs/diagrams/) | system architecture, scan, rescan, verification, MCP |
+| [docs/architecture/](docs/architecture/README.md) | **what Nexus should become**: the Context Engine, memory lifecycle, verification gate, evaluation design, and a Phase 0–5 roadmap. A plan, not a description |
+| [tests/fixtures/README.md](tests/fixtures/README.md) | the benchmark corpus: four repositories generated deterministically from specifications |
 
 ---
 
@@ -250,12 +260,13 @@ args    = ["mcp"]
 
 | Crate | State |
 |---|---|
-| `nexus-types` · `nexus-store` · `nexus-vcs` · `nexus-lang` · `nexus-lang-java` · `nexus-lang-ts` · `nexus-core` · `nexus-cli` | working |
-| `nexus-mcp` | working — sixteen tools |
-| `cap-bughunter` | working — four deterministic rules |
+| `nexus-types` · `nexus-store` · `nexus-vcs` · `nexus-lang` · `nexus-lang-java` · `nexus-lang-ts` · `nexus-lang-graphql` · `nexus-core` · `nexus-cli` | working |
+| `nexus-mcp` | working — nineteen tools |
+| `cap-architect` · `cap-review` · `cap-bughunter` | working — three, three and four deterministic rules |
+| `nexus-fixtures` | working — builds the benchmark corpus from specifications, the same shas every time |
 | `nexus-lang-python` · `nexus-lang-rust` · `nexus-verify` | later |
 
-The store carries the **full 21-table schema** from day one — adding the bug and
+The store carries the **full 21-table schema** from day one — adding the history and
 verification tables later would mean migrating a populated database for no reason.
 
 Measured on a real 880-file Spring + Next.js project: 5,665 symbols and **96 % of
@@ -275,11 +286,18 @@ $ bughunter impact 'mn.autoland.sales.vehicle.service.VehicleService#list' --pat
         graphql:Query.vehicles --calls_graphql--> graphql:op:Vehicles --calls_graphql-->
 ```
 
+## Working on Nexus itself
+
+`make check` is what CI runs — fmt, clippy with warnings denied, every test. `make fixtures`
+builds the benchmark corpus into `target/fixtures/`; `make fixtures-verify` generates it twice
+and fails if a sha moved. `/nexus-architect` orients from the code, then plans or implements
+one task from the roadmap in `docs/architecture/`. Read [`AGENTS.md`](AGENTS.md) first.
+
 ## Planned stack
 
 Rust · Cargo workspace · one static binary · SQLite (WAL) · tree-sitter · git2 · rmcp · clap.
-Java, TypeScript, Python and Rust analyzers behind a `LanguageAnalyzer` trait, with framework
-packs as a separate extension point.
+Java, TypeScript and GraphQL analyzers ship; Python and Rust are planned. Each sits behind a
+`LanguageAnalyzer` trait, with framework packs as a separate extension point.
 
 Language rationale, and the three alternatives rejected:
 [ADR-001](docs/architecture-decisions.md#adr-001-rust-for-bughunter-core).
