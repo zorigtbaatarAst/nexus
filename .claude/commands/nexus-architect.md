@@ -1,0 +1,1 @@
+../../commands/nexus-architect.md
