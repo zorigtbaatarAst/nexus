@@ -23,6 +23,7 @@ pub mod findings;
 pub mod impact;
 pub mod project;
 pub mod report;
+pub mod rules;
 pub mod walk;
 
 pub use engine::{Engine, EngineError, Result, DB_FILE, NEXUS_DIR, SIBLING_WARN_FLOOR};

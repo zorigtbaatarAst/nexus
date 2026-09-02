@@ -64,9 +64,13 @@ impl Capability for Architect {
         }
 
         let scoped = ctx.scoped(scope);
+        // One reverse-adjacency pass per analysis rather than one per rule. Architect's rules
+        // do not use it today; the cost is a single HashMap build over the edge list, paid
+        // only after the `Scope::Everything` early return above.
+        let graph = rules::Graph::of(ctx);
         let mut out = Vec::new();
         for rule in rules::all() {
-            out.extend(rule.run(ctx, &scoped));
+            out.extend(rule.run(ctx, &scoped, &graph));
         }
         Ok(out)
     }

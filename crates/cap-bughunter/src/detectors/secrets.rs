@@ -8,7 +8,7 @@
 //! recreates, inside BugHunter's own database, exactly the exposure the redactor exists to
 //! prevent — and that database is not covered by the deny-list protecting the repository.
 
-use super::Detector;
+use super::{Detector, Graph};
 use nexus_core::findings::{CodeRef, Finding};
 use nexus_core::project::{ProjectContext, Scoped};
 use nexus_types::{FindingType, Severity};
@@ -53,7 +53,12 @@ impl Detector for HardcodedSecret {
         "a credential committed to source"
     }
 
-    fn run(&self, ctx: &ProjectContext<'_>, scoped: &Scoped<'_>) -> Vec<Finding> {
+    fn run(
+        &self,
+        ctx: &ProjectContext<'_>,
+        scoped: &Scoped<'_>,
+        _graph: &Graph<'_>,
+    ) -> Vec<Finding> {
         let mut out = Vec::new();
         for f in &scoped.files {
             if !is_scannable(&f.path) {

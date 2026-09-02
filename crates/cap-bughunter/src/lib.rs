@@ -53,9 +53,14 @@ impl Capability for BugHunter {
         // Narrowing happens once, here, rather than in each detector: a rule that forgets
         // to respect the scope makes a targeted analysis quietly cost as much as a full one.
         let scoped = ctx.scoped(scope);
+        // Built once per analysis rather than once per rule. BugHunter has no early return,
+        // so it pays this on every run: one HashMap build over the edge list, 40,000 entries
+        // on the measured monorepo. If it ever shows up in a profile the answer is a lazily
+        // built graph, not three trait declarations.
+        let graph = detectors::Graph::of(ctx);
         let mut out = Vec::new();
         for d in detectors::all() {
-            out.extend(d.run(ctx, &scoped));
+            out.extend(d.run(ctx, &scoped, &graph));
         }
         Ok(out)
     }

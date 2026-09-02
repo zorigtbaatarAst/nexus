@@ -8,7 +8,7 @@
 //! Measured on a six-service monorepo: scanning one module classified 6,247 edges as
 //! sibling, and `impact` on the base class every entity extends answered "no symbol matches".
 
-use super::Rule;
+use super::{Graph, Rule};
 use nexus_core::findings::{CodeRef, Finding};
 use nexus_core::project::{ProjectContext, Scoped};
 use nexus_types::{FindingType, Severity};
@@ -30,7 +30,12 @@ impl Rule for ScanningOneModule {
         "this scan covers one module of a larger project, so impact is understated"
     }
 
-    fn run(&self, ctx: &ProjectContext<'_>, _scoped: &Scoped<'_>) -> Vec<Finding> {
+    fn run(
+        &self,
+        ctx: &ProjectContext<'_>,
+        _scoped: &Scoped<'_>,
+        _graph: &Graph<'_>,
+    ) -> Vec<Finding> {
         let siblings: Vec<&nexus_core::project::EdgeFacts> = ctx
             .edges
             .iter()
@@ -129,7 +134,7 @@ mod tests {
         let files: Vec<FileFacts> = Vec::new();
         let ctx = ProjectContext::new(Path::new("/"), &symbols, &edges, &files);
         let scoped = ctx.scoped(&Scope::Everything);
-        ScanningOneModule.run(&ctx, &scoped)
+        ScanningOneModule.run(&ctx, &scoped, &Graph::of(&ctx))
     }
 
     #[test]
