@@ -96,23 +96,32 @@ performance   generated repos with wall-clock assertions
 
 ## 3. Golden fixture repositories
 
-The backbone. Four small but *real* projects under `tests/fixtures/`, each a genuine git
-repository with a scripted history that plants a specific bug at a known commit.
+The backbone. Four small but *real* projects, each a genuine git repository with a scripted
+history that plants a specific bug at a known commit.
+
+They are **generated, not committed** — `tests/fixtures/specs/<name>/` holds a declarative
+specification, and `make fixtures` builds the repositories into `target/fixtures/`. Generation
+is deterministic: the same specification produces the same commit shas on any machine, which
+`make fixtures-verify` asserts in CI. See [`tests/fixtures/README.md`](../tests/fixtures/README.md).
 
 ```
-tests/fixtures/spring-payments/     Java 21 · Spring Boot 3.5 · JPA
+tests/fixtures/specs/spring-payments/   Java 21 · Spring Boot · JPA · GraphQL
   commit 1  baseline: PaymentService with an idempotency check
   commit 2  refactor: extract PaymentValidator            (no bug — must find nothing)
   commit 3  BUG: exists() check moved outside @Transactional → duplicate under concurrency
-  commit 4  reformat everything with spotless             (must find nothing, no churn)
+  commit 4  reformat everything                           (must find nothing, no churn)
   commit 5  rename mn.pay → mn.payments                   (must not duplicate BUG from c3)
   commit 6  fix: unique index + optimistic locking        (bug → FIXED)
   commit 7  BUG returns: index dropped in a migration     (bug → REGRESSED)
 
-tests/fixtures/next-storefront/     TypeScript · Next.js · Prisma
-tests/fixtures/fastapi-orders/      Python · FastAPI · SQLAlchemy
-tests/fixtures/cargo-ledger/        Rust · axum · sqlx
+tests/fixtures/specs/next-storefront/   Spring GraphQL API + Next.js, one repository
+tests/fixtures/specs/acme-monorepo/     three Gradle modules over one shared library
+tests/fixtures/specs/legacy-billing/    three plausible invoice calculators, one live
 ```
+
+`fastapi-orders` (Python) and `cargo-ledger` (Rust) are deferred: they exist to exercise
+analyzers that do not exist yet, and generating them now would produce repositories nothing
+can index.
 
 Each fixture asserts the full chain, commit by commit:
 

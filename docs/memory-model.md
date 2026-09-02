@@ -1,5 +1,10 @@
 # BugHunter — Project Memory Model
 
+> **Status: partly built.** The `facts` table, supersession and evidence-checked recording
+> work. §3's `ContextBuilder` in `nexus-core::context` does not exist: retrieval today is
+> `ORDER BY source, confidence` with no subject weighting, recency decay or token budget.
+> Invalidation-by-change is specified in §2 rule 3 and is not implemented.
+
 Memory is what makes the second scan cheaper than the first and the tenth scan smarter than
 the second. It lives in SQLite at `.nexus/nexus.db` and survives across scans,
 sessions, agents and machines.

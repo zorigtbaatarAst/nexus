@@ -1,5 +1,8 @@
 # BugHunter — Verification Engine
 
+> **Status: designed, not built.** No `nexus-verify` crate exists. This document is the
+> specification the crate must satisfy; nothing described here runs today.
+
 This is the feature that separates BugHunter from a static analyzer with a chat window.
 Anything can *suspect* a bug. Verification is the claim that BugHunter made the bug happen.
 

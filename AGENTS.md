@@ -8,9 +8,10 @@ the constraints that will bite you if you do not know them.
 A platform for persistent code intelligence. **Nexus understands the project; capabilities
 use that understanding.** BugHunter is the first capability, not the product.
 
-The directory and the GitHub repository are still called `bughunter` — the rename stopped at
-the code, because moving the repo breaks `install.sh`'s hardcoded paths and the v0.1.0 release
-URL. That is a separate decision, not an oversight.
+The rename to `nexus` is complete: the directory, the repository and the crates all carry it.
+One thing survives on purpose — `Engine::migrate_legacy_dir` moves a `.bughunter/` directory
+to `.nexus/` on first open, so a project indexed before the rename is not silently re-scanned
+from nothing.
 
 It has **two entry points**, and confusing them is the fastest way to design something wrong.
 `rescan` is change-driven — forward from a known changed symbol. `investigate` is
@@ -18,12 +19,17 @@ symptom-driven — backward from an unknown one, seeded by what an agent read of
 The hard part of the second is *anchoring*, which the first has no concept of. See
 [`docs/investigation.md`](docs/investigation.md).
 
-**Status: architecture only.** `docs/` is complete; no code exists. Do not start implementing
-outside the MVP scope in [`docs/roadmap.md`](docs/roadmap.md) — the design deliberately
-defers things that look easy and are not.
+**Status: the MVP ships.** Thirteen crates, ~16.6k lines, 173 tests. `scan`, `rescan`,
+`status`, `changes`, `impact`, `graph`, `ask`, `analyze` and `doctor` work; Java, TypeScript
+and GraphQL are indexed; three capabilities run. Still absent, and every surface says so
+rather than leaving anyone to infer it: the verification engine, Python and Rust analyzers,
+and any direct LLM provider. Do not start implementing outside the scope in
+[`docs/roadmap.md`](docs/roadmap.md) — the design deliberately defers things that look easy
+and are not.
 
-Planned as a Rust workspace producing one binary, `bughunter`, which is both the CLI and the
-MCP server.
+A Rust workspace of fourteen crates producing one binary image under two names — `nexus` is
+the platform, `bughunter` the capability's own CLI — which is both the CLI and the MCP server.
+Which name is running is decided by `argv[0]`, so there is a single dispatch path.
 
 ## The one idea the whole design rests on
 
@@ -49,6 +55,8 @@ that is hard to attribute.
 1. **`nexus-core` must not depend on `nexus-mcp`, `nexus-cli`, or any concrete AI provider.** It
    depends on `nexus-ai` with `default-features = false`, which means the deterministic build
    has no HTTP client in its dependency tree at all. A `cargo metadata` test asserts this.
+   *`nexus-ai` does not exist yet. The rule is enforced today in its stronger form: the test
+   asserts `nexus-core` depends on no HTTP client at all.*
 
 2. **`nexus-mcp` must not depend on `nexus-store`, `nexus-lang*` or `nexus-verify`.** A handler reaches
    them only through `nexus-core`, so it physically cannot grow logic the CLI lacks. Every
@@ -63,10 +71,13 @@ that is hard to attribute.
 
 5. **`nexus-verify` writes only through `SafeWriter`**, rooted at `.nexus/generated-tests/`,
    canonicalizing the parent path *before* the prefix check. A jail that compares unresolved
-   paths is not a jail.
+   paths is not a jail. *`nexus-verify` does not exist yet.
+   [`docs/verification-engine.md`](docs/verification-engine.md) is its design; the rule binds
+   when the crate lands, and `tests/boundaries.rs` already names it so that it cannot land
+   without one.*
 
-6. **Ledger tables are append-only.** `scans`, `changes`, `commits`, `bug_occurrences`,
-   `bug_verifications`, `test_runs`, `audit_events` are never `UPDATE`d. See
+6. **Ledger tables are append-only.** `scans`, `changes`, `commits`, `finding_occurrences`,
+   `finding_verifications`, `test_runs`, `audit_events` are never `UPDATE`d. See
    [`docs/data-model.md`](docs/data-model.md) §2. An `UPDATE` on one of these destroys
    regression detection, which is the strongest thing the product does.
 
