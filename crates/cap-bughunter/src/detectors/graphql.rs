@@ -5,7 +5,7 @@
 //! heuristic. It is the shape behind a typo in an operation, a field renamed on one side
 //! only, and an endpoint deleted while its caller stayed.
 
-use super::Detector;
+use super::{Detector, Graph};
 use nexus_core::findings::{CodeRef, Finding};
 use nexus_core::project::{ProjectContext, Scoped};
 use nexus_types::{FindingType, Severity};
@@ -21,7 +21,12 @@ impl Detector for OrphanOperation {
         "a frontend operation selecting a field no backend resolver serves"
     }
 
-    fn run(&self, ctx: &ProjectContext<'_>, scoped: &Scoped<'_>) -> Vec<Finding> {
+    fn run(
+        &self,
+        ctx: &ProjectContext<'_>,
+        scoped: &Scoped<'_>,
+        _graph: &Graph<'_>,
+    ) -> Vec<Finding> {
         // Guard: a frontend-only scan has no resolvers at all, and reporting every
         // operation as orphaned would be technically true and completely useless. The rule
         // only means something when both sides are in the index.
@@ -122,7 +127,7 @@ mod tests {
         let files: Vec<FileFacts> = vec![];
         let ctx = ProjectContext::new(Path::new("/"), &symbols, &edges, &files);
         let scoped = ctx.scoped(&nexus_core::capability::Scope::Everything);
-        OrphanOperation.run(&ctx, &scoped)
+        OrphanOperation.run(&ctx, &scoped, &Graph::of(&ctx))
     }
 
     #[test]

@@ -1,5 +1,10 @@
 # BugHunter — AI Integration
 
+> **Status: designed, not built.** No `nexus-ai` crate and no provider exists. The one live
+> path is agent-as-provider over MCP — `nexus_record_finding` and `nexus_record_fact` — which
+> needs no provider code at all. §5's table is nevertheless in force today: it is what decides
+> which questions a rule answers and which are left to a model.
+
 Two rules shape this entire document:
 
 1. **AI is optional.** Every deterministic capability works with no provider, no API key and

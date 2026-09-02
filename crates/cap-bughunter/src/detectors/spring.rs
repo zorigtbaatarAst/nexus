@@ -6,7 +6,7 @@
 //! cannot express that property, but a call graph can, which is exactly the division of
 //! labour the design argues for.
 
-use super::Detector;
+use super::{Detector, Graph};
 use nexus_core::findings::{CodeRef, Finding};
 use nexus_core::project::{ProjectContext, Scoped, SymbolFacts};
 use nexus_types::{FindingType, Severity};
@@ -39,7 +39,12 @@ impl Detector for TransactionalNonPublic {
         "@Transactional on a method the proxy cannot intercept"
     }
 
-    fn run(&self, ctx: &ProjectContext<'_>, scoped: &Scoped<'_>) -> Vec<Finding> {
+    fn run(
+        &self,
+        ctx: &ProjectContext<'_>,
+        scoped: &Scoped<'_>,
+        _graph: &Graph<'_>,
+    ) -> Vec<Finding> {
         let mut out = Vec::new();
         for s in &scoped.symbols {
             if s.kind != "method" || !s.has_annotation(TX) {
@@ -94,7 +99,12 @@ impl Detector for SelfInvocation {
         "an internal call bypassing the proxy that applies @Transactional"
     }
 
-    fn run(&self, ctx: &ProjectContext<'_>, scoped: &Scoped<'_>) -> Vec<Finding> {
+    fn run(
+        &self,
+        ctx: &ProjectContext<'_>,
+        scoped: &Scoped<'_>,
+        _graph: &Graph<'_>,
+    ) -> Vec<Finding> {
         let mut out = Vec::new();
         // Edges whose *source* is in scope: the finding is anchored on the caller.
         let in_scope: std::collections::HashSet<&str> =
@@ -202,7 +212,7 @@ mod tests {
         let files: Vec<FileFacts> = vec![];
         let ctx = ProjectContext::new(Path::new("/"), &symbols, &edges, &files);
         let scoped = ctx.scoped(&nexus_core::capability::Scope::Everything);
-        d.run(&ctx, &scoped)
+        d.run(&ctx, &scoped, &Graph::of(&ctx))
     }
 
     #[test]

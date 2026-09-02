@@ -1,0 +1,6 @@
+{
+  "name": "next-storefront",
+  "private": true,
+  "scripts": { "build": "next build", "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": { "next": "14.2.0", "react": "18.3.1" }
+}

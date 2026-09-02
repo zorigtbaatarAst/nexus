@@ -13,6 +13,7 @@ members = [
   "crates/cap-architect",
   "crates/cap-review",
   "crates/nexus-mcp",
+  "crates/nexus-fixtures",
   "crates/nexus-cli",
 ]
 
@@ -36,6 +37,7 @@ cap-bughunter   = { path = "crates/cap-bughunter" }
 cap-architect   = { path = "crates/cap-architect" }
 cap-review      = { path = "crates/cap-review" }
 nexus-mcp       = { path = "crates/nexus-mcp" }
+nexus-fixtures  = { path = "crates/nexus-fixtures" }
 
 anyhow    = "1"
 blake3    = "1.8"

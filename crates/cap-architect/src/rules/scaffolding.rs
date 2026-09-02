@@ -6,7 +6,7 @@
 //! consequence this tool can state precisely — nothing runs the tests except a person who
 //! remembers to.
 
-use super::{split_evidence, Rule};
+use super::{split_evidence, Graph, Rule};
 use nexus_core::findings::{CodeRef, Finding};
 use nexus_core::project::{ProjectContext, Scoped};
 use nexus_types::{FindingType, Severity};
@@ -35,7 +35,12 @@ impl Rule for NoContinuousIntegration {
         "no continuous integration is configured, so nothing runs the tests but a person"
     }
 
-    fn run(&self, ctx: &ProjectContext<'_>, _scoped: &Scoped<'_>) -> Vec<Finding> {
+    fn run(
+        &self,
+        ctx: &ProjectContext<'_>,
+        _scoped: &Scoped<'_>,
+        _graph: &Graph<'_>,
+    ) -> Vec<Finding> {
         let Some(profile) = ctx.profile else {
             return Vec::new();
         };
@@ -142,7 +147,7 @@ mod tests {
         let ctx =
             ProjectContext::new(Path::new("/"), &symbols, &edges, &files).with_profile(Some(p));
         let scoped = ctx.scoped(&Scope::Everything);
-        NoContinuousIntegration.run(&ctx, &scoped)
+        NoContinuousIntegration.run(&ctx, &scoped, &Graph::of(&ctx))
     }
 
     #[test]

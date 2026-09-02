@@ -9,3 +9,10 @@ repository.workspace = true
 [dependencies]
 git2.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# Already in the lockfile via nexus-fixtures, so this adds nothing to the build graph and
+# nothing to the release binary. Deliberately not nexus-fixtures itself: nexus-vcs sits below
+# it in the stack, and a test that reached upward for its input would invert the layering it
+# is testing.
+tempfile = "3"

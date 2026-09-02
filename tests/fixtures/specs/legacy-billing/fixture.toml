@@ -1,0 +1,109 @@
+# legacy-billing — the deceptive-context fixture.
+#
+# Family H's specialist. Three implementations of "compute an invoice total" live in the tree
+# and exactly one of them runs. The other two are not strawmen: each was real code, each still
+# compiles, and each scores well on every retrieval signal that is not the dependency graph.
+#
+# * `mn.billing.v1.BillingCalculator` — best name for a prompt about billing calculations.
+# * `mn.billing.legacy.InvoiceService` — the *same class name* as the live service.
+# * `mn.billing.InvoiceService` — the live one, reached from `InvoiceController`.
+#
+# Only the third is wired to a controller, and only the graph knows that. A lexical retriever
+# ranks the first two at least as highly, which is precisely what the A5 control arm exists to
+# expose: if BM25 does as well here, ranking has not earned its complexity.
+
+[fixture]
+name        = "legacy-billing"
+description = "Three plausible invoice calculators, one of them live. The harmful-context fixture."
+stack       = ["java", "spring"]
+role        = "legacy-deceptive"
+base_epoch        = 1743465600   # 2025-04-01T00:00:00Z
+commit_interval_s = 86400
+
+[author]
+name  = "Nexus Fixtures"
+email = "fixtures@nexus.invalid"
+
+[[commit]]
+id      = "c1"
+message = "Billing: invoices, line items, and the tax table"
+write = [
+  { path = ".gitignore",                                          blob = "gitignore" },
+  { path = "src/main/java/mn/billing/LineItem.java",              blob = "LineItem.java" },
+  { path = "src/main/java/mn/billing/TaxTable.java",              blob = "TaxTable.java" },
+  { path = "src/main/java/mn/billing/InvoiceService.java",        blob = "InvoiceService.java" },
+  { path = "src/main/java/mn/billing/InvoiceController.java",     blob = "InvoiceController.java" },
+  { path = "src/test/java/mn/billing/InvoiceServiceTest.java",    blob = "InvoiceServiceTest.java" },
+]
+
+[[commit]]
+id      = "c2"
+message = "Retain the pre-2.0 calculator for the archive reports"
+write = [
+  { path = "src/main/java/mn/billing/v1/BillingCalculator.java", blob = "BillingCalculator.java" },
+]
+expect.new_findings = 0
+expect.note = "Dead on arrival, and deliberately so. Reachable from nothing."
+
+[[commit]]
+id      = "c3"
+message = "Migration leftover: a copy of InvoiceService under legacy"
+write = [
+  { path = "src/main/java/mn/billing/legacy/InvoiceService.java", blob = "InvoiceServiceLegacy.java" },
+]
+expect.note = """
+Now two classes are named `InvoiceService`. Resolving a call to the wrong one is a mistake the \
+index must not make, and a decoy the ranker must not surface."""
+
+[[commit]]
+id      = "c4"
+message = "Mongolian VAT moves to 12% in the 2025 budget"
+write = [
+  { path = "src/main/java/mn/billing/TaxTable.java", blob = "TaxTableV2.java" },
+]
+expect.note = "An unrelated change: real history has commits that are simply not about your task."
+
+[[deprecated_path]]
+id        = "billing-calculator-v1"
+paths     = ["src/main/java/mn/billing/v1/BillingCalculator.java"]
+live_path = "src/main/java/mn/billing/InvoiceService.java"
+decoy_for = "H2-tax-on-discounted-subtotal"
+note = """
+Named `BillingCalculator` in a package called `v1`, and it computes tax on the pre-discount \
+subtotal — the exact behaviour the prompt complains about. It is also unreachable: no bean, no \
+caller, no scheduled job. Editing it produces a diff that reads like a fix and changes nothing."""
+
+[[deprecated_path]]
+id        = "invoice-service-legacy-copy"
+paths     = ["src/main/java/mn/billing/legacy/InvoiceService.java"]
+live_path = "src/main/java/mn/billing/InvoiceService.java"
+decoy_for = "H2-tax-on-discounted-subtotal"
+note = """
+The harder decoy: identical class name, one package away, and it returns a total. The only \
+signals separating it from the live class are the missing `@Service` and the absence of any \
+edge from `InvoiceController` — neither of which is visible in the file itself."""
+
+[[task]]
+id      = "H2-tax-on-discounted-subtotal"
+family  = "H"
+commit  = "c4"
+prompt  = "Tax is being calculated on the pre-discount subtotal. It should be calculated after the discount. Fix it."
+required_sites = ["src/main/java/mn/billing/InvoiceService.java"]
+hidden_tests = ["tests/eval/hidden/H2"]
+note = """
+Two decoys, both better lexical matches than the live class, both dead. A run that edits only a \
+decoy fails L1 while producing a confident, plausible diff — the exact profile of harmful \
+context, and the reason §12 adjudication reads the ledger rather than the diff."""
+
+[[task]]
+id      = "D2-rate-change-follows-the-table"
+family  = "D"
+commit  = "c3"
+prompt  = "Add a 5% VAT rate for region 'KZ'."
+required_sites = ["src/main/java/mn/billing/TaxTable.java"]
+convention_rules = ["rates-live-in-TaxTable-only"]
+hidden_tests = ["tests/eval/hidden/D2"]
+note = """
+The convention is that rates live in `TaxTable` and nowhere else. `BillingCalculator` takes a \
+rate as a parameter, which invites an agent to add one there instead — a change that is locally \
+reasonable and violates the project's actual rule."""

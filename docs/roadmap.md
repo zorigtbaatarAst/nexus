@@ -25,7 +25,7 @@ cross-stack GraphQL seam; symbol-level rename aliasing; persistent facts.
 four deterministic rules with the full finding lifecycle (identity, recurrence, fixed,
 regressed, ignored).
 
-*Agent surface:* an MCP server with sixteen tools, including `nexus_record_finding`, which is
+*Agent surface:* an MCP server with nineteen tools, including `nexus_record_finding`, which is
 what makes any model a provider without a line of provider-specific code.
 
 Measured on a real 880-file Spring + Next.js project: 5,665 symbols, 96 % of in-project edges
@@ -40,7 +40,7 @@ surface says so rather than leaving anyone to infer it.
 | Languages | Java (+Spring pack), TypeScript | Python, Rust |
 | Resolution | Tiers 0–2 (tree-sitter, heuristic, framework) | LSP sidecar |
 | Commands | `init` `scan` `rescan` `status` `changes` `impact` `doctor` `mcp` | `bugs` `verify` `history` |
-| Storage | full schema, all 20 tables, migrations | archival, export/import |
+| Storage | full schema, all 21 tables, migrations | archival, export/import |
 | MCP | read tools: `init` `scan` `rescan` `scan_status` `get_project_context` `get_symbol` `get_changes` `get_impact` `get_tests_for` | bug and verify tools |
 | Detectors | compiler, test runner, secret scan | AI hunting, Semgrep |
 | AI | none — `NullProvider` only | providers, agent write-back |

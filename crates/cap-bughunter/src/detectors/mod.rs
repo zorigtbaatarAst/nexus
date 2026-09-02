@@ -8,21 +8,12 @@ pub mod graphql;
 pub mod secrets;
 pub mod spring;
 
-use nexus_core::findings::Finding;
-use nexus_core::project::{ProjectContext, Scoped};
+// The trait was called `Detector` here and `Rule` in the other two capabilities, for the
+// same shape. One declaration now; the alias keeps `detectors::all()` reading naturally.
+pub use nexus_core::rules::Rule as Detector;
+pub use nexus_core::rules::{Graph, Rule};
 
-pub trait Detector: Send + Sync {
-    /// `family:rule`. The family half feeds the fingerprint; the rule half does not, so a
-    /// rule can be renamed without inventing a new finding.
-    fn id(&self) -> &'static str;
-    fn describe(&self) -> &'static str;
-    /// `scoped` is the narrowed view; `ctx` is the whole project for the rules that
-    /// genuinely need to look past the scope — a self-invocation needs the callee's
-    /// annotations even when the callee itself was not asked about.
-    fn run(&self, ctx: &ProjectContext<'_>, scoped: &Scoped<'_>) -> Vec<Finding>;
-}
-
-pub fn all() -> Vec<Box<dyn Detector>> {
+pub fn all() -> Vec<Box<dyn Rule>> {
     vec![
         Box::new(spring::TransactionalNonPublic),
         Box::new(spring::SelfInvocation),

@@ -13,16 +13,7 @@ pub mod scaffolding;
 pub mod scope;
 pub mod tooling;
 
-use nexus_core::findings::Finding;
-use nexus_core::project::{ProjectContext, Scoped};
-
-pub trait Rule: Send + Sync {
-    /// `family:rule`. The family half feeds the fingerprint; the rule half does not, so a
-    /// rule can be renamed without inventing a new finding.
-    fn id(&self) -> &'static str;
-    fn describe(&self) -> &'static str;
-    fn run(&self, ctx: &ProjectContext<'_>, scoped: &Scoped<'_>) -> Vec<Finding>;
-}
+pub use nexus_core::rules::{Graph, Rule};
 
 pub fn all() -> Vec<Box<dyn Rule>> {
     vec![

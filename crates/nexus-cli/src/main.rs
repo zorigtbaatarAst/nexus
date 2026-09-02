@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod ask;
+mod fixture;
 mod render;
 
 use cap_architect::Architect;
@@ -145,6 +146,11 @@ enum Command {
     Doctor,
     /// Run as an MCP server on stdio, for Claude Code, Codex, Copilot or any MCP client
     Mcp,
+    /// Build the benchmark fixture corpus from its specifications
+    Fixture {
+        #[command(subcommand)]
+        cmd: fixture::Cmd,
+    },
 }
 
 /// Exit codes are part of the interface. Discovering a change is a success, not an error —
@@ -220,6 +226,18 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
     }
 
     match &cli.command {
+        // No project, no store, no engine: this builds repositories rather than reading one,
+        // so it is dispatched before anything tries to open `.nexus/`.
+        Command::Fixture { cmd } => {
+            let (report, code) = fixture::run(cmd, &mut out, cli.json, cli.quiet)?;
+            if cli.json {
+                writeln!(out, "{}", envelope(cli, &report)?)?;
+            } else if !cli.quiet {
+                fixture::render(&mut out, &report)?;
+            }
+            return Ok(code);
+        }
+
         Command::Init => {
             let (_engine, profile) = Engine::init(&root)?;
             emit!(&profile, {
@@ -586,21 +604,27 @@ fn is_broken_pipe(e: &(dyn std::error::Error + 'static)) -> bool {
     false
 }
 
-/// The composition root: this is the one place that knows both the platform and which
-/// capabilities exist. Nexus never compiles a capability in; it is handed them here.
-fn open(root: &std::path::Path) -> Result<Engine, EngineError> {
-    let mut engine = Engine::open(root)?;
+/// The composition root: this is the one place in the CLI that knows both the platform and
+/// which capabilities exist. Nexus never compiles a capability in; it is handed them here.
+///
+/// `nexus-mcp` is the other root and keeps its own list, because it must — a handler cannot
+/// reach into the CLI. `tests/boundaries.rs` asserts the two agree, which is what makes two
+/// lists safe rather than merely tolerated.
+fn register_capabilities(engine: &mut Engine) {
     engine.register_capability(Box::new(BugHunter::new()));
     engine.register_capability(Box::new(Architect::new()));
     engine.register_capability(Box::new(Review::new()));
+}
+
+fn open(root: &std::path::Path) -> Result<Engine, EngineError> {
+    let mut engine = Engine::open(root)?;
+    register_capabilities(&mut engine);
     Ok(engine)
 }
 
 fn open_or_init(root: &std::path::Path) -> Result<(Engine, bool), EngineError> {
     let (mut engine, fresh) = Engine::open_or_init(root)?;
-    engine.register_capability(Box::new(BugHunter::new()));
-    engine.register_capability(Box::new(Architect::new()));
-    engine.register_capability(Box::new(Review::new()));
+    register_capabilities(&mut engine);
     Ok((engine, fresh))
 }
 
@@ -647,6 +671,7 @@ fn envelope<T: Serialize>(cli: &Cli, value: T) -> Result<String, serde_json::Err
             Command::Ignore { .. } => "ignore",
             Command::Doctor => "doctor",
             Command::Mcp => "mcp",
+            Command::Fixture { .. } => "fixture",
         },
         result: value,
     })

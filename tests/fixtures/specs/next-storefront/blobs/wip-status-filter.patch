@@ -1,0 +1,11 @@
+diff --git a/web/src/components/OrderSummary.tsx b/web/src/components/OrderSummary.tsx
+--- a/web/src/components/OrderSummary.tsx
++++ b/web/src/components/OrderSummary.tsx
+@@ -1,6 +1,7 @@
+ import type { Order } from "../lib/orders";
+ 
+ export function OrderSummary({ orders }: { orders: Order[] }) {
++  // WIP: only count settled orders in the total
+   const total = orders.reduce((sum, o) => sum + o.totalAmount, 0);
+   return (
+     <section aria-label="Order summary">

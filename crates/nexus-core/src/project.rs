@@ -1,11 +1,15 @@
-//! Deterministic detectors.
+//! The prepared project snapshot a capability is handed.
 //!
-//! docs/ai-integration.md §5: if a rule can express it, do not spend a token guessing at it.
-//! Everything here is a query over the index and the graph — no model is asked, so nothing
-//! here is subject to the 0.75 clamp that applies to a model's own confidence.
+//! `ProjectContext` is the whole index as plain data: symbols, edges, files, what changed in
+//! the scan under analysis, and the detected profile. A capability reads it and returns
+//! findings; it never touches storage, git or the CLI, which is what lets `nexus-core` decide
+//! whether a finding is new, recurring, fixed or regressed without every capability
+//! re-implementing the answer.
 //!
-//! Detectors receive a prepared snapshot rather than the store. That keeps them pure and
-//! unit-testable, and it keeps SQL in `nexus-store` where boundary rule 3 says it belongs.
+//! `Scoped` is that snapshot narrowed to what was asked for. Narrowing happens once, here,
+//! rather than in each rule: a rule that reaches past `scoped` to `ctx` is doing something
+//! deliberate, and one that forgets to narrow makes a targeted analysis quietly cost what a
+//! full one costs.
 
 use nexus_types::ChangeKind;
 use std::collections::BTreeMap;

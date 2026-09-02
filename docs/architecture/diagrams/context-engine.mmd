@@ -1,0 +1,48 @@
+%% The Context Engine pipeline. No stage calls a model.
+flowchart TB
+    REQ["TaskRequest<br/>text · files · symbols<br/>budget_tokens · purpose"]
+
+    INTENT["1 · INTENT<br/>deterministic verb table<br/>Debug | Build | Refactor<br/>Review | Explain | <b>Unknown</b>"]
+    SEEDS["2 · SEEDS<br/>explicit → fqn/path → changed set<br/>→ name match → ui_strings → fact subject"]
+    EXPAND["3 · EXPAND<br/>impact::run, bounded<br/>direction from intent<br/>carries Hop chain + min_confidence"]
+    SIGNALS["4 · SIGNALS<br/>churn · recency · coverage<br/>prior findings · facts · profile"]
+    RANK["5 · RANK<br/>one weighted sum<br/>every term recorded<br/>weights in policy.toml"]
+    BUDGET["6 · BUDGET<br/>sort by <b>density</b> score/tokens<br/>greedy fill · diversity guard<br/>score floor"]
+    PKG["7 · PACKAGE<br/>anchors + 3-line windows<br/><i>never whole files</i>"]
+
+    SRC1[("index<br/>symbols · edges")]
+    SRC2[("history<br/>commits · churn")]
+    SRC3[("memory<br/>facts · findings")]
+    SRC4[("profile<br/>detect")]
+
+    OUT["ContextPackage<br/>items · tokens_estimated<br/>items_considered / included"]
+    LEDGER["InclusionLedger<br/><b>every</b> candidate:<br/>included, or excluded + why"]
+    CACHE[("package cache<br/>key: intent · seeds · HEAD<br/>dirty hash · budget · weights")]
+
+    REQ --> INTENT --> SEEDS --> EXPAND --> SIGNALS --> RANK --> BUDGET --> PKG
+    PKG --> OUT
+    PKG --> LEDGER
+
+    SRC1 -.-> SEEDS
+    SRC1 -.-> EXPAND
+    SRC2 -.-> SIGNALS
+    SRC3 -.-> SEEDS
+    SRC3 -.-> SIGNALS
+    SRC4 -.-> PKG
+
+    REQ -. hit .-> CACHE
+    CACHE -. hit .-> OUT
+
+    EX1["excluded: budget exhausted"] --> LEDGER
+    EX2["excluded: below floor"] --> LEDGER
+    EX3["excluded: fact invalidated"] --> LEDGER
+    EX4["excluded: redacted path"] --> LEDGER
+
+    classDef stage fill:#e8f4ff,stroke:#2c6fbb,stroke-width:2px
+    classDef out fill:#e6f7e6,stroke:#2d8a2d,stroke-width:2px
+    classDef src fill:#fff4e0,stroke:#c47f19
+    classDef exc fill:#fdecea,stroke:#c0392b,stroke-dasharray:3 3
+    class INTENT,SEEDS,EXPAND,SIGNALS,RANK,BUDGET,PKG stage
+    class OUT,LEDGER out
+    class SRC1,SRC2,SRC3,SRC4,CACHE src
+    class EX1,EX2,EX3,EX4 exc

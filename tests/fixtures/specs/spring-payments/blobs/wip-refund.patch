@@ -1,0 +1,16 @@
+diff --git a/src/main/java/mn/pay/PaymentValidator.java b/src/main/java/mn/pay/PaymentValidator.java
+index 0000000..1111111 100644
+--- a/src/main/java/mn/pay/PaymentValidator.java
++++ b/src/main/java/mn/pay/PaymentValidator.java
+@@ -13,5 +13,11 @@ public class PaymentValidator {
+         if (amount == null || amount.signum() <= 0) {
+             throw new IllegalArgumentException("amount must be positive");
+         }
+     }
++
++    public void checkRefund(String paymentId, BigDecimal amount) {
++        if (paymentId == null || paymentId.isBlank()) {
++            throw new IllegalArgumentException("payment id is required");
++        }
++    }
+ }

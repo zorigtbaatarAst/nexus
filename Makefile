@@ -2,7 +2,8 @@ BIN     := target/release/nexus
 CAP_BIN := target/release/bughunter
 PREFIX  ?= $(HOME)/.local
 
-.PHONY: help build release test lint fmt check install uninstall clean demo smoke
+.PHONY: help build release test lint fmt check install uninstall clean demo smoke \
+        fixtures fixtures-verify
 
 help:
 	@echo "build    debug build"
@@ -13,6 +14,8 @@ help:
 	@echo "install  copy the binary to $(PREFIX)/bin"
 	@echo "smoke    scan a public Spring repo and assert the cascade works"
 	@echo "demo     scan a repository and prove the incremental cascade (REPO=path)"
+	@echo "fixtures         build the benchmark corpus -> target/fixtures"
+	@echo "fixtures-verify  prove the corpus is reproducible (CI gate)"
 
 build:
 	cargo build
@@ -30,6 +33,20 @@ fmt:
 	cargo fmt --all
 
 check: fmt lint test
+
+# The benchmark corpus of docs/architecture/13-evaluation.md §3. Written under target/
+# because it is already git-ignored: a generated repository inside the working tree would be
+# walked by Nexus's own scan, and a fixture that plants a bug on purpose has no business
+# turning up in its author's findings.
+fixtures:
+	cargo run --quiet --bin nexus -- fixture generate --force
+
+# The determinism gate. Generates every fixture twice and fails if any sha moved.
+#
+# Cheap enough for every CI run, and worth it: a corpus that drifts makes every measurement
+# taken against it a measurement of the corpus rather than of Nexus.
+fixtures-verify:
+	cargo run --quiet --bin nexus -- fixture verify
 
 install: release
 	install -Dm755 $(BIN) $(PREFIX)/bin/nexus

@@ -23,6 +23,7 @@ cap-bughunter.workspace = true
 cap-architect.workspace = true
 cap-review.workspace = true
 nexus-mcp.workspace = true
+nexus-fixtures.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread"] }
 nexus-types.workspace = true
 anyhow.workspace = true

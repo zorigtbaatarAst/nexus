@@ -9,7 +9,7 @@
 //! and line `detect` recorded; the absence of tooling is proved by reading the project's own
 //! MCP configuration. Neither half is an opinion.
 
-use super::{split_evidence, Rule};
+use super::{split_evidence, Graph, Rule};
 use nexus_core::findings::{CodeRef, Finding};
 use nexus_core::project::{ProjectContext, Scoped};
 use nexus_types::{FindingType, Severity};
@@ -68,7 +68,12 @@ impl Rule for DatastoreWithoutTooling {
         "a datastore this project uses, with no MCP server configured to reach it"
     }
 
-    fn run(&self, ctx: &ProjectContext<'_>, _scoped: &Scoped<'_>) -> Vec<Finding> {
+    fn run(
+        &self,
+        ctx: &ProjectContext<'_>,
+        _scoped: &Scoped<'_>,
+        _graph: &Graph<'_>,
+    ) -> Vec<Finding> {
         let Some(profile) = ctx.profile else {
             // No profile saved yet. Saying nothing is right: the alternative is claiming a
             // project has no datastore when nobody has looked.
@@ -175,7 +180,7 @@ mod tests {
         let files: Vec<FileFacts> = Vec::new();
         let ctx = ProjectContext::new(root, &symbols, &edges, &files).with_profile(Some(profile));
         let scoped = ctx.scoped(&Scope::Everything);
-        DatastoreWithoutTooling.run(&ctx, &scoped)
+        DatastoreWithoutTooling.run(&ctx, &scoped, &Graph::of(&ctx))
     }
 
     fn tmp(name: &str) -> std::path::PathBuf {
@@ -226,6 +231,8 @@ mod tests {
         let root = tmp("noprofile");
         let ctx = ProjectContext::new(&root, &symbols, &edges, &files);
         let scoped = ctx.scoped(&Scope::Everything);
-        assert!(DatastoreWithoutTooling.run(&ctx, &scoped).is_empty());
+        assert!(DatastoreWithoutTooling
+            .run(&ctx, &scoped, &Graph::of(&ctx))
+            .is_empty());
     }
 }

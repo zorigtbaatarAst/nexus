@@ -1,0 +1,116 @@
+# next-storefront — the cross-stack fixture.
+#
+# Backend and frontend live in **one repository** on purpose. Family B asks whether a change
+# to a backend contract reaches the React components that render it, and that question only
+# exists inside a single indexed project: split across two repos there is no seam to cross,
+# only two scans that never meet.
+#
+# The edge under test is invisible in the source text. Nothing in `orders.ts` names
+# `OrderController`; the two sides agree only because both were generated against
+# `order.graphqls`. Indexing that schema is what makes the connection findable.
+
+[fixture]
+name        = "next-storefront"
+description = "Spring GraphQL API and a Next.js frontend in one repository, joined only by a schema."
+stack       = ["java", "spring", "graphql", "typescript", "next"]
+role        = "realistic-fullstack"
+base_epoch        = 1738368000   # 2025-02-01T00:00:00Z
+commit_interval_s = 86400
+
+[author]
+name  = "Nexus Fixtures"
+email = "fixtures@nexus.invalid"
+
+[[commit]]
+id      = "c1"
+message = "Orders API and the storefront that renders it"
+write = [
+  { path = ".gitignore",                                        blob = "gitignore" },
+  { path = "api/src/main/java/mn/shop/api/Order.java",           blob = "Order.java" },
+  { path = "api/src/main/java/mn/shop/api/OrderDto.java",        blob = "OrderDto.java" },
+  { path = "api/src/main/java/mn/shop/api/OrderRepository.java", blob = "OrderRepository.java" },
+  { path = "api/src/main/java/mn/shop/api/OrderController.java", blob = "OrderController.java" },
+  { path = "api/src/main/resources/graphql/order.graphqls",      blob = "order.graphqls" },
+  { path = "web/package.json",                                   blob = "package.json" },
+  { path = "web/src/lib/orders.ts",                              blob = "orders.ts" },
+  { path = "web/src/components/OrderSummary.tsx",                blob = "OrderSummary.tsx" },
+  { path = "web/src/app/orders/page.tsx",                        blob = "page.tsx" },
+  { path = "web/src/generated/graphql-generated.ts",             blob = "graphql-generated.ts" },
+]
+expect.note = """
+`web/src/generated/graphql-generated.ts` is codegen output. `walk::is_excluded` must drop it: \
+it is symbols nobody wrote and nobody can change, and indexing them inflates every count and \
+every impact answer with edges no edit can follow."""
+
+[[commit]]
+id      = "c2"
+message = "Show the settled total on the orders page"
+write = [
+  { path = "web/src/components/OrderSummary.tsx", blob = "OrderSummary.tsx" },
+]
+expect.new_findings = 0
+
+# --- c3 · the contract moves on one side only ----------------------------------------------
+
+[[commit]]
+id      = "c3"
+message = "Rename Order.totalAmount to grossAmount for the tax rework"
+write = [
+  { path = "api/src/main/java/mn/shop/api/Order.java",    blob = "Order-renamed.java" },
+  { path = "api/src/main/java/mn/shop/api/OrderDto.java", blob = "OrderDto-renamed.java" },
+]
+plants_bug.id      = "orphaned-total-amount-field"
+plants_bug.kind    = "contract"
+plants_bug.summary = """
+The Java side renames the field. `order.graphqls` still declares `totalAmount`, the query in \
+`orders.ts` still selects it, and `OrderSummary.tsx` still reads it. Java compiles. TypeScript \
+compiles. The page renders `NaN`. Neither compiler can see across the seam, and the schema — \
+which both sides were generated from — is the only place the disagreement is visible."""
+plants_bug.anchor = "api/src/main/resources/graphql/order.graphqls:4"
+
+[[patch]]
+id          = "wip-status-filter"
+blob        = "wip-status-filter.patch"
+base        = "c2"
+description = "A half-written change to the total, uncommitted, as an agent finds a workspace."
+
+[[task]]
+id      = "B1-rename-crosses-the-seam"
+family  = "B"
+commit  = "c2"
+prompt  = "Rename the `totalAmount` field on Order to `grossAmount` throughout."
+required_sites = [
+  "api/src/main/java/mn/shop/api/Order.java",
+  "api/src/main/java/mn/shop/api/OrderDto.java",
+  "api/src/main/resources/graphql/order.graphqls",
+  "web/src/lib/orders.ts",
+  "web/src/components/OrderSummary.tsx",
+]
+hidden_tests = ["tests/eval/hidden/B1"]
+note = """
+Five sites in three languages. The two frontend sites are reachable only through the schema; \
+an agent that greps for `totalAmount` finds them, but an agent that reasons about "the Java \
+files I need to change" does not. The generated file is deliberately excluded from \
+required_sites — editing it is wrong, because the next build overwrites it."""
+
+[[task]]
+id      = "B2-orphaned-field-diagnosis"
+family  = "B"
+commit  = "c3"
+prompt  = "The orders page shows NaN for every total. Find out why and fix it."
+required_sites = [
+  "api/src/main/resources/graphql/order.graphqls",
+  "web/src/lib/orders.ts",
+  "web/src/components/OrderSummary.tsx",
+]
+hidden_tests = ["tests/eval/hidden/B2"]
+note = "The symptom is in TypeScript; the cause is in a Java rename three files away."
+
+[[task]]
+id      = "N2-copy-tweak"
+family  = "N"
+commit  = "c2"
+prompt  = "The orders page heading says 'Orders'. Change it to 'Your orders'."
+required_sites = ["web/src/components/OrderSummary.tsx"]
+hidden_tests = ["tests/eval/hidden/N2"]
+note = "One string, one file. Nexus has nothing to add; gate T5 says it must also cost nothing."

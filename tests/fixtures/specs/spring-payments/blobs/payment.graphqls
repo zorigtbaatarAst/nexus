@@ -1,0 +1,13 @@
+type Payment {
+  id: ID!
+  amount: Float!
+  status: String!
+}
+
+type Query {
+  payments: [Payment!]!
+}
+
+type Mutation {
+  createPayment(idempotencyKey: String!, amount: Float!): Payment!
+}

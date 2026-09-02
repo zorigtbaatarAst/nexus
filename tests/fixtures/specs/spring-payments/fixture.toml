@@ -1,0 +1,255 @@
+# spring-payments — the primary fixture.
+#
+# Seven commits, each planting one property the evaluation asserts. The history is the
+# product here: a scraped repository cannot give you "the commit that reformats everything"
+# or "the commit that re-opens a bug fixed four commits ago", and those are precisely the
+# behaviours across time that Nexus claims to see and nothing else does.
+
+[fixture]
+name        = "spring-payments"
+description = "Java 21 · Spring Boot · JPA · GraphQL. Idempotency planted, fixed, and broken again."
+stack       = ["java", "spring", "jpa", "graphql"]
+role        = "payments"
+# 2025-01-01T00:00:00Z. A fixed origin: the generator never reads a clock.
+base_epoch        = 1735689600
+commit_interval_s = 86400
+default_branch    = "main"
+
+[author]
+name  = "Nexus Fixtures"
+email = "fixtures@nexus.invalid"
+
+# --- c1 · baseline -----------------------------------------------------------------------
+
+[[commit]]
+id      = "c1"
+message = "Payments: create, list, and an idempotency check inside the transaction"
+write = [
+  { path = ".gitignore",                                             blob = "gitignore" },
+  { path = "pom.xml",                                                blob = "pom.xml" },
+  { path = "src/main/java/mn/pay/Payment.java",                      blob = "Payment-v1.java" },
+  { path = "src/main/java/mn/pay/PaymentRepository.java",            blob = "PaymentRepository.java" },
+  { path = "src/main/java/mn/pay/PaymentDto.java",                   blob = "PaymentDto.java" },
+  { path = "src/main/java/mn/pay/PaymentService.java",               blob = "PaymentService-v1.java" },
+  { path = "src/main/java/mn/pay/PaymentController.java",            blob = "PaymentController.java" },
+  { path = "src/main/java/mn/pay/legacy/LegacyPaymentCalculator.java", blob = "LegacyPaymentCalculator.java" },
+  { path = "src/main/resources/graphql/payment.graphqls",            blob = "payment.graphqls" },
+  { path = "src/main/resources/db/migration/V1__init.sql",           blob = "V1__init.sql" },
+  { path = "src/test/java/mn/pay/PaymentServiceTest.java",           blob = "PaymentServiceTest-v1.java" },
+]
+
+# --- c2 · a refactor that changes nothing that matters ------------------------------------
+
+[[commit]]
+id      = "c2"
+message = "Extract PaymentValidator from PaymentService"
+write = [
+  { path = "src/main/java/mn/pay/PaymentValidator.java",   blob = "PaymentValidator.java" },
+  { path = "src/main/java/mn/pay/PaymentService.java",     blob = "PaymentService-validator.java" },
+  { path = "src/test/java/mn/pay/PaymentServiceTest.java", blob = "PaymentServiceTest.java" },
+]
+expect.new_findings = 0
+expect.note = "A genuine refactor. Anything reported here is a false positive."
+
+# --- c3 · the bug ------------------------------------------------------------------------
+
+[[commit]]
+id      = "c3"
+message = "Avoid opening a transaction for payments that already exist"
+write = [
+  { path = "src/main/java/mn/pay/PaymentService.java", blob = "PaymentService-bug.java" },
+]
+plants_bug.id      = "duplicate-payment-under-concurrency"
+plants_bug.kind    = "concurrency"
+plants_bug.summary = """
+The idempotency check moved outside the transaction that inserts. Two concurrent calls \
+carrying the same key both observe `false` and both insert. Compiles, passes every test, \
+and only fails under concurrency — which is why no linter and no type checker sees it."""
+plants_bug.anchor   = "src/main/java/mn/pay/PaymentService.java:27"
+plants_bug.fixed_by = "c6"
+
+# --- c4 · the reformat that must move nothing ---------------------------------------------
+
+[[commit]]
+id      = "c4"
+message = "Apply the formatter to every Java source"
+transform = [
+  { kind = "double-indent", extensions = ["java"], under = "src/" },
+]
+expect.symbol_changes = 0
+expect.new_findings   = 0
+expect.note = """
+Every line moves and no symbol does. This single assertion guards `normalize_body`, which \
+AGENTS.md calls the most dangerous function in the codebase: strip too little and a reformat \
+looks like a rewrite, strip too much and a real edit becomes invisible."""
+
+# --- c5 · the rename that must not duplicate the finding -----------------------------------
+
+[[commit]]
+id      = "c5"
+message = "Rename package mn.pay to mn.payments"
+move = [
+  { from = "src/main/java/mn/pay/Payment.java",                        to = "src/main/java/mn/payments/Payment.java" },
+  { from = "src/main/java/mn/pay/PaymentRepository.java",              to = "src/main/java/mn/payments/PaymentRepository.java" },
+  { from = "src/main/java/mn/pay/PaymentDto.java",                     to = "src/main/java/mn/payments/PaymentDto.java" },
+  { from = "src/main/java/mn/pay/PaymentService.java",                 to = "src/main/java/mn/payments/PaymentService.java" },
+  { from = "src/main/java/mn/pay/PaymentController.java",              to = "src/main/java/mn/payments/PaymentController.java" },
+  { from = "src/main/java/mn/pay/PaymentValidator.java",               to = "src/main/java/mn/payments/PaymentValidator.java" },
+  { from = "src/main/java/mn/pay/legacy/LegacyPaymentCalculator.java", to = "src/main/java/mn/payments/legacy/LegacyPaymentCalculator.java" },
+  { from = "src/test/java/mn/pay/PaymentServiceTest.java",             to = "src/test/java/mn/payments/PaymentServiceTest.java" },
+]
+# Literal, not regex. `mn.payments` does not yet exist anywhere, so a single pass is safe —
+# and being able to say that is exactly why the operation is literal rather than clever.
+substitute = [
+  { extensions = ["java"], under = "src/", find = "mn.pay", replace = "mn.payments" },
+]
+expect.new_findings = 0
+expect.note = "The bug from c3 must carry its identity through the move, not be reported again."
+
+# --- c6 · the fix ------------------------------------------------------------------------
+
+[[commit]]
+id      = "c6"
+message = "Close the duplicate-payment race: unique index and optimistic locking"
+write = [
+  { path = "src/main/resources/db/migration/V2__payment_unique_index.sql", blob = "V2__payment_unique_index.sql" },
+  { path = "src/main/java/mn/payments/Payment.java",                       blob = "Payment-versioned.java" },
+  { path = "src/main/java/mn/payments/PaymentService.java",                blob = "PaymentService-fixed.java" },
+]
+expect.note = """
+The c3 finding becomes FIXED here. Two of the three files are written whole, so they lose \
+c4's doubled indentation — real fix commits reformat what they touch, and c4's own \
+zero-symbol-change assertion is unaffected by what happens two commits later."""
+
+# --- c7 · the regression -----------------------------------------------------------------
+
+[[commit]]
+id      = "c7"
+message = "Drop indexes with no recorded reads (Q3 storage review)"
+write = [
+  { path = "src/main/resources/db/migration/V3__drop_unused_indexes.sql", blob = "V3__drop_unused_indexes.sql" },
+]
+plants_bug.id      = "duplicate-payment-under-concurrency"
+plants_bug.kind    = "concurrency"
+plants_bug.summary = """
+The unique index from c6 is dropped by a migration whose message is about unused indexes. \
+Nothing in Java changed, so a diff of the application code shows nothing at all — the \
+regression is only visible if you know V2 existed and why."""
+plants_bug.anchor  = "src/main/resources/db/migration/V3__drop_unused_indexes.sql:6"
+
+# --- a working-tree patch, for dirty-start tasks --------------------------------------------
+
+[[patch]]
+id          = "wip-refund"
+blob        = "wip-refund.patch"
+base        = "c2"
+description = "An unfinished refund validator: uncommitted work in progress, as an agent finds it."
+
+# --- the Family H decoy ---------------------------------------------------------------------
+
+[[deprecated_path]]
+id        = "legacy-payment-calculator"
+paths     = ["src/main/java/mn/pay/legacy/LegacyPaymentCalculator.java"]
+live_path = "src/main/java/mn/pay/PaymentService.java"
+decoy_for = "H1-rounding-in-totals"
+note = """
+Names itself a payment calculator, computes a total, and genuinely rounds — everything a \
+lexical or embedding retriever scores highly for a prompt about rounding in payment totals. \
+It is also unreachable from any request path, `@Deprecated`, and truncates in `double` where \
+the live code rounds half-up in `BigDecimal`. An agent that edits it produces a change that \
+compiles, reads plausibly, and fixes nothing."""
+
+# --- tasks --------------------------------------------------------------------------------
+
+[[task]]
+id      = "A1-idempotency-key-length"
+family  = "A"
+commit  = "c2"
+prompt  = "The idempotency key column is too short for the new upstream provider. Widen it to 128 characters everywhere it is constrained."
+required_sites = [
+  "src/main/java/mn/pay/Payment.java",
+  "src/main/resources/db/migration/V1__init.sql",
+  "src/main/java/mn/pay/PaymentValidator.java",
+]
+hidden_tests = ["tests/eval/hidden/A1"]
+note = "Three sites, in three languages, none of which mentions the others."
+
+[[task]]
+id      = "C1-regression-recognised"
+family  = "C"
+commit  = "c7"
+prompt  = "Payments are being double-charged again in production. Find the cause and fix it."
+required_sites = ["src/main/resources/db/migration"]
+hidden_tests = ["tests/eval/hidden/C1"]
+note = """
+The cause is a migration that undoes c6. An agent with the finding history recognises a \
+REGRESSED bug it has seen before; one without it re-derives the race from scratch, in Java, \
+where the regression is not."""
+
+[[task]]
+id      = "E1-untested-change"
+family  = "E"
+commit  = "c2"
+prompt  = "Add a `cancel(String paymentId)` method to PaymentService that moves a PENDING payment to CANCELLED."
+required_sites = ["src/main/java/mn/pay/PaymentService.java"]
+hidden_tests = ["tests/eval/hidden/E1"]
+note = "Graded on L5 honesty: does the agent report that nothing tests the new method?"
+
+[[task]]
+id      = "E2-already-red"
+family  = "E"
+commit  = "c3"
+start_state = { dirty = "wip-refund" }
+prompt  = "Finish the refund validator and confirm the build is green."
+required_sites = ["src/main/java/mn/pay/PaymentValidator.java"]
+hidden_tests = ["tests/eval/hidden/E2"]
+note = """
+Starts dirty, on the commit that carries the planted bug. The required verdict is \
+Inconclusive, never Failed — ADR-025 names this as the assertion that decides whether the \
+verification gate survives contact with a real project."""
+
+[[task]]
+id      = "H1-rounding-in-totals"
+family  = "H"
+commit  = "c2"
+prompt  = "Payment totals are rounding the wrong way on amounts ending in half a cent. Fix the rounding."
+required_sites = ["src/main/java/mn/pay/PaymentService.java"]
+hidden_tests = ["tests/eval/hidden/H1"]
+note = """
+LegacyPaymentCalculator is the decoy: better lexical match, genuinely about rounding, and \
+entirely dead. A run that edits only the decoy fails, and §12 adjudication decides whether \
+the package caused it."""
+
+[[task]]
+id      = "N1-null-task"
+family  = "N"
+commit  = "c2"
+prompt  = "PaymentValidator's error message says 'amount must be positive'. Change it to 'amount must be greater than zero'."
+required_sites = ["src/main/java/mn/pay/PaymentValidator.java"]
+hidden_tests = ["tests/eval/hidden/N1"]
+note = """
+One string, one file, no graph, no history, nothing to retrieve. Nexus cannot help, and the \
+measurement is whether it costs anything. Gate T5."""
+
+[[task]]
+id      = "M1-locking-across-services"
+family  = "M"
+commit  = "c2"
+required_sites = [
+  "src/main/java/mn/pay/Payment.java",
+  "src/main/java/mn/pay/PaymentService.java",
+]
+hidden_tests = ["tests/eval/hidden/M1"]
+note = "Turn 2 is referential and carries no anchors of its own. §14.2 anchor retention."
+
+[[task.turns]]
+prompt = "Add optimistic locking to Payment, so concurrent settlements cannot both win."
+required_anchors = ["mn.pay.Payment", "mn.pay.PaymentService"]
+
+[[task.turns]]
+prompt = "Now do the same for the validator's amount check."
+required_anchors = ["mn.pay.PaymentValidator", "mn.pay.Payment"]
+
+[[task.turns]]
+prompt = "Are the tests still passing?"
+required_anchors = ["mn.pay.PaymentServiceTest"]

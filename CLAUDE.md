@@ -6,10 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 [`AGENTS.md`](AGENTS.md) is the long-form design briefing — the invariants, the deliberate
 oddities, and the traps that cost real debugging time to find. Read it before changing
-anything in `crates/`. Two things in it are now stale: the "Status: architecture only, no
-code exists" header (the MVP ships), and the note that the repo is still called `bughunter`
-(it was renamed to `nexus`; only the legacy `.bughunter/` directory migration remains, in
-`Engine::migrate_legacy_dir`).
+anything in `crates/`.
 
 `docs/` is the design of record — 15 documents, still accurate. The table at the end of
 AGENTS.md maps questions to documents.
@@ -47,7 +44,7 @@ cargo run --bin nexus -- mcp        # MCP server on stdio
 
 ## Architecture
 
-A Rust workspace of 11 crates producing **one binary image under two names**. `nexus` is the
+A Rust workspace of 14 crates producing **one binary image under two names**. `nexus` is the
 platform, `bughunter` is the capability's own CLI; which one is running is decided by
 `argv[0]` (`render::product_name()`), so there is a single dispatch path that cannot drift.
 
@@ -66,6 +63,9 @@ cap-bughunter    BugHunter's detectors. Depends on nexus-core and nothing else
 cap-architect    Architect: what the project is, and what working in it lacks
 cap-review       Review: what a change reaches, and what covers it
 nexus-mcp        rmcp adapter. deserialize -> one Engine call -> serialize
+nexus-fixtures   test support, off to the side: builds benchmark repositories from specs.
+                 Depends on git2 and no nexus crate — it generates fixtures, it never
+                 indexes them, and boundaries.rs stops it learning how
 nexus-cli        composition root: parse flags, open store, register capabilities, dispatch
 ```
 
@@ -133,3 +133,19 @@ workspace version — bump them together with `Cargo.toml`.
 Releasing: `.github/workflows/release.yml` fails a tag that disagrees with the workspace
 version, because `install.sh` verifies checksums and `nexus --version` is what people check
 before updating. Bump `Cargo.toml` first, then tag `v<version>`.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `zorigtbaatarAst/nexus`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles, each label string equal to its name (`needs-triage`, `needs-info`,
+`ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context. `AGENTS.md` is the briefing; the ADRs are sections of
+`docs/architecture-decisions.md`, not a `docs/adr/` directory. See `docs/agents/domain.md`.

@@ -1,0 +1,4 @@
+rootProject.name = 'acme'
+include 'libs:common'
+include 'services:orders'
+include 'services:inventory'
