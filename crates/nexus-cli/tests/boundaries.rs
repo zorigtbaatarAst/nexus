@@ -176,3 +176,105 @@ fn only_the_store_touches_sql() {
         );
     }
 }
+
+#[test]
+fn the_fixture_generator_cannot_index_what_it_builds() {
+    let g = dependency_graph();
+    let why = "nexus-fixtures generates benchmark repositories. If it could also index them it \
+               would be marking its own work — the `expect` fields it records exist precisely \
+               so that something else does the checking. It needs git2 and nothing of Nexus.";
+    for forbidden in [
+        "nexus-core",
+        "nexus-store",
+        "nexus-mcp",
+        "nexus-lang",
+        "nexus-lang-java",
+        "nexus-lang-ts",
+        "nexus-lang-graphql",
+        "cap-bughunter",
+        "cap-architect",
+        "cap-review",
+        "nexus-cli",
+    ] {
+        assert_forbidden(&g, "nexus-fixtures", forbidden, why);
+    }
+}
+
+#[test]
+fn nothing_but_the_composition_root_depends_on_the_fixture_generator() {
+    let g = dependency_graph();
+    for crate_name in g.keys() {
+        if crate_name == "nexus-cli" || crate_name == "nexus-fixtures" {
+            continue;
+        }
+        assert_forbidden(
+            &g,
+            crate_name,
+            "nexus-fixtures",
+            "Test infrastructure reaches the product through the composition root and nowhere \
+             else. A capability or an analyzer that could build a repository would be one that \
+             could tailor a fixture to itself.",
+        );
+    }
+}
+
+/// The CLI and the MCP server are both composition roots, by design — AGENTS.md constraint 0.
+/// Two roots means two lists, and a capability added to one and forgotten in the other is
+/// invisible: the CLI would run it and an agent would be told it does not exist.
+#[test]
+fn both_composition_roots_register_the_same_capabilities() {
+    // Cargo runs a test with the package root as its working directory, which is what the
+    // relative paths below rely on — the same assumption `dependency_graph` documents.
+    let read = |path: &str| std::fs::read_to_string(path).unwrap_or_default();
+
+    // Compare the sets rather than the text: nexus-mcp imports
+    // `cap_bughunter::BugHunter as BugHunterCapability`, so the lines differ but the
+    // capabilities are the same.
+    let names = |src: &str| -> std::collections::BTreeSet<String> {
+        src.lines()
+            .filter(|l| l.contains("register_capability"))
+            .filter_map(|l| l.split("Box::new(").nth(1))
+            .filter_map(|l| l.split("::new()").next())
+            .map(|n| n.trim_end_matches("Capability").to_string())
+            .collect()
+    };
+
+    let cli = names(&read("src/main.rs"));
+    let mcp = names(&read("../nexus-mcp/src/lib.rs"));
+
+    assert!(!cli.is_empty(), "the CLI must register capabilities");
+    assert!(!mcp.is_empty(), "the MCP server must register capabilities");
+    assert_eq!(
+        cli, mcp,
+        "the two composition roots disagree. A capability the CLI runs but MCP does not is \
+         one an agent cannot reach, and nothing else in the build would catch it."
+    );
+}
+
+/// Every rule names a `from` crate that must exist.
+///
+/// `assert_forbidden` skips when `from` is absent from the graph, which is right for a `to`
+/// that has not been built yet — `nexus-verify` is named as a forbidden target on purpose.
+/// It is wrong for a `from`: rename a crate and every rule about it stops checking anything,
+/// with a green build. This test is what makes that impossible.
+#[test]
+fn every_guarded_crate_is_actually_in_the_workspace() {
+    let g = dependency_graph();
+    for from in [
+        "nexus-core",
+        "nexus-mcp",
+        "nexus-cli",
+        "nexus-store",
+        "nexus-fixtures",
+        "cap-bughunter",
+        "cap-architect",
+        "cap-review",
+    ] {
+        assert!(
+            g.contains_key(from),
+            "`{from}` is named as the subject of a boundary rule but is not in the workspace. \
+             Either it was renamed — in which case the rules about it are silently inert — or \
+             the rule is stale and should be deleted."
+        );
+    }
+}
