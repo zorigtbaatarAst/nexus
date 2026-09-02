@@ -1,0 +1,52 @@
+%% What actually happens in a session. Note: no model is invoked in any Nexus box.
+sequenceDiagram
+    autonumber
+    actor DEV as Developer
+    participant CC as Claude Code
+    participant HK as hooks/
+    participant NX as nexus (CLI)
+    participant CTX as Context Engine
+    participant DB as .nexus/nexus.db
+
+    Note over DEV,CC: cd project && claude — nothing about this changes
+
+    DEV->>CC: starts a session
+    CC->>HK: SessionStart
+    HK->>NX: nexus context --session --budget 800
+    NX->>DB: baseline? scan or no-op rescan
+    NX->>CTX: session package
+    CTX->>DB: profile · open findings · durable facts
+    CTX-->>NX: ~800 tokens
+    NX-->>HK: package (exit 0 always)
+    HK-->>CC: injected into turn 1
+
+    Note over CC: the agent already knows what this project is,<br/>what is broken, and what previous sessions worked out
+
+    DEV->>CC: "fix the payment idempotency bug"
+    CC->>HK: UserPromptSubmit
+    HK->>NX: nexus context --task "..." --budget 4000
+    NX->>CTX: TaskRequest{Debug}
+    CTX->>DB: seeds · impact · churn · findings · facts
+    CTX-->>NX: 12 items, 3780 tok, ledger (61 considered)
+    NX-->>CC: package
+    Note right of HK: hard timeout, fail-open.<br/>nexus missing from PATH<br/>must not break the session.
+
+    CC->>CC: reasons (the only probabilistic step)
+    CC->>DEV: proposes an edit
+    CC->>HK: PostToolUse(Edit)
+    HK->>NX: nexus rescan --quiet
+    NX->>DB: changed set, warm index
+
+    CC->>HK: Stop ("done")
+    HK->>NX: nexus verify --changed
+    NX->>NX: compile · test · lint · diff · impact
+    NX->>DB: append test_runs
+    NX-->>CC: Verdict{Failed: 2 tests, PaymentServiceTest}
+    Note over CC,DEV: "done" was a claim.<br/>Now it is checked.
+    CC->>DEV: reports the real state
+
+    opt agent learned something expensive
+        CC->>NX: nexus_record_fact (evidence required)
+        NX->>DB: facts, source=ai, candidate, conf <= 0.75
+        Note over DB: validated by the next scan —<br/>invalidated when its evidence moves
+    end

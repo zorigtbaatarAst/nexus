@@ -1,0 +1,11 @@
+type Order {
+  id: ID!
+  reference: String!
+  totalAmount: Float!
+  status: String!
+}
+
+type Query {
+  orders: [Order!]!
+  order(id: ID!): Order
+}

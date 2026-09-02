@@ -1,0 +1,62 @@
+%% Memory lifecycle. One source of truth (SQLite); Markdown is a one-way view.
+%% The Observed -> dropped edge is the important one: no evidence, no storage.
+flowchart TB
+    subgraph sources["Where knowledge enters"]
+        AGENT["agent reasons something out<br/><i>expensive to rediscover</i>"]
+        HUMAN["developer<br/><i>nexus fact add</i>"]
+        DET["deterministic derivation<br/><i>detect · capability rules</i>"]
+    end
+
+    GATE{"carries a checkable<br/><b>file:line</b> that<br/>resolves in the index?"}
+    DROP["<b>dropped</b> + counted<br/><i>a memory of an unfounded guess<br/>is worse than no memory</i>"]
+
+    CAND["<b>Candidate</b><br/>source=ai · confidence &le; 0.75"]
+    VALID["<b>Validated</b><br/>survived a scan:<br/>anchor exists, hashes unchanged"]
+    DUR["<b>Durable</b><br/>&ge; 3 scans, or source=human"]
+    INVAL["<b>Invalidated</b><br/>invalidated_at set<br/><i>row kept, never deleted</i>"]
+
+    SCAN{"scan: did a symbol named in<br/>the evidence move or vanish?"}
+    SUPER["superseded_by<br/><i>same fact_key, fresh evidence</i>"]
+
+    RETR["<b>Retrieval</b> — a stage of the Context Engine<br/>subject_match &times; source_weight &times; state_weight<br/>&times; confidence &times; recency_decay<br/>top-K under the token budget"]
+    PKG["ContextPackage"]
+
+    DB[("SQLite · facts<br/><b>the source of truth</b>")]
+    MD["docs/knowledge/*.md<br/><i>generated view</i>"]
+    OBS["Obsidian<br/><i>optional viewer</i>"]
+
+    AGENT --> GATE
+    DET --> GATE
+    GATE -- no --> DROP
+    GATE -- yes --> CAND
+    HUMAN -- "provenance recorded" --> DUR
+
+    CAND --> SCAN
+    VALID --> SCAN
+    DUR --> SCAN
+    SCAN -- "no: evidence still holds" --> VALID
+    VALID -- "3 scans" --> DUR
+    SCAN -- "yes" --> INVAL
+    INVAL -. "re-established" .-> SUPER --> CAND
+
+    CAND --> RETR
+    VALID --> RETR
+    DUR --> RETR
+    INVAL -. "<b>excluded, not down-weighted</b>" .-x RETR
+    RETR --> PKG
+
+    CAND -.-> DB
+    VALID -.-> DB
+    DUR -.-> DB
+    INVAL -.-> DB
+    DB == "nexus memory export --markdown<br/><b>one-way — never read back</b>" ==> MD
+    MD --> OBS
+
+    classDef good fill:#e6f7e6,stroke:#2d8a2d,stroke-width:2px
+    classDef bad fill:#fdecea,stroke:#c0392b,stroke-width:2px
+    classDef store fill:#fff4e0,stroke:#c47f19,stroke-width:2px
+    classDef view fill:#f2f2f2,stroke:#999,stroke-dasharray:4 3
+    class DUR,VALID,RETR good
+    class DROP,INVAL bad
+    class DB store
+    class MD,OBS view

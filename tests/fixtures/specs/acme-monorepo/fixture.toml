@@ -1,0 +1,88 @@
+# acme-monorepo — the multi-service fixture.
+#
+# Three modules over one shared library. Its subject is the trap AGENTS.md records from a real
+# six-service repository: **6,247 of 9,514 edges classified "external" were the project's own
+# code**, and `impact` on the base class every entity extends answered "no symbol matches".
+#
+# That failure is only reproducible when a scan can be pointed at one module of something
+# larger, which is what this layout provides. It also carries a branch, because a real
+# monorepo has in-flight work on one and a benchmark should be able to start there.
+
+[fixture]
+name        = "acme-monorepo"
+description = "Three Gradle modules over one shared library: sibling resolution and narrow-scan detection."
+stack       = ["java", "spring", "gradle", "monorepo"]
+role        = "multi-service"
+base_epoch        = 1741046400   # 2025-03-04T00:00:00Z
+commit_interval_s = 43200
+
+[author]
+name  = "Nexus Fixtures"
+email = "fixtures@nexus.invalid"
+
+[[branch]]
+name = "feature/shipping"
+from = "c2"
+
+[[commit]]
+id      = "c1"
+message = "Shared money and entity base, and the orders service on top of them"
+write = [
+  { path = ".gitignore",                                                 blob = "gitignore" },
+  { path = "settings.gradle",                                            blob = "settings.gradle" },
+  { path = "libs/common/src/main/java/mn/acme/common/Money.java",        blob = "Money.java" },
+  { path = "libs/common/src/main/java/mn/acme/common/BaseEntity.java",   blob = "BaseEntity.java" },
+  { path = "services/orders/src/main/java/mn/acme/orders/OrderEntity.java",  blob = "OrderEntity.java" },
+  { path = "services/orders/src/main/java/mn/acme/orders/OrderService.java", blob = "OrderService.java" },
+]
+
+[[commit]]
+id      = "c2"
+message = "Add the inventory service"
+write = [
+  { path = "services/inventory/src/main/java/mn/acme/inventory/StockItem.java",        blob = "StockItem.java" },
+  { path = "services/inventory/src/main/java/mn/acme/inventory/InventoryService.java", blob = "InventoryService.java" },
+]
+expect.note = """
+A scan pointed at `services/orders` alone now resolves `mn.acme.common.*` to **sibling**, not \
+**external**. The distinction is the whole point: external is correctly outside the index, \
+sibling is this project's own code that a wider scan would resolve. A high sibling count means \
+the scan is too narrow, and Architect's scope rule should say so rather than letting every \
+impact answer be quietly understated."""
+
+[[commit]]
+id      = "c3"
+message = "Start the shipping service"
+branch  = "feature/shipping"
+write = [
+  { path = "services/shipping/src/main/java/mn/acme/shipping/ShippingService.java", blob = "ShippingService.java" },
+]
+expect.note = "In-flight work on a branch: a benchmark can start a task from here."
+
+[[task]]
+id      = "A2-shared-type-change"
+family  = "A"
+commit  = "c2"
+prompt  = "Money should carry a scale of 4 rather than 2, for FX-denominated orders."
+required_sites = [
+  "libs/common/src/main/java/mn/acme/common/Money.java",
+  "services/orders/src/main/java/mn/acme/orders/OrderService.java",
+  "services/inventory/src/main/java/mn/acme/inventory/InventoryService.java",
+]
+hidden_tests = ["tests/eval/hidden/A2"]
+note = """
+The edit is one line in one module. Its consequences are in two others, and nothing in \
+`Money.java` names either of them."""
+
+[[task]]
+id      = "D1-narrow-scan-is-declared"
+family  = "D"
+commit  = "c2"
+prompt  = "You are working in services/orders. Summarise what a change to OrderService can affect."
+required_sites = ["services/orders/src/main/java/mn/acme/orders/OrderService.java"]
+convention_rules = ["reports-scan-narrower-than-repository"]
+hidden_tests = ["tests/eval/hidden/D1"]
+note = """
+Graded on whether the answer *declares its own incompleteness*. An impact answer computed from \
+one module of three is understated, and saying so is the difference between a useful number and \
+a misleading one."""

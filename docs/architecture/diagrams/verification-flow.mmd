@@ -1,0 +1,57 @@
+%% The verification gate. Inconclusive is the load-bearing outcome.
+flowchart TB
+    CLAIM["agent claims <b>done</b><br/>(Stop hook, or explicit)"]
+    CHANGED["what changed?<br/>rescan → changed symbol set"]
+    NOTHING{"anything<br/>changed?"}
+    NOOP["Verdict: Inconclusive<br/><i>nothing to verify</i>"]
+
+    PLAN["plan<br/>build · test · lint commands<br/>from the detect profile<br/>+ policy.toml allowlist"]
+    PERM{"policy.execute<br/>= none?"}
+    DENY["permission_required<br/><i>a result, never an execution</i>"]
+
+    BASE{"clean tree AND<br/>baseline reachable?"}
+    RUNB["run suite at<br/>baseline revision"]
+    RUNH["run suite at HEAD<br/>argv only · never sh -c<br/>timeouts on every process"]
+
+    INFRA{"infrastructure<br/>failure?<br/>no toolchain, no network,<br/>would not compile"}
+    INCONC["<b>Verdict: Inconclusive</b><br/>why + checks_run<br/><i>says nothing about<br/>the hypothesis</i>"]
+
+    MATRIX{"baseline → HEAD"}
+    PASSPASS["Verified"]
+    PASSFAIL["<b>Failed</b><br/>the change did it<br/>+ file:line evidence"]
+    FAILFAIL["Inconclusive<br/><i>already broken</i>"]
+    FAILPASS["Verified<br/><i>+ fixed a pre-existing failure</i>"]
+
+    XCHECK["cross-check<br/>diff vs claimed scope<br/>impact vs what moved"]
+    PERSIST[("append test_runs<br/>finding_verifications<br/>test_coverage")]
+    STATUS["finding status transitions<br/>VERIFIED · FIXED · REGRESSED"]
+
+    CLAIM --> CHANGED --> NOTHING
+    NOTHING -- no --> NOOP
+    NOTHING -- yes --> PLAN --> PERM
+    PERM -- yes --> DENY
+    PERM -- no --> BASE
+    BASE -- yes --> RUNB --> RUNH
+    BASE -- "no (dirty / force-push /<br/>shallow — verdict says so)" --> RUNH
+    RUNH --> INFRA
+    INFRA -- yes --> INCONC
+    INFRA -- no --> MATRIX
+    MATRIX -- "pass → pass" --> PASSPASS
+    MATRIX -- "pass → fail" --> PASSFAIL
+    MATRIX -- "fail → fail" --> FAILFAIL
+    MATRIX -- "fail → pass" --> FAILPASS
+
+    PASSPASS --> XCHECK
+    PASSFAIL --> XCHECK
+    FAILPASS --> XCHECK
+    XCHECK --> PERSIST --> STATUS
+
+    INCONC --> PERSIST
+    FAILFAIL --> PERSIST
+
+    classDef bad fill:#fdecea,stroke:#c0392b,stroke-width:2px
+    classDef good fill:#e6f7e6,stroke:#2d8a2d,stroke-width:2px
+    classDef warn fill:#fff8e1,stroke:#c47f19,stroke-width:2px
+    class PASSFAIL bad
+    class PASSPASS,FAILPASS good
+    class INCONC,FAILFAIL,NOOP,DENY warn

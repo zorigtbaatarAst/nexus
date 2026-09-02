@@ -1,0 +1,68 @@
+%% Nexus — system architecture after the redesign.
+%% Solid = compile-time dependency. Dashed = optional / data-only.
+%% Everything inside the box is deterministic; the agent is the only probabilistic component.
+flowchart TB
+    subgraph outside[" "]
+        DEV["Developer<br/><i>cd project &amp;&amp; claude</i>"]
+        AGENT["AI coding agent<br/>Claude Code · Codex · future<br/><b>the only probabilistic component</b>"]
+    end
+
+    subgraph adapters["Adapters — thin, no logic"]
+        HOOKS["hooks/<br/>SessionStart · UserPromptSubmit<br/>PostToolUse · Stop"]
+        MCP["nexus-mcp<br/>19 tools"]
+        CLI["nexus-cli<br/>composition root"]
+    end
+
+    subgraph assembly["Assembly"]
+        CTX["nexus-core::context<br/><b>Context Engine</b><br/>intent · seeds · expand<br/>rank · budget · ledger"]
+    end
+
+    subgraph engine["nexus-core — the Engine"]
+        IDX["index<br/>symbols · files"]
+        GRAPH["impact.rs<br/>bounded weighted BFS<br/>+ the GraphQL seam"]
+        HIST["core::history<br/>churn · recency · co-change"]
+        MEM["memory<br/>facts · findings<br/>lifecycle"]
+        CAPS["capability registry<br/>Architect · Review · BugHunter"]
+    end
+
+    VERIFY["nexus-verify<br/>compile · test · lint<br/>allowlist, argv only<br/><i>never touches the store</i>"]
+    LANG["nexus-lang-*<br/>java · ts · graphql<br/>rust · python <i>(Phase 3)</i>"]
+    VCS["nexus-vcs<br/>git2 primitives"]
+    STORE[("nexus-store<br/>SQLite · .nexus/nexus.db<br/><b>the only SQL</b>")]
+    GFY["graphify-out/graph.json<br/><i>optional structural signal<br/>for unanalysed languages</i>"]
+
+    DEV --> AGENT
+    AGENT --> HOOKS
+    AGENT --> MCP
+    DEV --> CLI
+
+    HOOKS --> CLI
+    MCP --> CTX
+    CLI --> CTX
+    MCP --> IDX
+    CLI --> IDX
+
+    CTX --> IDX
+    CTX --> GRAPH
+    CTX --> HIST
+    CTX --> MEM
+    CTX --> CAPS
+    CTX -.-> GFY
+
+    CLI --> VERIFY
+    VERIFY -. "Verdict (no storage access)" .-> MEM
+
+    IDX --> LANG
+    HIST --> VCS
+    IDX --> STORE
+    GRAPH --> STORE
+    HIST --> STORE
+    MEM --> STORE
+    CAPS --> STORE
+
+    classDef new fill:#e8f4ff,stroke:#2c6fbb,stroke-width:2px
+    classDef store fill:#fff4e0,stroke:#c47f19,stroke-width:2px
+    classDef ext fill:#f2f2f2,stroke:#999,stroke-dasharray:4 3
+    class CTX,HIST,VERIFY,HOOKS new
+    class STORE store
+    class GFY ext
