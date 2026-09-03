@@ -122,6 +122,19 @@ a full account of why each thing is in it — one call, no model.
 
 **Dependencies:** Phase 1 (all of it — 1.1 for room, 1.4 for the query layer, 1.7 for the types).
 
+**Status (2026-09-03):** 2.1, 2.2 and 2.3 landed —
+`nexus-core/src/context/{intent,seeds,expand}.rs`, pinned by `tests/context_pipeline.rs` and
+the intent table's own unit tests. They are library stages, not yet wired into
+`Engine::context`: a `--task` package without stages 4–7 would be seeds with no selection
+behind them, and 2.10 is where the CLI surface belongs. Next: **2.4**.
+
+Two limits recorded now, so that 2.13's harness does not have to rediscover them. Seed source
+5 (text match) is a no-op that reports itself, because `ui_strings` stays empty until 5.5. And
+stage 2 filters prompt words before querying — a token qualifies if it contains a dot, slash
+or hash, or starts with a capital — so a lowercase one-word symbol name in a prompt is not
+looked up. The alternative is one indexed lookup per token on a stage ADR-024 budgets at
+150 ms inside a per-prompt hook.
+
 **Risks:** **R1 (ranker confidently wrong — the defining risk of this phase)**, R2 (hook latency
 on the critical path), R8 (weights become folklore), R9 (stale cache).
 
