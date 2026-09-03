@@ -379,11 +379,7 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             if cli.verbose > 0 {
                 eprintln!("scanning {}", engine.root().display());
             }
-            let report = engine.scan()?;
-            emit!(&report, {
-                render::banner(&mut out, &st)?;
-                render::scan(&mut out, &st, &report)?;
-            });
+            let mut report = engine.scan()?;
 
             // The first scan is when someone learns what this tool thinks their project is,
             // and it is the only moment they are certainly paying attention. Architect runs
@@ -393,14 +389,23 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             //
             // Failure is not fatal: a capability that cannot run must not cost someone their
             // scan, which is the expensive part.
-            if let Ok(arc) = engine.analyze("architect", Scope::Everything) {
-                if !arc.findings.is_empty() {
-                    emit!(&arc, {
-                        writeln!(out)?;
-                        render::analyze(&mut out, &st, &arc)?;
-                    });
+            //
+            // Its result goes *into* the scan report and is emitted with it. Emitting it
+            // separately printed a second JSON document on stdout, which parses as neither —
+            // and every consumer broke on it, including this project's own CI smoke check.
+            report.architect = engine
+                .analyze("architect", Scope::Everything)
+                .ok()
+                .filter(|a| !a.findings.is_empty());
+
+            emit!(&report, {
+                render::banner(&mut out, &st)?;
+                render::scan(&mut out, &st, &report)?;
+                if let Some(arc) = &report.architect {
+                    writeln!(out)?;
+                    render::analyze(&mut out, &st, arc)?;
                 }
-            }
+            });
         }
 
         Command::Rescan => {

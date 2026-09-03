@@ -208,6 +208,9 @@ impl Engine {
             health,
             warnings,
             duration_ms: started.elapsed().as_millis(),
+            // Filled in by the composition root after the scan: the core does not know its
+            // capabilities, and the boundary test says so.
+            architect: None,
         })
     }
 }

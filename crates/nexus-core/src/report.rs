@@ -61,6 +61,13 @@ pub struct ScanReport {
     pub health: Health,
     pub warnings: Vec<String>,
     pub duration_ms: u128,
+    /// What Architect made of the project on this scan.
+    ///
+    /// Carried inside the scan's own report rather than emitted beside it. `--json` is one
+    /// document per command: two concatenated objects on stdout parse as neither, and every
+    /// consumer — `jq`, an agent, this project's own CI smoke check — breaks on the second.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub architect: Option<AnalyzeReport>,
 }
 
 #[derive(Debug, Clone, Serialize)]
