@@ -1336,8 +1336,20 @@ impl Store {
                     kind: r.get(2)?,
                     file_path: r.get(3)?,
                     start_line: r.get(4)?,
-                    edge_type: EdgeType::parse(&edge_type).unwrap_or(EdgeType::Calls),
-                    resolution: Resolution::parse(&resolution).unwrap_or(Resolution::Heuristic),
+                    edge_type: EdgeType::parse(&edge_type).ok_or_else(|| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            5,
+                            rusqlite::types::Type::Text,
+                            unknown_value("edge_type", &edge_type),
+                        )
+                    })?,
+                    resolution: Resolution::parse(&resolution).ok_or_else(|| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            6,
+                            rusqlite::types::Type::Text,
+                            unknown_value("resolution", &resolution),
+                        )
+                    })?,
                     confidence: r.get(7)?,
                     site_line: r.get(8)?,
                 })
@@ -2973,6 +2985,19 @@ fn is_sibling(pkg: &str, root: Option<&str>) -> bool {
         || pkg
             .strip_prefix(root)
             .is_some_and(|rest| rest.starts_with('.'))
+}
+
+/// A column value the schema permits and the code cannot name.
+///
+/// Returned as an error rather than defaulted, because a default is indistinguishable from a
+/// real value: `resolution` defaulted to `heuristic`, so every `sibling` and `external-graph`
+/// edge claimed a tier that had resolved something against a symbol table when nothing had.
+/// A schema the code cannot read is a bug to see, not one to average over.
+fn unknown_value(column: &str, value: &str) -> Box<dyn std::error::Error + Send + Sync> {
+    Box::new(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        format!("unknown {column} {value:?} — schema and code disagree"),
+    ))
 }
 
 fn simple_key(fqn: &str) -> String {
