@@ -91,9 +91,25 @@ pub struct ProjectContext<'a> {
     /// Indexed lookup, built once: a capability that scans the symbol list per edge turns a
     /// linear pass into a quadratic one, and the graph is the biggest thing here.
     pub by_fqn: BTreeMap<&'a str, &'a SymbolFacts>,
+    /// Symbols a test run actually reached (roadmap 4.5).
+    ///
+    /// Empty until something has been verified, and empty is *not* the same as uncovered — a
+    /// rule must check [`Self::has_coverage_evidence`] before reading a conclusion into it.
+    /// This is what turns "nothing tests this" from a filename heuristic into evidence, and
+    /// keeping the distinction visible is the whole point of carrying it separately.
+    pub covered: std::collections::BTreeSet<String>,
 }
 
 impl<'a> ProjectContext<'a> {
+    /// Whether a real run has established coverage for this project at all.
+    ///
+    /// The difference between "no test reaches this" and "nothing has run, so nobody knows"
+    /// is the difference between a finding and a guess, and a rule that cannot tell them
+    /// apart will state the second as the first.
+    pub fn has_coverage_evidence(&self) -> bool {
+        !self.covered.is_empty()
+    }
+
     pub fn new(
         root: &'a Path,
         symbols: &'a [SymbolFacts],
@@ -110,7 +126,15 @@ impl<'a> ProjectContext<'a> {
             commit: None,
             profile: None,
             by_fqn,
+            covered: Default::default(),
         }
+    }
+
+    /// Attach what a real run proved. Called by the engine, which is the only thing that has
+    /// both the store and a reason to read it.
+    pub fn with_coverage(mut self, covered: std::collections::BTreeSet<String>) -> Self {
+        self.covered = covered;
+        self
     }
 
     pub fn with_changes(mut self, changed: &'a [ChangedSymbol], commit: Option<&'a str>) -> Self {

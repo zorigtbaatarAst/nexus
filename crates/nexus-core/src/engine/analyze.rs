@@ -112,7 +112,13 @@ impl Engine {
         let profile = self.load_profile().ok().flatten();
         let ctx = ProjectContext::new(&self.root, &symbols, &edges, &files)
             .with_changes(&changed, commit.as_deref())
-            .with_profile(profile.as_ref());
+            .with_profile(profile.as_ref())
+            .with_coverage(
+                self.store
+                    .covered_fqns(self.project_id)?
+                    .into_iter()
+                    .collect(),
+            );
 
         let mut candidates = capability
             .analyze(&ctx, &scope)

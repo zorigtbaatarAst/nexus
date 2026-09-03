@@ -697,6 +697,10 @@ impl Engine {
         Ok(report)
     }
 
+    /// How many verification runs this project has recorded.
+    pub fn test_run_count(&self) -> Result<i64> {
+        Ok(self.store.test_run_count(self.project_id)?)
+    }
     /// How many commits this project's ledger holds.
     pub fn commit_count(&self) -> Result<i64> {
         Ok(self.store.commit_count(self.project_id)?)

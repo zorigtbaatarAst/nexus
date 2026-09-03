@@ -66,11 +66,26 @@ impl Rule for ChangedWithoutTest {
             }
 
             let reachable = graph.reachable_from(&changed.fqn, DEPTH);
-            let covered = reachable.iter().any(|fqn| {
-                ctx.symbol(fqn)
-                    .map(|s| is_test(&s.file, &s.fqn))
-                    .unwrap_or(false)
-            });
+            // Evidence when there is any, a guess when there is not, and the finding says
+            // which. A run that actually happened proves coverage; a filename can only
+            // suggest it, and reporting the second as the first is how a heuristic gets
+            // mistaken for a measurement.
+            let (covered, basis) = if ctx.has_coverage_evidence() {
+                (
+                    ctx.covered.contains(&changed.fqn),
+                    "no test run has reached it",
+                )
+            } else {
+                (
+                    reachable.iter().any(|fqn| {
+                        ctx.symbol(fqn)
+                            .map(|s| is_test(&s.file, &s.fqn))
+                            .unwrap_or(false)
+                    }),
+                    "no file that looks like a test reaches it — nothing has been run, so this \
+                     is a guess from filenames rather than from a test run",
+                )
+            };
             if covered {
                 continue;
             }
@@ -94,9 +109,8 @@ impl Rule for ChangedWithoutTest {
                     file: sym.file.clone(),
                     line: sym.line,
                     note: format!(
-                        "this changed in the current scan, {} other symbols depend on it, \
-                         and no test within {DEPTH} hops reaches it — so a mistake here \
-                         will not fail a test run",
+                        "this changed in the current scan, {} other symbols depend on it, and \
+                         {basis} — so a mistake here will not fail a test run",
                         reachable.len()
                     ),
                 }],
@@ -105,6 +119,10 @@ impl Rule for ChangedWithoutTest {
                     "change": format!("{:?}", changed.kind),
                     "dependents_within_depth": reachable.len(),
                     "depth_searched": DEPTH,
+                    // Which of the two this rests on. Retiring `impact::is_test` as the
+                    // coverage *source* (roadmap 4.5) does not retire the function: it is
+                    // still the honest answer when nothing has run.
+                    "coverage_source": if ctx.has_coverage_evidence() { "runtime" } else { "naming" },
                 })),
             });
         }

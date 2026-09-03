@@ -18,7 +18,7 @@ impl Engine {
     /// Execution is refused unless the committed policy permits it. `execute = "none"` is the
     /// default and produces a *result* saying so, never an execution: a permission system
     /// that can be talked into running something is not one.
-    pub fn verify(&self) -> Result<VerifyReport> {
+    pub fn verify(&mut self) -> Result<VerifyReport> {
         let started = Instant::now();
         let policy = crate::policy::load_execution(&self.root.join(NEXUS_DIR).join("policy.toml"));
         if policy.execute == "none" {
@@ -43,6 +43,10 @@ impl Engine {
         );
 
         let head = run_plan(&HostRunner, &plan, &self.root);
+        // The ledger, before the judgement: what ran is a fact whatever the verdict turns out
+        // to be, and a run that is only recorded when it is interesting is a run nobody can
+        // count.
+        self.record_run(&head)?;
 
         // The baseline half. Skipped, with the reason said out loud, when there is nothing
         // comparable to run against.
@@ -62,6 +66,93 @@ impl Engine {
             note,
             duration_ms: started.elapsed().as_millis(),
         })
+    }
+
+    /// Everything a run leaves behind: the ledger row, the tests it named, and the coverage
+    /// those tests prove.
+    ///
+    /// Coverage from a run that actually happened is different in kind from a filename match.
+    /// `impact::is_test` stays — it is still a reasonable guess when nothing has run — but a
+    /// `runtime` row is evidence, and Review says which of the two it used.
+    fn record_run(&mut self, checks: &[nexus_verify::Check]) -> Result<()> {
+        let Some(baseline) = self.store.baseline(self.project_id)? else {
+            return Ok(());
+        };
+        let (commit, _) = self.head();
+        let logs = self.root.join(NEXUS_DIR).join("cache").join("verify-logs");
+        let _ = std::fs::create_dir_all(&logs);
+
+        for check in checks {
+            let tests = nexus_verify::parse_tests(&check.output);
+            let counts = nexus_verify::counts_of(&tests);
+            // Output on disk, a path in the row. A megabyte of build output in a database
+            // column is a database nobody can query.
+            let log_path = {
+                let name = format!(
+                    "{}-{}.log",
+                    check.kind.as_str(),
+                    nexus_store::now().replace(':', "-")
+                );
+                let path = logs.join(&name);
+                match std::fs::write(&path, &check.output) {
+                    Ok(()) => Some(path.display().to_string()),
+                    Err(_) => None,
+                }
+            };
+
+            let tx = self.store.transaction()?;
+            Store::insert_test_run(
+                &tx,
+                self.project_id,
+                Some(baseline.scan_id),
+                commit.as_deref(),
+                &check.argv.join(" "),
+                nexus_verify::sandbox_name(),
+                check.exit_code,
+                check.duration_ms as i64,
+                (counts.passed, counts.failed, counts.skipped),
+                log_path.as_deref(),
+                &nexus_store::now(),
+            )?;
+            tx.commit().map_err(nexus_store::StoreError::from)?;
+
+            for test in tests.iter().filter(|t| t.passed) {
+                self.record_coverage_for(baseline.scan_id, &test.name)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Link one passing test to the symbols it reaches.
+    ///
+    /// Reachability from a test that ran, rather than from a file whose name looks like a
+    /// test. A test name the index cannot resolve records nothing at all: an invented
+    /// coverage row would make Review cite evidence that does not exist, which is worse than
+    /// the guess it replaces.
+    fn record_coverage_for(&mut self, scan_id: i64, test_name: &str) -> Result<()> {
+        let matches = self.store.find_symbols(self.project_id, test_name, 2)?;
+        let [test_symbol] = matches.as_slice() else {
+            return Ok(());
+        };
+        let reached = impact::run(
+            &self.store,
+            self.project_id,
+            std::slice::from_ref(test_symbol),
+            &ImpactQuery {
+                direction: impact::Direction::Forward,
+                max_depth: 4,
+                ..Default::default()
+            },
+        )?;
+        let tx = self.store.transaction()?;
+        let test_id = Store::upsert_test(&tx, self.project_id, scan_id, test_name, None)?;
+        for item in &reached.items {
+            if let Some(id) = Store::symbol_id_by_fqn(&tx, self.project_id, &item.fqn)? {
+                Store::record_coverage(&tx, test_id, id, "runtime", item.min_confidence)?;
+            }
+        }
+        tx.commit().map_err(nexus_store::StoreError::from)?;
+        Ok(())
     }
 
     /// Run the same plan at the baseline commit, in a detached worktree.

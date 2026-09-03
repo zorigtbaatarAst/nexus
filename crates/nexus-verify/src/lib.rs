@@ -930,3 +930,134 @@ mod judgement_tests {
         }
     }
 }
+
+// ─────────────────────────── reading a runner ───────────────────────────
+
+/// One test the runner reported.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TestOutcome {
+    /// As the runner named it. Resolving that to a symbol is the caller's problem, because
+    /// only the caller has an index.
+    pub name: String,
+    pub passed: bool,
+}
+
+/// Counts a `test_runs` row wants.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct Counts {
+    pub passed: i64,
+    pub failed: i64,
+    pub skipped: i64,
+}
+
+/// Read test names and outcomes out of runner output.
+///
+/// Deliberately narrow. Every runner prints something different, and a parser that tries to
+/// understand all of them understands none of them reliably — so this handles the formats it
+/// can state precisely and returns nothing for the rest. Nothing is worse here than a wrong
+/// answer: an invented coverage row would make Review's flagship finding cite evidence that
+/// does not exist, which is worse than the filename guess it replaces.
+pub fn parse_tests(output: &str) -> Vec<TestOutcome> {
+    let mut out = Vec::new();
+    for line in output.lines() {
+        let line = line.trim();
+        // cargo: `test module::name ... ok` / `... FAILED`
+        if let Some(rest) = line.strip_prefix("test ") {
+            if let Some((name, tail)) = rest.split_once(" ... ") {
+                let name = name.trim();
+                match tail.trim() {
+                    "ok" => out.push(TestOutcome {
+                        name: name.into(),
+                        passed: true,
+                    }),
+                    "FAILED" => out.push(TestOutcome {
+                        name: name.into(),
+                        passed: false,
+                    }),
+                    _ => {}
+                }
+                continue;
+            }
+        }
+        // pytest -v: `path::test_name PASSED` / `FAILED`
+        if let Some((name, verdict)) = line.rsplit_once(' ') {
+            if name.contains("::") && matches!(verdict, "PASSED" | "FAILED") {
+                out.push(TestOutcome {
+                    name: name.trim().into(),
+                    passed: verdict == "PASSED",
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out.dedup_by(|a, b| a.name == b.name);
+    out
+}
+
+/// Totals from parsed outcomes. Zeroes when nothing could be parsed, which the caller can
+/// tell apart from "the suite has no tests" by looking at the exit code.
+pub fn counts_of(tests: &[TestOutcome]) -> Counts {
+    Counts {
+        passed: tests.iter().filter(|t| t.passed).count() as i64,
+        failed: tests.iter().filter(|t| !t.passed).count() as i64,
+        skipped: 0,
+    }
+}
+
+#[cfg(test)]
+mod parse_tests_tests {
+    use super::*;
+
+    #[test]
+    fn cargo_output_is_read() {
+        let out = parse_tests(
+            "running 2 tests\ntest works ... ok\ntest broken ... FAILED\n\ntest result: FAILED.",
+        );
+        assert_eq!(
+            out,
+            [
+                TestOutcome {
+                    name: "broken".into(),
+                    passed: false
+                },
+                TestOutcome {
+                    name: "works".into(),
+                    passed: true
+                },
+            ]
+        );
+        assert_eq!(
+            counts_of(&out),
+            Counts {
+                passed: 1,
+                failed: 1,
+                skipped: 0
+            }
+        );
+    }
+
+    #[test]
+    fn pytest_output_is_read() {
+        let out = parse_tests(
+            "tests/test_pay.py::test_settles PASSED\ntests/test_pay.py::test_refunds FAILED",
+        );
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert!(out
+            .iter()
+            .any(|t| t.name.ends_with("test_settles") && t.passed));
+    }
+
+    #[test]
+    fn an_unrecognised_runner_yields_nothing_rather_than_a_guess() {
+        // An invented coverage row would make Review's flagship finding cite evidence that
+        // does not exist, which is worse than the filename guess it replaces.
+        assert!(parse_tests("BUILD SUCCESSFUL in 3s\n42 tests completed").is_empty());
+        assert!(parse_tests("").is_empty());
+    }
+
+    #[test]
+    fn a_test_is_reported_once_even_if_the_runner_repeats_it() {
+        let out = parse_tests("test works ... ok\ntest works ... ok");
+        assert_eq!(out.len(), 1);
+    }
+}

@@ -1865,6 +1865,118 @@ impl Store {
         Ok(())
     }
 
+    // ── verification ledger (roadmap 4.4, 4.5) ──────────────
+
+    /// Append a run. `test_runs` is a ledger: never updated, so "this suite has been red for
+    /// eleven runs" stays answerable — a question no single run can answer and every
+    /// developer eventually asks.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_test_run(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        scan_id: Option<ScanId>,
+        revision: Option<&str>,
+        command: &str,
+        sandbox: &str,
+        exit_code: Option<i32>,
+        duration_ms: i64,
+        counts: (i64, i64, i64),
+        log_path: Option<&str>,
+        started_at: &str,
+    ) -> Result<i64> {
+        tx.execute(
+            "INSERT INTO test_runs (project_id, scan_id, revision, command, sandbox, exit_code,
+                                    duration_ms, passed, failed, skipped, log_path, started_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![
+                project_id,
+                scan_id,
+                revision,
+                command,
+                sandbox,
+                exit_code,
+                duration_ms,
+                counts.0,
+                counts.1,
+                counts.2,
+                log_path,
+                started_at
+            ],
+        )?;
+        Ok(tx.last_insert_rowid())
+    }
+
+    /// Record a test the runner named. `CURRENT`, keyed by fqn, so a suite that runs twice
+    /// has one row per test rather than one per run.
+    pub fn upsert_test(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        scan_id: ScanId,
+        test_fqn: &str,
+        framework: Option<&str>,
+    ) -> Result<i64> {
+        tx.execute(
+            "INSERT INTO tests (project_id, file_id, framework, test_fqn, kind, origin,
+                                last_seen_scan_id, deleted)
+             VALUES (?1, NULL, ?2, ?3, 'unit', 'project', ?4, 0)
+             ON CONFLICT(project_id, test_fqn) DO UPDATE SET
+               last_seen_scan_id = excluded.last_seen_scan_id, deleted = 0,
+               framework = COALESCE(excluded.framework, tests.framework)",
+            params![project_id, framework, test_fqn, scan_id],
+        )?;
+        Ok(tx.query_row(
+            "SELECT id FROM tests WHERE project_id = ?1 AND test_fqn = ?2",
+            params![project_id, test_fqn],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Link a test to a symbol it covers.
+    ///
+    /// `source` says how it was established: `runtime` when a run named the test, `naming`
+    /// when only a filename suggested it. Keeping the distinction is the point — it is what
+    /// lets Review say whether its flagship finding rests on evidence or on a guess.
+    pub fn record_coverage(
+        tx: &Transaction<'_>,
+        test_id: i64,
+        symbol_id: SymbolId,
+        source: &str,
+        confidence: f64,
+    ) -> Result<()> {
+        tx.execute(
+            "INSERT INTO test_coverage (test_id, symbol_id, source, confidence)
+             VALUES (?1,?2,?3,?4)
+             ON CONFLICT(test_id, symbol_id) DO UPDATE SET
+               source = excluded.source, confidence = excluded.confidence",
+            params![test_id, symbol_id, source, confidence],
+        )?;
+        Ok(())
+    }
+
+    /// Fully-qualified names a real run proved are covered.
+    pub fn covered_fqns(&self, project_id: ProjectId) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT s.fqn
+             FROM test_coverage c
+             JOIN live_symbols s ON s.id = c.symbol_id
+             JOIN tests t ON t.id = c.test_id
+             WHERE s.project_id = ?1 AND t.project_id = ?1 AND c.source = 'runtime'",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id], |r| r.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// How many runs this project has recorded.
+    pub fn test_run_count(&self, project_id: ProjectId) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM test_runs WHERE project_id = ?1",
+            params![project_id],
+            |r| r.get(0),
+        )?)
+    }
+
     // ── commits: the history ledger ──────────────────────────
 
     /// Record a commit. Append-only: an sha already present is left exactly as it is.
