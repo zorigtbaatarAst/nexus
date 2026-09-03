@@ -146,6 +146,13 @@ pub fn scan(w: &mut impl Write, st: &Style, r: &ScanReport) -> std::io::Result<(
     }
     writeln!(w, "  files        {}", r.files_scanned)?;
     writeln!(w, "  symbols      {}", r.symbols_indexed)?;
+    if r.facts_invalidated > 0 {
+        writeln!(
+            w,
+            "  facts        {} invalidated — evidence moved",
+            r.facts_invalidated
+        )?;
+    }
     if r.edges_total > 0 {
         // The honest denominator excludes third-party libraries — an edge to
         // org.springframework is correctly not in this index, not a resolution failure.
@@ -222,6 +229,13 @@ pub fn rescan(w: &mut impl Write, st: &Style, r: &RescanReport) -> std::io::Resu
     writeln!(w, "{}", st.head("Changes"))?;
     writeln!(w, "  {} files", r.files_changed + r.files_deleted)?;
     writeln!(w, "  {} symbols", r.symbols_changed)?;
+    if r.facts_invalidated > 0 {
+        writeln!(
+            w,
+            "  {} facts invalidated — their evidence moved",
+            r.facts_invalidated
+        )?;
+    }
     writeln!(w)?;
 
     let mut shown = 0usize;

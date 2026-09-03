@@ -46,6 +46,9 @@ pub struct ScanReport {
     pub files_failed: usize,
     pub files_skipped: usize,
     pub symbols_indexed: usize,
+    /// Facts whose evidence pointed at a symbol or file this scan changed or removed.
+    /// Always zero on a first scan: there is nothing to remember yet.
+    pub facts_invalidated: usize,
     pub edges_total: usize,
     pub edges_resolved: usize,
     /// A third-party library, correctly outside the index. ADR-017.

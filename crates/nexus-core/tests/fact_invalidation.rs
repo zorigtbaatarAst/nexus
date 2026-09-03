@@ -193,3 +193,16 @@ fn an_invalidated_fact_can_be_re_established_under_the_same_key() {
     assert_eq!(facts.len(), 1, "{facts:?}");
     assert_eq!(facts[0].claim, "pay is still idempotent on key");
 }
+
+#[test]
+fn a_full_scan_invalidates_too() {
+    // `scan` on an already-indexed project re-parses everything and records no changes
+    // ledger, so the rule cannot ride on the ledger. It rides on the anchor's hashes,
+    // which both paths have.
+    let (root, mut engine) = scanned_with_fact("fullscan", "ai", on_pay());
+    edit(&root, r#""pay ""#, r#""paid ""#);
+
+    let report = engine.scan().expect("scan");
+    assert_eq!(report.facts_invalidated, 1, "{report:?}");
+    assert!(engine.facts(None).expect("facts").is_empty());
+}

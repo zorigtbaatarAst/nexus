@@ -41,6 +41,9 @@ impl Engine {
         let mut skipped = 0usize;
         let mut symbols_indexed = 0usize;
 
+        // Where every fact's evidence points, read before the index is rewritten.
+        let anchors = self.fact_anchors(&mut warnings)?;
+
         let tx = self.store.transaction()?;
         let mut pending_edges: Vec<(FileId, Vec<NewEdge>)> = Vec::new();
         for (file, outcome) in &parsed {
@@ -88,6 +91,9 @@ impl Engine {
             Store::replace_edges_for_file(&tx, self.project_id, *file_id, scan_id, edges)?;
         }
         let resolve = Store::resolve_edges(&tx, self.project_id)?;
+        let facts_invalidated =
+            Store::invalidate_moved_facts(&tx, self.project_id, &anchors, &nexus_store::now())?
+                .len();
         tx.commit().map_err(nexus_store::StoreError::from)?;
         if resolve.unresolved > 0 {
             warnings.push(format!(
@@ -131,6 +137,7 @@ impl Engine {
             files_failed: failed,
             files_skipped: skipped,
             symbols_indexed,
+            facts_invalidated,
             edges_resolved: resolve.resolved(),
             edges_total: resolve.total,
             edges_external: resolve.external,
