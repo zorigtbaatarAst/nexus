@@ -16,7 +16,7 @@
 
 use crate::findings::CodeRef;
 use crate::report::Profile;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// The default ceiling for a session package. The `SessionStart` hook's budget in ADR-024.
@@ -36,7 +36,7 @@ pub fn estimate_tokens(s: &str) -> usize {
 }
 
 /// Why a package was asked for. Phase 1 serves `Session`; the rest are the Phase 2 surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Purpose {
     Session,
@@ -83,7 +83,7 @@ impl TaskRequest {
 }
 
 /// What the project is. Answered from the stored profile, never inferred at query time.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectSummary {
     pub name: String,
     pub profile: Option<Profile>,
@@ -95,7 +95,7 @@ pub struct ProjectSummary {
     pub scope_warning: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ItemKind {
     Symbol,
@@ -111,7 +111,7 @@ pub enum ItemKind {
 /// in the package's `basis`: a fixed query has no ranking to decompose. The struct exists now
 /// because Phase 2.6's contract is that *every* term is recorded, and a field added later is a
 /// field some caller has already learned to live without.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct ScoreTerms {
     pub seed: f64,
     pub graph: f64,
@@ -126,7 +126,7 @@ pub struct ScoreTerms {
 
 /// One thing in the package. Anchors, not contents: Nexus says where, and the agent has
 /// `Read` (§2, principle 3).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextItem {
     pub kind: ItemKind,
     pub anchor: CodeRef,
@@ -142,7 +142,7 @@ pub struct ContextItem {
     pub tokens: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Decision {
     Included,
@@ -152,7 +152,7 @@ pub enum Decision {
 /// One candidate's fate. Recorded for winners *and* losers: a ranker that only explains its
 /// inclusions cannot be debugged for the failure that matters most, which is the right item
 /// that never made it in (§8).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LedgerRow {
     pub kind: ItemKind,
     pub label: String,
@@ -163,7 +163,7 @@ pub struct LedgerRow {
 }
 
 /// Every candidate considered, in the order they were considered.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InclusionLedger {
     pub rows: Vec<LedgerRow>,
 }
@@ -205,7 +205,7 @@ impl InclusionLedger {
 ///
 /// A package that does not state its basis implies a clean tree it may not have been built
 /// from (§10). All four fields are also the Phase 2.9 cache key.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageBasis {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scan_uid: Option<String>,
@@ -213,11 +213,13 @@ pub struct PackageBasis {
     pub commit: Option<String>,
     pub dirty: bool,
     /// What produced the selection. Phase 1 says so plainly, because a caller cannot tell a
-    /// fixed query from a ranked one by looking at the output.
-    pub selection: &'static str,
+    /// fixed query from a ranked one by looking at the output. A `String` rather than a
+    /// `&'static str` because a package round-trips through the cache file (§11), and a
+    /// borrowed field cannot come back from disk.
+    pub selection: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextPackage {
     pub purpose: Purpose,
     pub project: ProjectSummary,
@@ -534,6 +536,7 @@ mod budget_tests {
     }
 }
 
+pub mod cache;
 pub mod expand;
 pub mod intent;
 pub mod rank;
@@ -605,7 +608,7 @@ mod intent_tests {
             "java.lang.NullPointerException\n\tat mn.pay.PaymentService.pay(PaymentService.java:48)",
         );
         assert_eq!(got.intent, Intent::Debug, "{got:?}");
-        assert_eq!(got.signal, Some("stack trace"));
+        assert_eq!(got.signal.as_deref(), Some("stack trace"));
     }
 
     #[test]

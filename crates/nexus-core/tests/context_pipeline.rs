@@ -318,3 +318,38 @@ fn a_task_package_carries_every_score_term_it_used() {
     assert!(seed.terms.seed > 0.0, "{seed:?}");
     assert!(seed.terms.cost < 0.0, "cost is a penalty: {seed:?}");
 }
+
+#[test]
+fn an_identical_question_is_served_from_cache_and_an_edit_is_a_miss() {
+    // §11, and R9: an agent editing without committing is the normal case, so a key over
+    // HEAD alone would serve context describing code that no longer exists.
+    let (root, engine) = scanned("cache");
+    let req = request("refactor PaymentService");
+
+    let first = engine.context(&req).expect("first");
+    let hit = engine.context(&req).expect("second");
+    assert_eq!(
+        first.items_considered, hit.items_considered,
+        "the same question is the same package"
+    );
+    let cached: Vec<_> = fs::read_dir(root.join(".nexus/cache/context"))
+        .expect("cache dir")
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(cached.len(), 1, "one entry for one question");
+
+    write(
+        &root,
+        "src/mn/pay/New.java",
+        "package mn.pay;\npublic class New {}\n",
+    );
+    let after_edit = engine.context(&req).expect("third");
+    assert!(
+        fs::read_dir(root.join(".nexus/cache/context"))
+            .expect("cache dir")
+            .count()
+            > 1,
+        "a dirty tree must key differently, not reuse the clean answer"
+    );
+    assert_eq!(after_edit.purpose, req.purpose);
+}

@@ -17,7 +17,7 @@
 /// What the text is asking for. Distinct from [`Purpose`](super::Purpose), which is what the
 /// *caller* asked for: an explicit `--purpose review` and the word "review" in a sentence are
 /// different facts and must stay distinguishable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Intent {
     Debug,
@@ -44,11 +44,13 @@ impl Intent {
 
 /// The classification and what produced it. `signal` is the evidence: an intent that cannot
 /// name why it was chosen cannot be argued with.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IntentMatch {
     pub intent: Intent,
-    /// The matched phrase, or `None` for `Unknown`.
-    pub signal: Option<&'static str>,
+    /// The matched phrase, or `None` for `Unknown`. Owned rather than borrowed because a
+    /// package round-trips through the cache file (§11) and a `&'static str` cannot come
+    /// back from disk.
+    pub signal: Option<String>,
     /// False only for `Unknown`. Carried explicitly so a caller cannot mistake "we decided
     /// nothing" for "we decided Unknown".
     pub confident: bool,
@@ -203,7 +205,7 @@ pub fn classify(text: &str) -> IntentMatch {
     if looks_like_a_stack_trace(text) && best.is_none_or(|(i, _, n)| i != Intent::Debug && n < 2) {
         return IntentMatch {
             intent: Intent::Debug,
-            signal: Some("stack trace"),
+            signal: Some("stack trace".into()),
             confident: true,
         };
     }
@@ -211,7 +213,7 @@ pub fn classify(text: &str) -> IntentMatch {
     match best {
         Some((intent, signal, _)) => IntentMatch {
             intent,
-            signal: Some(signal),
+            signal: Some(signal.to_string()),
             confident: true,
         },
         None => unknown,

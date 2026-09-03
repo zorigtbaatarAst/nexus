@@ -128,6 +128,20 @@ impl Repo {
         Ok(diff)
     }
 
+    /// Paths with uncommitted changes, sorted. The cheap half of `is_dirty`: which files, not
+    /// what changed in them.
+    pub fn dirty_paths(&self) -> Result<Vec<String>> {
+        let mut opts = StatusOptions::new();
+        opts.include_untracked(true);
+        let mut out: Vec<String> = self
+            .inner
+            .statuses(Some(&mut opts))?
+            .iter()
+            .filter_map(|e| e.path().map(str::to_string))
+            .collect();
+        out.sort();
+        Ok(out)
+    }
     pub fn commit_subject(&self, sha: &str) -> Option<String> {
         self.inner
             .revparse_single(sha)

@@ -226,7 +226,8 @@ impl Engine {
                 scan_uid: baseline.scan_uid,
                 commit: status.current.commit.clone(),
                 dirty: status.current.dirty,
-                selection: "phase-1 fixed query: open findings then durable facts, in store order",
+                selection: "phase-1 fixed query: open findings then durable facts, in store order"
+                    .into(),
             },
             budget_tokens: req.budget_tokens,
             tokens_estimated,
@@ -284,6 +285,23 @@ impl Engine {
             notes.push(
                 "intent was not determined from the text, so balanced weights were used".into(),
             );
+        }
+
+        // §11 — the package cache. Checked after seeds because the seed set is part of the
+        // key: two different prompts that anchor to the same symbols really are the same
+        // question, and answering the second from the first is the point.
+        let cache_dir = self.root.join(crate::NEXUS_DIR).join("cache");
+        let dirty_hash = self.working_tree_fingerprint();
+        let key = crate::context::cache::Key {
+            intent: intent.intent.as_str(),
+            seeds: seeded.seeds.iter().map(|s| s.symbol.fqn.clone()).collect(),
+            commit: status.current.commit.as_deref(),
+            dirty_hash: &dirty_hash,
+            budget_tokens: req.budget_tokens,
+            weights_hash: &w.hash(),
+        };
+        if let Some(hit) = crate::context::cache::get(&cache_dir, &key) {
+            return Ok(hit);
         }
 
         // 5 — rank. Seeds score 1.0 on proximity by definition: they are what was asked
@@ -412,7 +430,7 @@ impl Engine {
         );
 
         // 7 — package.
-        Ok(ContextPackage {
+        let package = ContextPackage {
             purpose: req.purpose,
             project: ProjectSummary {
                 name: status.project.clone(),
@@ -428,14 +446,34 @@ impl Engine {
                 scan_uid: baseline.scan_uid,
                 commit: status.current.commit.clone(),
                 dirty: status.current.dirty,
-                selection: "ranked: intent, seeds, expand, signals, weighted sum, density budget",
+                selection: "ranked: intent, seeds, expand, signals, weighted sum, density budget"
+                    .into(),
             },
             budget_tokens: req.budget_tokens,
             tokens_estimated,
             items_considered: considered,
             intent: Some(intent),
             notes,
-        })
+        };
+        crate::context::cache::put(&cache_dir, &key, &package);
+        Ok(package)
+    }
+
+    /// A fingerprint of the uncommitted state, for the cache key.
+    ///
+    /// An agent editing files without committing is the normal case, so a key over HEAD alone
+    /// would serve a package describing code that no longer exists (R9). Cheap by design: the
+    /// set of dirty paths, not their contents — a rescan is what notices a content change,
+    /// and it moves the scan uid the package already carries.
+    fn working_tree_fingerprint(&self) -> String {
+        let Some(repo) = self.repo.as_ref() else {
+            return "no-vcs".into();
+        };
+        match repo.dirty_paths() {
+            Ok(paths) if paths.is_empty() => "clean".into(),
+            Ok(paths) => blake3::hash(paths.join("\u{1f}").as_bytes()).to_hex()[..16].to_string(),
+            Err(_) => "unknown".into(),
+        }
     }
     /// How many commits this project's ledger holds.
     pub fn commit_count(&self) -> Result<i64> {
