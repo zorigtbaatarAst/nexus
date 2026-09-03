@@ -192,6 +192,12 @@ enum Command {
         /// never stored, never indexed, and never reaches the database.
         #[arg(long, value_name = "TEXT")]
         recent: Option<String>,
+        /// What the packages built so far say about the ranking weights.
+        ///
+        /// Reports rather than tunes, and refuses to recommend anything until there are
+        /// enough packages to be about the project rather than about one session.
+        #[arg(long)]
+        weights: bool,
     },
     /// Record something learned about this project, so the next session starts with it
     Fact {
@@ -788,7 +794,16 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             stats,
             carry_seeds,
             recent,
+            weights,
         } => {
+            if *weights {
+                let report =
+                    nexus_core::tuning::report(&root.join(nexus_core::NEXUS_DIR).join("cache"));
+                emit!(&report, {
+                    render::weights(&mut out, &st, &report)?;
+                });
+                return Ok(exit::OK);
+            }
             // Exactly one shape per invocation. Defaulting to one of them would make a bare
             // `nexus context` mean something different depending on which flags exist.
             let request = match (session, task) {

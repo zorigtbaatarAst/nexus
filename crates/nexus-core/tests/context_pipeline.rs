@@ -359,11 +359,27 @@ fn an_identical_question_is_served_from_cache_and_an_edit_is_a_miss() {
     let req = request("refactor PaymentService");
 
     let first = engine.context(&req).expect("first");
+
+    // Proving a *hit*, not merely a matching answer: a miss recomputes and produces the same
+    // package, so comparing two results proves nothing. A sentinel written into the cached
+    // file can only come back if the file was actually read.
+    let entry = fs::read_dir(root.join(".nexus/cache/context"))
+        .expect("cache dir")
+        .filter_map(|e| e.ok())
+        .next()
+        .expect("one entry")
+        .path();
+    let mut cached: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&entry).expect("read")).expect("json");
+    cached["project"]["name"] = serde_json::json!("came-from-the-cache");
+    fs::write(&entry, cached.to_string()).expect("write");
+
     let hit = engine.context(&req).expect("second");
     assert_eq!(
-        first.items_considered, hit.items_considered,
-        "the same question is the same package"
+        hit.project.name, "came-from-the-cache",
+        "the second identical question must be served from the cache, not recomputed"
     );
+    assert_eq!(first.items_considered, hit.items_considered);
     let cached: Vec<_> = fs::read_dir(root.join(".nexus/cache/context"))
         .expect("cache dir")
         .filter_map(|e| e.ok())

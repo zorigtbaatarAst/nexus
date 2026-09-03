@@ -104,7 +104,7 @@ pub struct ProjectSummary {
     pub symbols: i64,
     /// Present when the scan looks like one module of something larger. Silence here is what
     /// lets an impact answer report a small blast radius with total confidence.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope_warning: Option<String>,
 }
 
@@ -144,7 +144,7 @@ pub struct ContextItem {
     pub kind: ItemKind,
     pub anchor: CodeRef,
     /// At most a few lines. Never a whole file. Phase 1 emits none.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<String>,
     pub score: f64,
     pub terms: ScoreTerms,
@@ -220,9 +220,9 @@ impl InclusionLedger {
 /// from (§10). All four fields are also the Phase 2.9 cache key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageBasis {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scan_uid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
     pub dirty: bool,
     /// What produced the selection. Phase 1 says so plainly, because a caller cannot tell a
@@ -246,11 +246,15 @@ pub struct ContextPackage {
     /// What the text was taken to be asking for. `None` for a session package, which has no
     /// text to classify — distinct from an `Unknown` classification, which means text was
     /// read and nothing matched.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    ///
+    /// `default` as well as `skip_serializing_if`: a skipped field is still *required* when
+    /// reading unless it has one, so without this a package could be written to the cache and
+    /// never read back — the cache would miss every time, silently, and look like it worked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<IntentMatch>,
     /// What the pipeline could not do, and why. A stage that contributes nothing in silence
     /// is indistinguishable from one that is broken.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }
 

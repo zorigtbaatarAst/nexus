@@ -30,6 +30,7 @@ pub mod portable;
 pub mod project;
 pub mod report;
 pub mod rules;
+pub mod tuning;
 pub mod ui_strings;
 pub mod walk;
 

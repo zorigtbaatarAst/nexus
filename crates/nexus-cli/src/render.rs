@@ -10,6 +10,7 @@
 use nexus_core::context::{ContextItem, ContextPackage, Decision, ItemKind};
 use nexus_core::nexus_store;
 use nexus_core::report::*;
+use nexus_core::tuning::WeightsReport;
 use nexus_types::Health;
 use std::io::{IsTerminal, Write};
 
@@ -1073,5 +1074,45 @@ pub fn verify(w: &mut impl Write, st: &Style, r: &VerifyReport) -> std::io::Resu
         writeln!(w, "  {}", st.dim(baseline))?;
     }
     writeln!(w, "  {}", st.dim(&format!("{} ms", r.duration_ms)))?;
+    Ok(())
+}
+
+/// What the accumulated inclusion ledgers say about the ranking weights.
+pub fn weights(w: &mut impl Write, st: &Style, r: &WeightsReport) -> std::io::Result<()> {
+    writeln!(
+        w,
+        "{}",
+        st.head(&format!(
+            "{} package(s) · {} considered · {} included",
+            r.packages, r.items_considered, r.items_included
+        ))
+    )?;
+    if !r.mean_terms.is_empty() {
+        writeln!(w)?;
+        writeln!(w, "{}", st.head("Mean contribution per included item"))?;
+        for (name, value) in &r.mean_terms {
+            writeln!(w, "  {name:<9} {value:>7.3}")?;
+        }
+    }
+    if !r.exclusions.is_empty() {
+        writeln!(w)?;
+        writeln!(w, "{}", st.head("Why candidates were refused"))?;
+        for (reason, n) in &r.exclusions {
+            writeln!(w, "  {reason:<18} {n}")?;
+        }
+    }
+    writeln!(w)?;
+    match &r.insufficient {
+        Some(why) => writeln!(w, "{} {}", st.warn("No recommendation:"), why)?,
+        None => writeln!(
+            w,
+            "{}",
+            st.dim(
+                "A term near zero everywhere is doing no work; a rule refusing nearly \
+                 everything is the one to change first. Edit [context.weights] in \
+                 .nexus/policy.toml and cite these numbers."
+            )
+        )?,
+    }
     Ok(())
 }
