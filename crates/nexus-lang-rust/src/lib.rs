@@ -56,7 +56,9 @@ impl LanguageAnalyzer for RustAnalyzer {
         // Bumped with the grammar. `scans.tool_versions_json` carries it, and a change forces
         // a re-parse even where every content hash still matches — otherwise upgrading a
         // grammar silently keeps the symbols the old one produced, forever, with no error.
-        "tree-sitter-rust 0.24"
+        // The `+fqn2` suffix is the crate-qualified FQN: identity changed, so every cache
+        // keyed on this must miss rather than keep symbols the old scheme named.
+        "tree-sitter-rust 0.24+fqn2"
     }
 
     fn parse(&self, src: &SourceFile<'_>) -> Result<ParsedFile, LangError> {
@@ -87,14 +89,28 @@ impl LanguageAnalyzer for RustAnalyzer {
 /// `a::b`. Derived from the path rather than from `mod` declarations because an analyzer sees
 /// one file and the declarations are in another — the same reason a Java analyzer reads the
 /// package statement rather than the directory.
+///
+/// In a workspace the crate leads, because it is part of the identity. Without it every
+/// crate's `new`, `walk` and `context` were one symbol: on this repository `nexus context
+/// --task "fix Engine::context"` found nothing while eighteen unrelated `context` functions
+/// shared a row, and impact from any of them reached the whole workspace.
 pub fn module_path(path: &str) -> String {
     let p = path.strip_prefix("./").unwrap_or(path);
-    let p = p.rsplit_once("src/").map_or(p, |(_, tail)| tail);
-    let p = p.strip_suffix(".rs").unwrap_or(p);
-    let parts: Vec<&str> = p
-        .split('/')
-        .filter(|s| !s.is_empty() && *s != "mod" && *s != "lib" && *s != "main")
-        .collect();
+    let (before, tail) = p.rsplit_once("src/").unwrap_or(("", p));
+    let tail = tail.strip_suffix(".rs").unwrap_or(tail);
+    // The directory holding `src/`, which is the crate — `crates/` and `vendor/` are layout,
+    // not identity, so they are skipped rather than joined.
+    let krate = before
+        .trim_end_matches('/')
+        .rsplit('/')
+        .find(|s| !s.is_empty() && !matches!(*s, "crates" | "vendor" | "."))
+        .map(|s| s.replace('-', "_"));
+    let mut parts: Vec<String> = krate.into_iter().collect();
+    parts.extend(
+        tail.split('/')
+            .filter(|s| !s.is_empty() && !matches!(*s, "mod" | "lib" | "main"))
+            .map(str::to_string),
+    );
     parts.join("::")
 }
 
@@ -739,7 +755,20 @@ pub fn helper(n: i32) -> i32 {
         assert_eq!(module_path("src/lib.rs"), "");
         assert_eq!(module_path("src/engine/mod.rs"), "engine");
         assert_eq!(module_path("src/context/intent.rs"), "context::intent");
-        assert_eq!(module_path("crates/nexus-core/src/memory.rs"), "memory");
+        // The crate leads in a workspace, and `crates/` is layout rather than identity.
+        assert_eq!(
+            module_path("crates/nexus-core/src/memory.rs"),
+            "nexus_core::memory"
+        );
+        assert_eq!(
+            module_path("crates/nexus-lang-rust/src/lib.rs"),
+            "nexus_lang_rust"
+        );
+        // Two crates, two `walk`s. This is the whole point.
+        assert_ne!(
+            module_path("crates/a/src/lib.rs"),
+            module_path("crates/b/src/lib.rs")
+        );
     }
 
     #[test]
