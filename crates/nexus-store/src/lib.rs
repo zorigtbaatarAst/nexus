@@ -917,6 +917,12 @@ impl Store {
         // Simple `Type#member` and bare `Type`, for the last-resort tier below.
         let mut by_simple: std::collections::HashMap<String, Vec<i64>> =
             std::collections::HashMap::new();
+        // A method by its bare name. A call site writes `self.foo()` or `obj.foo()` and the
+        // analyzer can only report `foo`, but every method is keyed `Owner#foo`, so the hint
+        // could never reach it: on this repository 751 bound call edges landed on free
+        // functions and 29 on methods, with 525 methods in the index.
+        let mut by_member: std::collections::HashMap<String, Vec<i64>> =
+            std::collections::HashMap::new();
         let mut by_graphql: std::collections::HashMap<String, Vec<i64>> =
             std::collections::HashMap::new();
         let mut route_modules: std::collections::HashMap<i64, String> =
@@ -937,6 +943,10 @@ impl Store {
                         .push(id);
                 }
                 by_simple.entry(simple_key(&fqn)).or_default().push(id);
+                if let Some((_, member)) = fqn.split_once('#') {
+                    let bare = member.split('(').next().unwrap_or(member);
+                    by_member.entry(bare.to_string()).or_default().push(id);
+                }
                 // A frontend knows the coordinate it calls and not the service that serves
                 // it, so route symbols are also reachable by coordinate alone.
                 if let Some(coord) = nexus_types::graphql_coordinate(&fqn) {
@@ -1149,6 +1159,53 @@ impl Store {
                             params![edge_id, only],
                         )?;
                         continue;
+                    }
+
+                    // A bare member name. Weaker than everything above — the analyzer saw
+                    // `x.foo()` and does not know what `x` is — so it resolves only when the
+                    // name is distinctive, and every candidate is recorded rather than one
+                    // being picked. Beyond four candidates the name is not evidence at all,
+                    // and emitting five wrong edges is worse than emitting none: ADR-017's
+                    // argument, which is also why the analyzers carry a deny-list of names
+                    // every object has.
+                    // `foo` (TypeScript, a free-function call) and `#foo` (Rust, a method
+                    // call with no owner the analyzer could name) are the same evidence: a
+                    // bare member name. Requiring no `#` at all skipped every Rust method
+                    // call, which is most of them.
+                    let bare = hint.strip_prefix('#').unwrap_or(&hint);
+                    if !bare.contains('#') && !bare.contains('(') && !bare.contains("::") {
+                        match by_member.get(bare).map(Vec::as_slice) {
+                            Some([only]) => {
+                                stats.heuristic += 1;
+                                tx.execute(
+                                    "UPDATE symbol_edges SET dst_symbol_id = ?2, resolution = 'heuristic', confidence = 0.6
+                                     WHERE id = ?1",
+                                    params![edge_id, only],
+                                )?;
+                                continue;
+                            }
+                            Some(many) if many.len() <= 4 => {
+                                stats.ambiguous += 1;
+                                let conf = 0.6 / many.len() as f64;
+                                tx.execute(
+                                    "UPDATE symbol_edges SET dst_symbol_id = ?2, resolution = 'heuristic', confidence = ?3
+                                     WHERE id = ?1",
+                                    params![edge_id, many[0], conf],
+                                )?;
+                                for dst in &many[1..] {
+                                    tx.execute(
+                                        "INSERT INTO symbol_edges (project_id, src_symbol_id, dst_symbol_id, dst_fqn_hint,
+                                                                   edge_type, resolution, confidence, site_line, last_seen_scan_id)
+                                         SELECT project_id, src_symbol_id, ?2, dst_fqn_hint, ?3, 'heuristic', ?4,
+                                                site_line, last_seen_scan_id
+                                         FROM symbol_edges WHERE id = ?1",
+                                        params![edge_id, dst, edge_type, conf],
+                                    )?;
+                                }
+                                continue;
+                            }
+                            _ => {}
+                        }
                     }
                     let type_part = hint.split('#').next().unwrap_or(&hint);
                     let pkg = type_part
