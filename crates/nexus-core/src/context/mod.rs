@@ -290,3 +290,120 @@ pub(crate) fn fill(
     }
     (items, used)
 }
+
+pub mod intent;
+
+pub use intent::{classify, Intent, IntentMatch};
+
+#[cfg(test)]
+mod intent_tests {
+    use super::intent::{classify, Intent};
+
+    /// The table, as a table. Every row of §3 and the cases that made the rules necessary.
+    #[test]
+    fn the_verb_table_classifies_what_the_spec_says_it_does() {
+        let cases: &[(&str, Intent)] = &[
+            ("fix the payment idempotency bug", Intent::Debug),
+            ("the checkout page is broken", Intent::Debug),
+            ("this fails with a NullPointerException", Intent::Debug),
+            ("add optimistic locking to PaymentService", Intent::Build),
+            ("implement the refund endpoint", Intent::Build),
+            ("we need to support partial refunds", Intent::Build),
+            ("refactor PaymentService", Intent::Refactor),
+            ("rename pay to settle", Intent::Refactor),
+            (
+                "extract the validation into its own class",
+                Intent::Refactor,
+            ),
+            ("review my changes", Intent::Review),
+            ("is this safe to merge", Intent::Review),
+            (
+                "why does the controller enforce idempotency",
+                Intent::Explain,
+            ),
+            ("how does the seam work", Intent::Explain),
+            ("what is a FrameworkPack", Intent::Explain),
+        ];
+        for (text, want) in cases {
+            let got = classify(text);
+            assert_eq!(got.intent, *want, "{text:?} classified as {got:?}");
+            assert!(
+                got.signal.is_some(),
+                "a classification names its signal: {text:?}"
+            );
+            assert!(got.confident, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn nothing_matching_is_unknown_and_says_so() {
+        // §3: `Unknown` is a first-class outcome, not a default dressed up as a guess.
+        for text in ["", "   ", "the quick brown fox", "PaymentService"] {
+            let got = classify(text);
+            assert_eq!(got.intent, Intent::Unknown, "{text:?} -> {got:?}");
+            assert!(
+                !got.confident,
+                "an unmatched prompt must report that it guessed nothing: {text:?}"
+            );
+            assert!(got.signal.is_none(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_stack_trace_is_a_debug_signal_on_its_own() {
+        // The strongest signal a bug report carries, and it contains none of the verbs.
+        let got = classify(
+            "java.lang.NullPointerException\n\tat mn.pay.PaymentService.pay(PaymentService.java:48)",
+        );
+        assert_eq!(got.intent, Intent::Debug, "{got:?}");
+        assert_eq!(got.signal, Some("stack trace"));
+    }
+
+    #[test]
+    fn the_winner_is_the_intent_with_the_most_signals_not_the_first_word() {
+        // "review the fix for the broken parser" hits review(1) and debug(2). Debug wins on
+        // count. A first-word rule would answer Review, and be wrong about the whole package.
+        let got = classify("review the fix for the broken parser");
+        assert_eq!(got.intent, Intent::Debug, "{got:?}");
+    }
+
+    #[test]
+    fn a_tie_is_broken_by_a_fixed_precedence_not_by_hash_order() {
+        // One signal each. The answer must be the same on every run and on every platform,
+        // because a golden package that depends on iteration order is not a golden package.
+        let first = classify("fix and refactor");
+        for _ in 0..50 {
+            assert_eq!(classify("fix and refactor").intent, first.intent);
+        }
+        assert_eq!(
+            first.intent,
+            Intent::Debug,
+            "debug outranks refactor on a tie"
+        );
+    }
+
+    #[test]
+    fn matching_is_on_words_not_substrings() {
+        // "prefix" contains "fix"; "moved" contains "move"; "adding" contains "add".
+        // A substring rule turns a sentence about a URL prefix into a debugging session.
+        assert_eq!(
+            classify("the url prefix is wrong").intent,
+            Intent::Debug,
+            "'wrong' is a debug signal; the point is that 'prefix' is not"
+        );
+        assert_eq!(
+            classify("document the prefix convention").intent,
+            Intent::Unknown
+        );
+        assert_eq!(
+            classify("the file was moved last week").intent,
+            Intent::Unknown
+        );
+    }
+
+    #[test]
+    fn classification_ignores_case_and_punctuation() {
+        assert_eq!(classify("FIX the bug!").intent, Intent::Debug);
+        assert_eq!(classify("Why does this work?").intent, Intent::Explain);
+    }
+}
