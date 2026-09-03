@@ -8,7 +8,7 @@
 
 [![CI](https://github.com/zorigtbaatarAst/nexus/actions/workflows/ci.yml/badge.svg)](https://github.com/zorigtbaatarAst/nexus/actions/workflows/ci.yml)
 [![Rust 1.82+](https://img.shields.io/badge/rust-1.82%2B-b7410e?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-392%20passing-2ea043)](#running-nexus-on-itself)
+[![Tests](https://img.shields.io/badge/tests-394%20passing-2ea043)](#running-nexus-on-itself)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-19%20tools-6f42c1)](docs/mcp-api.md)
 
@@ -300,7 +300,7 @@ Three capabilities read that one index, one for each moment of working with an a
 ## Built with
 
 **Rust · a single static binary · SQLite · tree-sitter · git2.** 18 crates, ~32,000 lines,
-392 tests.
+394 tests.
 
 Java · TypeScript · GraphQL · **Rust** · **Python** all work. Each sits behind the
 `LanguageAnalyzer` trait and is **registered at the composition root**: adding a language is a
@@ -324,7 +324,7 @@ reads `cargo metadata` and fails the build on a violation.
 ## Running Nexus on itself
 
 ```bash
-make check        # what CI runs: fmt · clippy (a warning fails) · 392 tests
+make check        # what CI runs: fmt · clippy (a warning fails) · 394 tests
 make fixtures     # the benchmark corpus, generated from specs, same sha every time
 /nexus-architect  # derive the state from the code, then plan or implement the next task
 ```
