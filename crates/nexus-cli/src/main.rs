@@ -54,6 +54,16 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum MemoryCommand {
+    /// Write one Markdown file per namespace. Generated, never read back.
+    Export {
+        /// Where to write. Created if absent.
+        #[arg(long, default_value = "docs/knowledge")]
+        markdown: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 enum Command {
     /// Detect the project, create .nexus/, migrate the database
     Init {
@@ -116,6 +126,11 @@ enum Command {
         /// changed | affected <target> | uses <target> | known <target> | facts | next
         #[arg(trailing_var_arg = true)]
         question: Vec<String>,
+    },
+    /// Project memory: what has been learned, as files a person can read
+    Memory {
+        #[command(subcommand)]
+        cmd: MemoryCommand,
     },
     /// What an agent should know before it reads a file
     Context {
@@ -606,6 +621,51 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             });
         }
 
+        Command::Memory {
+            cmd: MemoryCommand::Export { markdown },
+        } => {
+            let engine = open(&root)?;
+            let grouped = engine.memory_export()?;
+            // Relative paths land in the project, not in whatever directory the terminal
+            // happens to be in — this is a project artefact and `--project` says which one.
+            let dir = if markdown.is_absolute() {
+                markdown.clone()
+            } else {
+                root.join(markdown)
+            };
+            std::fs::create_dir_all(&dir)?;
+            let mut written = Vec::new();
+            for (namespace, facts) in &grouped {
+                let path = dir.join(format!("{namespace}.md"));
+                std::fs::write(&path, nexus_core::memory::to_markdown(namespace, facts))?;
+                written.push((path, facts.len()));
+            }
+            emit!(
+                &grouped
+                    .iter()
+                    .map(|(n, f)| serde_json::json!({"namespace": n, "facts": f.len()}))
+                    .collect::<Vec<_>>(),
+                {
+                    if written.is_empty() {
+                        writeln!(out, "{}", st.dim("No facts to export yet."))?;
+                    } else {
+                        writeln!(out, "{}", st.head("Exported"))?;
+                        for (path, n) in &written {
+                            writeln!(out, "  {:<40} {n} fact(s)", path.display())?;
+                        }
+                        writeln!(
+                            out,
+                            "\n{}",
+                            st.dim(
+                                "Generated. Nexus never reads these back — to add \
+                                    knowledge use `nexus fact`."
+                            )
+                        )?;
+                    }
+                }
+            );
+        }
+
         Command::Context {
             session,
             task,
@@ -821,6 +881,7 @@ fn envelope<T: Serialize>(cli: &Cli, value: T) -> Result<String, serde_json::Err
             Command::Capabilities => "capabilities",
             Command::Ask { .. } => "ask",
             Command::Context { .. } => "context",
+            Command::Memory { .. } => "memory",
             Command::Fact { .. } => "fact",
             Command::Ignore { .. } => "ignore",
             Command::Doctor => "doctor",

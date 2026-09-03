@@ -545,6 +545,21 @@ impl Engine {
             .map(|f| (f.key, f.validated_count, f.durable))
             .collect())
     }
+    /// Every live fact, grouped by namespace, for the Markdown view (§6).
+    ///
+    /// Returns data, not files: the engine does not write to the project, and a view that the
+    /// core wrote directly would be one more thing that could touch a developer's tree.
+    pub fn memory_export(&self) -> Result<Vec<(String, Vec<crate::memory::ExportedFact>)>> {
+        let mut by_namespace: std::collections::BTreeMap<String, Vec<_>> = Default::default();
+        for row in self.store.facts(self.project_id, None)? {
+            let f = crate::memory::ExportedFact::from_row(&row);
+            by_namespace.entry(f.namespace.clone()).or_default().push(f);
+        }
+        for facts in by_namespace.values_mut() {
+            facts.sort_by(|a, b| a.key.cmp(&b.key));
+        }
+        Ok(by_namespace.into_iter().collect())
+    }
     /// How many commits this project's ledger holds.
     pub fn commit_count(&self) -> Result<i64> {
         Ok(self.store.commit_count(self.project_id)?)
