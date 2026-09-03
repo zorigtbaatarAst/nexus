@@ -9,6 +9,7 @@
 
 mod ask;
 mod fixture;
+mod hooks;
 mod render;
 
 use cap_architect::Architect;
@@ -55,7 +56,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Detect the project, create .nexus/, migrate the database
-    Init,
+    Init {
+        /// Also install the SessionStart hook for Claude Code. Off by default: a hook
+        /// whose latency has not been measured on this project is not turned on uninvited.
+        #[arg(long)]
+        hooks: bool,
+    },
     /// Full scan: index files and symbols, and establish the baseline
     Scan,
     /// Incremental: diff against the baseline down to changed symbols
@@ -247,8 +253,13 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             return Ok(code);
         }
 
-        Command::Init => {
+        Command::Init { hooks } => {
             let (_engine, profile) = Engine::init(&root)?;
+            let installed = if *hooks {
+                Some(hooks::install(&root)?)
+            } else {
+                None
+            };
             emit!(&profile, {
                 render::banner(&mut out, &st)?;
                 render::profile(&mut out, &st, &profile)?;
@@ -261,6 +272,18 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                     root.display(),
                     nexus_core::NEXUS_DIR
                 )?;
+                match installed {
+                    Some(hooks::Outcome::Installed) => {
+                        writeln!(
+                            out,
+                            "Installed the SessionStart hook in .claude/settings.json"
+                        )?;
+                    }
+                    Some(hooks::Outcome::AlreadyPresent) => {
+                        writeln!(out, "The SessionStart hook was already installed")?;
+                    }
+                    None => {}
+                }
                 writeln!(out, "  next: {} scan", render::binary_name())?;
             });
         }
@@ -693,7 +716,7 @@ fn envelope<T: Serialize>(cli: &Cli, value: T) -> Result<String, serde_json::Err
         bughunter: env!("CARGO_PKG_VERSION"),
         schema: 2,
         command: match &cli.command {
-            Command::Init => "init",
+            Command::Init { .. } => "init",
             Command::Scan => "scan",
             Command::Rescan => "rescan",
             Command::Status => "status",
