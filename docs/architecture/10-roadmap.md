@@ -29,7 +29,7 @@ evidence.
 
 **Do not build yet:** anything. No production code changes in this phase.
 
-**Status: complete, pending approval.**
+**Status: complete.** Phase 1 began on 2026-09-02.
 
 ---
 
@@ -43,15 +43,21 @@ a session package — and pays off the debt that would otherwise resist everythi
 | # | Task | Size |
 |---|---|---:|
 | 1.1 | Split `engine.rs` → `engine/{mod,scan,rescan,analyze,query}.rs`. Public API byte-identical | ~0 net |
-| 1.2 | Hoist `Rule` into `nexus_core::capability`; delete the three private copies and `cap-review::Graph` | −150 |
-| 1.3 | Migration `0006`: drop `bugs`, `bug_occurrences`, `bug_verifications`, `bug_relations` | ~20 |
-| 1.4 | Move `ask.rs` orchestration into `nexus_core::query`; fix its N+1 (80 engine calls over 40 symbols) | ~200 |
+| 1.2 | Hoist `Rule` into `nexus_core::rules` (one `Rule`, one `Graph`); delete the three private copies and `cap-review::Graph` | −150 |
+| ~~1.3~~ | ~~Migration `0006`: drop `bugs`, `bug_occurrences`, `bug_verifications`, `bug_relations`~~ **Void.** Those tables never exist: migration `0003` renames them to `findings*`. Verified against a live database on 2026-09-03 — `nexus init` then `SELECT name FROM sqlite_master WHERE name LIKE 'bug%'` returns no rows. See [`03`](03-current-state.md) P2 | 0 |
+| 1.4 | Move `ask.rs` orchestration into `Engine::ask` (`engine/query.rs`). The N+1 is documented, not fixed: `findings_for` matches on five conditions and has no batched form that keeps one definition of a match (commit `ba915d3`) | ~200 |
 | 1.5 | `nexus-vcs` tests — it has zero, and history work lands on it next | ~150 |
 | 1.6 | **Fact invalidation on change** — set `invalidated_at` when a scan moves a symbol named in a fact's evidence | ~50 |
 | 1.7 | `ContextPackage` / `ContextItem` / `InclusionLedger` types; `nexus context --session` | ~350 |
 | 1.8 | `SessionStart` hook + `nexus init --hooks`. **Off by default** | ~80 |
 
 **Dependencies:** none. Every task is inside the existing architecture.
+
+**Status (2026-09-03, `0d7b212`):** 1.1, 1.2, 1.4, 1.5 landed on 2026-09-02 (commits
+`c82bb52`, `eded128`, `ba915d3`, `ffef5ba`); 1.3 is void, see the row. 1.6, 1.7, 1.8 are
+not started — `invalidated_at` is still only read (`nexus-store/src/lib.rs`, one `WHERE`),
+no `ContextPackage` type exists under `crates/`, and the binary has no `context` command
+and no `--hooks` flag. Next in order: **1.6**.
 
 **Risks:** R7 (core god object — 1.1 is the mitigation, which is why it is first), R2 (hook
 latency, first exposure).

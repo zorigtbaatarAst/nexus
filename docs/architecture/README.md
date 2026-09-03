@@ -4,7 +4,8 @@ The master plan for Nexus as an **engineering intelligence layer for AI coding a
 
 > Do not give AI more context. Give AI better context.
 
-**Status:** Phase 0 (architecture foundation) complete. No production code has been changed.
+**Status:** Phase 0 (architecture foundation) complete. Phase 1 in progress — 1.1, 1.2, 1.4, 1.5
+landed 2026-09-02; 1.3 is void; next is 1.6. See [10-roadmap.md](10-roadmap.md).
 
 ## Read in this order
 
