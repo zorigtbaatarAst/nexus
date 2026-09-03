@@ -17,6 +17,7 @@
 use crate::findings::CodeRef;
 use crate::report::Profile;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 /// The default ceiling for a session package. The `SessionStart` hook's budget in ADR-024.
 pub const SESSION_BUDGET_TOKENS: usize = 800;
@@ -227,6 +228,15 @@ pub struct ContextPackage {
     pub tokens_estimated: usize,
     pub items_considered: usize,
     pub items_included: usize,
+    /// What the text was taken to be asking for. `None` for a session package, which has no
+    /// text to classify — distinct from an `Unknown` classification, which means text was
+    /// read and nothing matched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent: Option<IntentMatch>,
+    /// What the pipeline could not do, and why. A stage that contributes nothing in silence
+    /// is indistinguishable from one that is broken.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// A candidate before the budget has had its say.
@@ -236,59 +246,292 @@ pub(crate) struct Candidate {
     pub anchor: Option<CodeRef>,
     pub why: String,
     pub text: String,
+    /// Stage 5's score. Zero for the Phase 1 session package, which has no ranking and says
+    /// so in its basis.
+    pub score: f64,
+    pub terms: ScoreTerms,
+    /// The file this belongs to, for the diversity guard. Empty means "no component", which
+    /// exempts it from the cap rather than lumping every such item together.
+    pub component: String,
 }
 
 impl Candidate {
     pub(crate) fn tokens(&self) -> usize {
         estimate_tokens(&self.text)
     }
+    /// Score per token. §7 sorts by this, not by raw score: a 40-token fact scoring 0.6 beats
+    /// a 900-token class scoring 0.9, and that is where the token optimisation actually
+    /// happens.
+    pub(crate) fn density(&self) -> f64 {
+        let t = self.tokens();
+        if t == 0 {
+            return f64::NEG_INFINITY;
+        }
+        self.score / t as f64
+    }
 }
 
-/// Greedy fill in the order given, recording every candidate's fate.
+/// How stage 6 chooses.
 ///
-/// Order *is* the selection in Phase 1 — there is no score to sort by, and inventing one
-/// would be the folklore §6 warns against. When a candidate does not fit, it is excluded and
-/// the fill continues: a later, smaller item may still belong, and stopping at the first
-/// refusal would be truncation rather than selection.
+/// The two are not interchangeable and the distinction is not cosmetic. A ranked package
+/// earned its order from stage 5 and the floor and the diversity cap are meaningful. A fixed
+/// query has no scores, so sorting it by density would reorder findings and facts by how long
+/// their text happens to be, and applying a floor to scores that are all zero would empty it.
+/// The session package (roadmap 1.7) is `Ordered` and its basis says so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Selection {
+    /// Take them as given. Only the anchor rule and the budget apply.
+    Ordered,
+    /// §7 in full: density sort, diversity guard, score floor.
+    Ranked {
+        min_score_x1000: i64,
+        max_per_component: usize,
+    },
+}
+
+/// Stage 6 — selection, not truncation.
+///
+/// §7's four rules in order: sort by density, fill greedily, cap how much one component may
+/// contribute, and refuse anything below the floor even when budget remains. Every refusal
+/// names the rule that made it, because "excluded" without a reason is the failure §8 exists
+/// to prevent.
+///
+/// Order is stable: candidates with equal density keep the order they arrived in, so a
+/// package is reproducible and a golden test means something.
 pub(crate) fn fill(
     candidates: Vec<Candidate>,
     budget_tokens: usize,
     spent: usize,
+    selection: Selection,
     ledger: &mut InclusionLedger,
 ) -> (Vec<ContextItem>, usize) {
+    let (min_score, max_per_component) = match selection {
+        Selection::Ordered => (f64::NEG_INFINITY, 0),
+        Selection::Ranked {
+            min_score_x1000,
+            max_per_component,
+        } => (min_score_x1000 as f64 / 1000.0, max_per_component),
+    };
+    let mut ranked: Vec<(usize, Candidate)> = candidates.into_iter().enumerate().collect();
+    if selection != Selection::Ordered {
+        ranked.sort_by(|(ia, a), (ib, b)| {
+            b.density().total_cmp(&a.density()).then_with(|| ia.cmp(ib))
+        });
+    }
+
     let mut items = Vec::new();
     let mut used = spent;
-    for c in candidates {
+    let mut per_component: BTreeMap<String, usize> = BTreeMap::new();
+
+    for (_, c) in ranked {
         let tokens = c.tokens();
         let Some(anchor) = c.anchor else {
             // §12: no item without a `file:line` anchor. Recorded, never dropped quietly.
-            ledger.excluded(c.kind, c.label, "no file:line anchor".into(), 0.0, tokens);
+            ledger.excluded(
+                c.kind,
+                c.label,
+                "no file:line anchor".into(),
+                c.score,
+                tokens,
+            );
             continue;
         };
+        // The floor comes before the budget check: "we did not want it" and "it did not fit"
+        // are different answers, and reporting the second when the first is true would send
+        // someone to raise a budget that was never the constraint.
+        if c.score < min_score {
+            ledger.excluded(
+                c.kind,
+                c.label,
+                format!("below floor ({min_score:.2})"),
+                c.score,
+                tokens,
+            );
+            continue;
+        }
+        if !c.component.is_empty() && max_per_component > 0 {
+            let n = per_component.entry(c.component.clone()).or_insert(0);
+            if *n >= max_per_component {
+                ledger.excluded(
+                    c.kind,
+                    c.label,
+                    format!("at most {max_per_component} items from {}", c.component),
+                    c.score,
+                    tokens,
+                );
+                continue;
+            }
+        }
         if used + tokens > budget_tokens {
             ledger.excluded(
                 c.kind,
                 c.label,
                 format!("budget exhausted at {budget_tokens} tokens"),
-                0.0,
+                c.score,
                 tokens,
             );
             continue;
         }
         used += tokens;
-        ledger.included(c.kind, c.label, 0.0, tokens);
+        if !c.component.is_empty() {
+            *per_component.entry(c.component.clone()).or_insert(0) += 1;
+        }
+        ledger.included(c.kind, c.label, c.score, tokens);
         items.push(ContextItem {
             kind: c.kind,
             anchor,
             window: None,
-            score: 0.0,
-            terms: ScoreTerms::default(),
+            score: c.score,
+            terms: c.terms,
             why: c.why,
             text: c.text,
             tokens,
         });
     }
     (items, used)
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    fn candidate(label: &str, score: f64, text: &str, component: &str) -> Candidate {
+        Candidate {
+            kind: ItemKind::Symbol,
+            label: label.into(),
+            anchor: Some(CodeRef {
+                file: "a.java".into(),
+                line: 1,
+                note: String::new(),
+            }),
+            why: String::new(),
+            text: text.into(),
+            score,
+            terms: ScoreTerms::default(),
+            component: component.into(),
+        }
+    }
+
+    fn run(cs: Vec<Candidate>, budget: usize) -> (Vec<ContextItem>, InclusionLedger) {
+        let mut ledger = InclusionLedger::default();
+        let (items, _) = fill(
+            cs,
+            budget,
+            0,
+            Selection::Ranked {
+                min_score_x1000: 150,
+                max_per_component: 3,
+            },
+            &mut ledger,
+        );
+        (items, ledger)
+    }
+
+    #[test]
+    fn an_ordered_selection_keeps_its_order_and_ignores_the_floor() {
+        // The session package is a fixed query with no scores. Density-sorting it would
+        // reorder findings and facts by text length, and a floor over zeros would empty it.
+        let cs = vec![
+            candidate("first", 0.0, &"a".repeat(400), "x.java"),
+            candidate("second", 0.0, "tiny", "x.java"),
+            candidate("third", 0.0, "also tiny", "x.java"),
+            candidate("fourth", 0.0, "still tiny", "x.java"),
+        ];
+        let mut ledger = InclusionLedger::default();
+        let (items, _) = fill(cs, 10_000, 0, Selection::Ordered, &mut ledger);
+        assert_eq!(items.len(), 4, "no floor and no component cap: {items:?}");
+        assert!(items[0].text.starts_with("aaaa"), "order is preserved");
+    }
+
+    #[test]
+    fn density_beats_raw_score() {
+        // §7's headline: a 40-token fact scoring 0.6 beats a 900-token class scoring 0.9.
+        let cheap = candidate("cheap", 0.6, &"x".repeat(140), "a.java");
+        let dear = candidate("dear", 0.9, &"y".repeat(3150), "b.java");
+        let (items, _) = run(vec![dear, cheap], 100);
+        assert_eq!(items.first().map(|i| i.score), Some(0.6), "{items:?}");
+    }
+
+    #[test]
+    fn one_component_cannot_fill_the_package() {
+        // Without the guard a hot class fills the budget with its own methods, and the
+        // package describes one file instead of one change.
+        let cs: Vec<Candidate> = (0..8)
+            .map(|i| candidate(&format!("m{i}"), 0.9, "short text here", "Hot.java"))
+            .collect();
+        let (items, ledger) = run(cs, 10_000);
+        assert_eq!(items.len(), 3, "{items:?}");
+        assert!(ledger
+            .rows
+            .iter()
+            .any(|r| r.reason.contains("at most 3 items")));
+    }
+
+    #[test]
+    fn an_item_below_the_floor_is_refused_even_with_budget_to_spare() {
+        // §7: an unfilled budget is not a problem to solve. Padding is what the core
+        // principle forbids.
+        let (items, ledger) = run(vec![candidate("weak", 0.01, "tiny", "a.java")], 10_000);
+        assert!(items.is_empty(), "{items:?}");
+        assert!(
+            ledger.rows[0].reason.contains("below floor"),
+            "and not 'budget exhausted', which would send someone to raise a budget that was              never the constraint: {:?}",
+            ledger.rows[0]
+        );
+    }
+
+    #[test]
+    fn a_refusal_always_names_the_rule_that_made_it() {
+        let mut cs = vec![candidate("weak", 0.01, "tiny", "a.java")];
+        cs.push(candidate("big", 0.9, &"z".repeat(10_000), "b.java"));
+        let (_, ledger) = run(cs, 50);
+        for row in ledger
+            .rows
+            .iter()
+            .filter(|r| r.decision == Decision::Excluded)
+        {
+            assert!(!row.reason.is_empty(), "{row:?}");
+        }
+        assert!(ledger
+            .rows
+            .iter()
+            .any(|r| r.reason.contains("budget exhausted")));
+    }
+
+    #[test]
+    fn equal_density_keeps_arrival_order_so_a_package_is_reproducible() {
+        let cs: Vec<Candidate> = ["a", "b", "c"]
+            .iter()
+            .map(|l| candidate(l, 0.5, "same length text", "x.java"))
+            .collect();
+        let (items, _) = run(cs, 10_000);
+        let labels: Vec<&str> = items.iter().map(|i| i.text.as_str()).collect();
+        assert_eq!(labels.len(), 3);
+        for _ in 0..20 {
+            let cs: Vec<Candidate> = ["a", "b", "c"]
+                .iter()
+                .map(|l| candidate(l, 0.5, "same length text", "x.java"))
+                .collect();
+            let (again, _) = run(cs, 10_000);
+            assert_eq!(
+                again.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(),
+                labels
+            );
+        }
+    }
+
+    #[test]
+    fn an_unanchored_candidate_is_still_a_ledger_row() {
+        let mut c = candidate("no-anchor", 0.9, "text", "a.java");
+        c.anchor = None;
+        let (items, ledger) = run(vec![c], 10_000);
+        assert!(items.is_empty());
+        assert!(
+            ledger.rows[0].reason.contains("anchor"),
+            "{:?}",
+            ledger.rows[0]
+        );
+    }
 }
 
 pub mod expand;

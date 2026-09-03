@@ -267,3 +267,54 @@ fn churn_is_normalised_against_the_busiest_path() {
     assert!(cold > 0.0, "a path touched once is not zero: {cold}");
     assert_eq!(churn.get("nothing/here.java"), None);
 }
+
+#[test]
+fn a_task_package_is_ranked_anchored_and_fully_accounted_for() {
+    let (_root, engine) = scanned("taskpkg");
+    let mut req = request("refactor PaymentService");
+    req.budget_tokens = 4000;
+
+    let pkg = engine.context(&req).expect("package");
+    assert!(!pkg.items.is_empty(), "{pkg:?}");
+    // §12: every item anchored, and the scores actually order the list.
+    for item in &pkg.items {
+        assert!(!item.anchor.file.is_empty(), "{item:?}");
+    }
+    for pair in pkg.items.windows(2) {
+        assert!(
+            pair[0].score / pair[0].tokens.max(1) as f64
+                >= pair[1].score / pair[1].tokens.max(1) as f64 - 1e-9,
+            "density order broken: {:?}",
+            pkg.items
+                .iter()
+                .map(|i| (i.score, i.tokens))
+                .collect::<Vec<_>>()
+        );
+    }
+    // §8: considered == every ledger row, and no exclusion is unexplained.
+    assert_eq!(pkg.items_considered, pkg.ledger.rows.len());
+    for row in &pkg.ledger.rows {
+        assert!(!row.reason.is_empty(), "{row:?}");
+    }
+    assert!(pkg.tokens_estimated <= pkg.budget_tokens);
+    assert_eq!(
+        pkg.intent.as_ref().map(|i| i.intent),
+        Some(Intent::Refactor)
+    );
+}
+
+#[test]
+fn a_task_package_carries_every_score_term_it_used() {
+    // §8 must be able to answer "why is this here". A total with no decomposition cannot.
+    let (_root, engine) = scanned("terms");
+    let pkg = engine
+        .context(&request("refactor PaymentService"))
+        .expect("package");
+    let seed = pkg
+        .items
+        .iter()
+        .find(|i| i.why.starts_with("seed"))
+        .expect("a seed item");
+    assert!(seed.terms.seed > 0.0, "{seed:?}");
+    assert!(seed.terms.cost < 0.0, "cost is a penalty: {seed:?}");
+}

@@ -6,7 +6,7 @@
 use super::*;
 use crate::context::{
     self, estimate_tokens, expand, seeds, Candidate, ContextPackage, InclusionLedger, Intent,
-    ItemKind, PackageBasis, ProjectSummary, Purpose, Seed, SeedResult, TaskRequest,
+    ItemKind, PackageBasis, ProjectSummary, Purpose, Seed, SeedResult, SignalIndex, TaskRequest,
 };
 
 impl Engine {
@@ -105,12 +105,14 @@ impl Engine {
     /// nobody asked for, so a project with no baseline gets `NoBaseline` and the advice to
     /// scan, not an implicit scan.
     pub fn context(&self, req: &TaskRequest) -> Result<ContextPackage> {
-        if req.purpose != Purpose::Session {
-            return Err(EngineError::Unsupported(format!(
-                "context for purpose '{}' is the Phase 2 context engine; only --session is built",
-                req.purpose.as_str()
-            )));
+        match req.purpose {
+            Purpose::Session => self.session_package(req),
+            _ => self.task_package(req),
         }
+    }
+
+    /// The Phase 1 fixed query: profile, open findings, durable facts, in store order.
+    fn session_package(&self, req: &TaskRequest) -> Result<ContextPackage> {
         let status = self.status()?;
         let Some(baseline) = status.baseline.clone() else {
             return Err(EngineError::NoBaseline);
@@ -156,6 +158,9 @@ impl Engine {
                 label: f.uid.clone(),
                 anchor,
                 why: format!("open finding, {}", f.status.to_lowercase()),
+                score: 0.0,
+                terms: Default::default(),
+                component: String::new(),
                 text: format!(
                     "{}  {}  {}  {}",
                     f.uid,
@@ -187,6 +192,9 @@ impl Engine {
                     row.subject.as_deref().unwrap_or("the project")
                 ),
                 text: format!("{}  {}  [{}]", row.key, row.claim, row.source),
+                score: 0.0,
+                terms: Default::default(),
+                component: String::new(),
             });
         }
 
@@ -200,8 +208,13 @@ impl Engine {
                 .as_deref()
                 .map(estimate_tokens)
                 .unwrap_or(0);
-        let (items, tokens_estimated) =
-            context::fill(candidates, req.budget_tokens, spent, &mut ledger);
+        let (items, tokens_estimated) = context::fill(
+            candidates,
+            req.budget_tokens,
+            spent,
+            context::Selection::Ordered,
+            &mut ledger,
+        );
 
         Ok(ContextPackage {
             purpose: req.purpose,
@@ -218,6 +231,8 @@ impl Engine {
             budget_tokens: req.budget_tokens,
             tokens_estimated,
             items_considered: considered,
+            intent: None,
+            notes: Vec::new(),
         })
     }
     /// Stage 2 of the context pipeline: what in the code this request is about.
@@ -230,6 +245,197 @@ impl Engine {
     /// Stage 3 of the context pipeline: what else the seeds reach.
     pub fn expand(&self, seeds: &[Seed], intent: Intent) -> Result<ImpactReport> {
         Ok(expand::run(&self.store, self.project_id, seeds, intent)?)
+    }
+    /// Stages 1–6, assembled. The seven-stage pipeline of `05-context-engine.md`, minus the
+    /// caching that 2.9 adds around it.
+    ///
+    /// No stage calls a model, and none can: the whole path is a table lookup, a handful of
+    /// indexed queries, one graph traversal and a sort.
+    fn task_package(&self, req: &TaskRequest) -> Result<ContextPackage> {
+        let status = self.status()?;
+        let Some(baseline) = status.baseline.clone() else {
+            return Err(EngineError::NoBaseline);
+        };
+        let loaded = crate::policy::load(&self.root.join(crate::NEXUS_DIR).join("policy.toml"));
+        let w = loaded.weights;
+
+        // 1 — intent.
+        let intent = crate::context::classify(&req.text);
+        // 2 — seeds.
+        let seeded = seeds::resolve(&self.store, self.project_id, req, intent.intent)?;
+        // 3 — expand.
+        let reached = expand::run(&self.store, self.project_id, &seeded.seeds, intent.intent)?;
+        // 4 — signals, once.
+        let findings = self.findings(None, None, None)?;
+        let index = SignalIndex::build(
+            &self.store,
+            self.project_id,
+            &findings,
+            self.churn(),
+            profile_anchors(&status),
+        )?;
+
+        let mut notes = seeded.notes.clone();
+        notes.extend(index.notes().iter().cloned());
+        if let Some(n) = loaded.note {
+            notes.push(n);
+        }
+        if !intent.confident {
+            notes.push(
+                "intent was not determined from the text, so balanced weights were used".into(),
+            );
+        }
+
+        // 5 — rank. Seeds score 1.0 on proximity by definition: they are what was asked
+        // about. Everything else inherits the graph score that reached it, which is the
+        // product of edge weights and confidences along a chain the item still carries.
+        let budget = req.budget_tokens.max(1) as f64;
+        let mut candidates = Vec::new();
+        for seed in &seeded.seeds {
+            let text = format!("{}  {}", seed.symbol.fqn, seed.source.as_str());
+            let signals = index.for_candidate(
+                &seed.symbol.fqn,
+                &seed.symbol.file_path,
+                crate::impact::is_test(&seed.symbol.file_path, &seed.symbol.fqn),
+            );
+            let (score, terms) = crate::context::rank::score(
+                &crate::context::rank::Inputs {
+                    seed_proximity: 1.0,
+                    graph_score: 0.0,
+                    signals: &signals,
+                    token_cost_norm: estimate_tokens(&text) as f64 / budget,
+                },
+                &w,
+            );
+            candidates.push(Candidate {
+                kind: ItemKind::Symbol,
+                label: seed.symbol.fqn.clone(),
+                anchor: Some(CodeRef {
+                    file: seed.symbol.file_path.clone(),
+                    line: seed.symbol.start_line.max(0) as u32,
+                    note: String::new(),
+                }),
+                why: format!("seed: {}", seed.why),
+                text,
+                score,
+                terms,
+                component: seed.symbol.file_path.clone(),
+            });
+        }
+        for item in &reached.items {
+            let text = format!("{}  depth {}", item.fqn, item.depth);
+            let signals = index.for_candidate(
+                &item.fqn,
+                &item.file,
+                crate::impact::is_test(&item.file, &item.fqn),
+            );
+            let (score, terms) = crate::context::rank::score(
+                &crate::context::rank::Inputs {
+                    seed_proximity: 0.0,
+                    graph_score: item.score,
+                    signals: &signals,
+                    token_cost_norm: estimate_tokens(&text) as f64 / budget,
+                },
+                &w,
+            );
+            let via = item
+                .path
+                .first()
+                .map(|h| format!("{} {}", h.edge, h.from))
+                .unwrap_or_else(|| "graph".into());
+            candidates.push(Candidate {
+                kind: ItemKind::Symbol,
+                label: item.fqn.clone(),
+                anchor: Some(CodeRef {
+                    file: item.file.clone(),
+                    line: item.line.max(0) as u32,
+                    note: String::new(),
+                }),
+                why: format!("{}: via {via}", reached.direction),
+                text,
+                score,
+                terms,
+                component: item.file.clone(),
+            });
+        }
+        // Facts about anything the request reached. Knowledge competes with code on the same
+        // scale, which is the point of one formula: a fact that answers the question outranks
+        // a symbol that merely mentions it.
+        for row in self.store.facts(self.project_id, None)? {
+            let Some(subject) = row.subject.clone() else {
+                continue;
+            };
+            let anchor = row
+                .evidence_json
+                .as_deref()
+                .and_then(|j| serde_json::from_str::<Vec<CodeRef>>(j).ok())
+                .and_then(|refs| refs.into_iter().next());
+            let text = format!("{}  {}  [{}]", row.key, row.claim, row.source);
+            let signals =
+                index.for_candidate(&subject, anchor.as_ref().map_or("", |a| &a.file), false);
+            if signals.fact == 0.0 {
+                continue;
+            }
+            let (score, terms) = crate::context::rank::score(
+                &crate::context::rank::Inputs {
+                    seed_proximity: 0.0,
+                    graph_score: 0.0,
+                    signals: &signals,
+                    token_cost_norm: estimate_tokens(&text) as f64 / budget,
+                },
+                &w,
+            );
+            candidates.push(Candidate {
+                kind: ItemKind::Fact,
+                label: row.key.clone(),
+                anchor,
+                why: format!("fact about {subject}"),
+                text,
+                score,
+                terms,
+                component: String::new(),
+            });
+        }
+
+        // 6 — budget.
+        let mut ledger = InclusionLedger::default();
+        let considered = candidates.len();
+        let (items, tokens_estimated) = context::fill(
+            candidates,
+            req.budget_tokens,
+            0,
+            context::Selection::Ranked {
+                min_score_x1000: (w.min_score * 1000.0) as i64,
+                max_per_component: w.max_per_component,
+            },
+            &mut ledger,
+        );
+
+        // 7 — package.
+        Ok(ContextPackage {
+            purpose: req.purpose,
+            project: ProjectSummary {
+                name: status.project.clone(),
+                profile: status.profile.clone(),
+                files: status.files,
+                symbols: status.symbols,
+                scope_warning: None,
+            },
+            items_included: items.len(),
+            items,
+            ledger,
+            basis: PackageBasis {
+                scan_uid: baseline.scan_uid,
+                commit: status.current.commit.clone(),
+                dirty: status.current.dirty,
+                selection: "ranked: intent, seeds, expand, signals, weighted sum, density budget",
+            },
+            budget_tokens: req.budget_tokens,
+            tokens_estimated,
+            items_considered: considered,
+            intent: Some(intent),
+            notes,
+        })
     }
     /// How many commits this project's ledger holds.
     pub fn commit_count(&self) -> Result<i64> {
@@ -717,4 +923,26 @@ pub(super) fn to_summary(r: nexus_store::FindingRow) -> FindingSummary {
         introduced_commit: r.introduced_commit,
         fixed_commit: r.fixed_commit,
     }
+}
+
+/// Files the project profile anchors on: the build file CI would have invoked, the compose
+/// file that proved the datastore. A change near one of these is architectural by definition,
+/// which is what §6's `w_arch` term is for.
+fn profile_anchors(status: &StatusReport) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in [
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "Cargo.toml",
+        "package.json",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+    ] {
+        out.push(p.to_string());
+    }
+    if status.profile.is_none() {
+        out.clear();
+    }
+    out
 }

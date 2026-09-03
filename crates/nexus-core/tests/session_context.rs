@@ -219,17 +219,20 @@ fn without_a_baseline_there_is_no_package() {
 }
 
 #[test]
-fn a_purpose_phase_one_does_not_serve_is_refused_rather_than_faked() {
+fn a_task_request_now_gets_a_ranked_package_and_says_so() {
+    // Phase 1 refused every purpose but Session. Stages 1-6 (roadmap 2.1-2.7) serve Task, and
+    // the basis distinguishes the two selections so a caller is never guessing which it got.
     let engine = scanned("purpose");
-    let mut req = TaskRequest::session(SESSION_BUDGET_TOKENS);
+    let mut req = TaskRequest::session(4000);
     req.purpose = Purpose::Task;
-    match engine.context(&req) {
-        Err(EngineError::Unsupported(m)) => {
-            assert!(
-                m.contains("task"),
-                "the error names what was asked for: {m}"
-            )
-        }
-        other => panic!("a session package answering a task request is a lie: {other:?}"),
-    }
+    req.text = "fix PaymentService".into();
+
+    let pkg = engine.context(&req).expect("a task package");
+    assert_eq!(pkg.purpose, Purpose::Task);
+    assert!(
+        pkg.basis.selection.contains("ranked"),
+        "the basis names the selection: {}",
+        pkg.basis.selection
+    );
+    assert!(pkg.intent.is_some(), "a task package classified its text");
 }
