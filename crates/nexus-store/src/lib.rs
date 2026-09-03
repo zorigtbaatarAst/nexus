@@ -1262,15 +1262,36 @@ impl Store {
 
     /// Four counts rather than a tuple, because `(total, resolved, external, sibling)` at
     /// a call site is four chances to transpose two of them.
+    /// Counts **call sites**, not edge rows.
+    ///
+    /// The ambiguous tiers write one row per candidate for a single call site, so counting
+    /// rows let the metric rise as the resolver grew *less* certain — four candidates for
+    /// `x.save()` scored four times what one confident binding scored. Grouping by
+    /// `(src_symbol_id, site_line, dst_fqn_hint)` collapses a fan-out back to the one
+    /// question it answers, and `MAX(...)` over the group is the group's OR: a site counts
+    /// as resolved if any candidate bound a destination.
+    ///
+    /// `external-graph` rows carry NULL in both `site_line` and `dst_fqn_hint`, so they
+    /// group per source symbol rather than per site. They are excluded from `resolved`
+    /// regardless and reported on their own line, so the grouping does not distort a rate.
     pub fn edge_counts(&self, project_id: ProjectId) -> Result<EdgeCounts> {
         let mut stmt = self.conn.prepare(
             "SELECT
                COUNT(*),
-               SUM(dst_symbol_id IS NOT NULL AND resolution <> 'external-graph'),
-               SUM(resolution = 'external'),
-               SUM(resolution = 'sibling'),
-               SUM(resolution = 'external-graph')
-             FROM symbol_edges WHERE project_id = ?1",
+               SUM(resolved),
+               SUM(is_external),
+               SUM(is_sibling),
+               SUM(is_external_graph)
+             FROM (
+               SELECT
+                 MAX(dst_symbol_id IS NOT NULL AND resolution <> 'external-graph') AS resolved,
+                 MAX(resolution = 'external')       AS is_external,
+                 MAX(resolution = 'sibling')        AS is_sibling,
+                 MAX(resolution = 'external-graph') AS is_external_graph
+               FROM symbol_edges
+               WHERE project_id = ?1
+               GROUP BY src_symbol_id, site_line, dst_fqn_hint
+             )",
         )?;
         let row = stmt.query_row(params![project_id], |r| {
             Ok(EdgeCounts {
@@ -1284,10 +1305,44 @@ impl Store {
         Ok(row)
     }
 
+    /// The same call-site unit as [`Store::edge_counts`], so the breakdown sums to the
+    /// total. A test in `nexus-core` asserts the two agree; they cannot if one counts rows
+    /// and the other counts sites.
+    ///
+    /// A site is attributed to the strongest tier present on it. Within a fan-out every row
+    /// carries the tier that produced it, so the group is uniform in the ordinary case; the
+    /// ranking exists for the GraphQL coordinate arm, which can write `contract` for a
+    /// single match and `heuristic` for a fan-out, and attributing that site to `contract`
+    /// is right because that is the arm that resolved it.
     pub fn edges_by_resolution(&self, project_id: ProjectId) -> Result<Vec<(String, i64)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT resolution, COUNT(*) FROM symbol_edges WHERE project_id = ?1
-             GROUP BY resolution ORDER BY 2 DESC",
+            "WITH sites AS (
+               SELECT MIN(CASE resolution
+                   WHEN 'exact'          THEN 1
+                   WHEN 'contract'       THEN 2
+                   WHEN 'framework'      THEN 3
+                   WHEN 'heuristic'      THEN 4
+                   WHEN 'sibling'        THEN 5
+                   WHEN 'external'       THEN 6
+                   WHEN 'external-graph' THEN 7
+                   ELSE 8
+                 END) AS rank
+               FROM symbol_edges
+               WHERE project_id = ?1
+               GROUP BY src_symbol_id, site_line, dst_fqn_hint
+             )
+             SELECT CASE rank
+                 WHEN 1 THEN 'exact'
+                 WHEN 2 THEN 'contract'
+                 WHEN 3 THEN 'framework'
+                 WHEN 4 THEN 'heuristic'
+                 WHEN 5 THEN 'sibling'
+                 WHEN 6 THEN 'external'
+                 WHEN 7 THEN 'external-graph'
+                 ELSE 'unresolved'
+               END,
+               COUNT(*)
+             FROM sites GROUP BY rank ORDER BY 2 DESC",
         )?;
         let rows = stmt
             .query_map(params![project_id], |r| Ok((r.get(0)?, r.get(1)?)))?
@@ -3661,5 +3716,173 @@ mod tests {
             s.facts_for_seeds(pid, &seeds).is_ok(),
             "256 seeds must not exceed SQLITE_MAX_VARIABLE_NUMBER"
         );
+    }
+
+    /// One call site, three candidate destinations — the shape the bare-member tier
+    /// produces for `x.save()` when three symbols answer to `save`.
+    ///
+    /// Counting rows made the metric rise as the resolver grew *less* certain, which is
+    /// exactly backwards. One site asks one question and has one right answer.
+    #[test]
+    fn a_fanned_out_call_site_counts_once_not_three_times() {
+        let mut s = Store::open_in_memory().expect("open");
+        let p = s.ensure_project("/tmp/x", "x", "git").expect("project");
+        let (scan, _) = s
+            .begin_scan(p, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
+
+        let tx = s.transaction().expect("tx");
+        let file = Store::upsert_file(
+            &tx,
+            p,
+            scan,
+            "a.rs",
+            Some("rust"),
+            "h1",
+            10,
+            Some(1),
+            None,
+            ParseStatus::Ok,
+            None,
+        )
+        .expect("upsert");
+
+        let sym = |fqn: &str| NewSymbol {
+            kind: SymbolKind::Method,
+            name: fqn.rsplit('#').next().unwrap_or(fqn).to_string(),
+            fqn: fqn.to_string(),
+            parent_fqn: None,
+            signature: None,
+            visibility: None,
+            start_line: 1,
+            end_line: 2,
+            sig_hash: "sig".into(),
+            body_hash: "body".into(),
+            annotations: Vec::new(),
+        };
+        Store::replace_symbols(
+            &tx,
+            p,
+            file,
+            scan,
+            &[
+                sym("app::Caller#run"),
+                sym("app::A#save"),
+                sym("app::B#save"),
+                sym("app::C#save"),
+            ],
+        )
+        .expect("symbols");
+
+        let id = |fqn: &str| -> i64 {
+            tx.query_row(
+                "SELECT id FROM live_symbols WHERE project_id = ?1 AND fqn = ?2",
+                params![p, fqn],
+                |r| r.get(0),
+            )
+            .expect("symbol id")
+        };
+        let src = id("app::Caller#run");
+        for dst in ["app::A#save", "app::B#save", "app::C#save"] {
+            tx.execute(
+                "INSERT INTO symbol_edges (project_id, src_symbol_id, dst_symbol_id, dst_fqn_hint,
+                                           edge_type, resolution, confidence, site_line,
+                                           last_seen_scan_id)
+                 VALUES (?1, ?2, ?3, 'save', 'calls', 'heuristic', 0.2, 42, ?4)",
+                params![p, src, id(dst), scan],
+            )
+            .expect("insert edge");
+        }
+        tx.commit().expect("commit");
+
+        let counts = s.edge_counts(p).expect("counts");
+        assert_eq!(
+            counts.total, 1,
+            "three rows for one call site are still one call site"
+        );
+        assert_eq!(counts.resolved, 1, "and one resolved call site, not three");
+
+        let by = s.edges_by_resolution(p).expect("by resolution");
+        let heuristic = by
+            .iter()
+            .find(|(r, _)| r == "heuristic")
+            .map(|(_, n)| *n)
+            .unwrap_or(0);
+        assert_eq!(
+            heuristic, 1,
+            "the breakdown must use the same unit as the total, or they cannot be compared"
+        );
+    }
+
+    /// Two genuinely distinct call sites in one caller are two sites, so the grouping key
+    /// must include `site_line`. Without it, a caller that calls the same method twice
+    /// would collapse to one and the metric would under-count instead of over-counting.
+    #[test]
+    fn two_call_sites_in_one_caller_stay_two() {
+        let mut s = Store::open_in_memory().expect("open");
+        let p = s.ensure_project("/tmp/x", "x", "git").expect("project");
+        let (scan, _) = s
+            .begin_scan(p, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
+
+        let tx = s.transaction().expect("tx");
+        let file = Store::upsert_file(
+            &tx,
+            p,
+            scan,
+            "a.rs",
+            Some("rust"),
+            "h1",
+            10,
+            Some(1),
+            None,
+            ParseStatus::Ok,
+            None,
+        )
+        .expect("upsert");
+        let sym = |fqn: &str| NewSymbol {
+            kind: SymbolKind::Method,
+            name: fqn.rsplit('#').next().unwrap_or(fqn).to_string(),
+            fqn: fqn.to_string(),
+            parent_fqn: None,
+            signature: None,
+            visibility: None,
+            start_line: 1,
+            end_line: 2,
+            sig_hash: "sig".into(),
+            body_hash: "body".into(),
+            annotations: Vec::new(),
+        };
+        Store::replace_symbols(
+            &tx,
+            p,
+            file,
+            scan,
+            &[sym("app::Caller#run"), sym("app::A#save")],
+        )
+        .expect("symbols");
+        let id = |fqn: &str| -> i64 {
+            tx.query_row(
+                "SELECT id FROM live_symbols WHERE project_id = ?1 AND fqn = ?2",
+                params![p, fqn],
+                |r| r.get(0),
+            )
+            .expect("symbol id")
+        };
+        for line in [42, 91] {
+            tx.execute(
+                "INSERT INTO symbol_edges (project_id, src_symbol_id, dst_symbol_id, dst_fqn_hint,
+                                           edge_type, resolution, confidence, site_line,
+                                           last_seen_scan_id)
+                 VALUES (?1, ?2, ?3, 'save', 'calls', 'exact', 1.0, ?4, ?5)",
+                params![p, id("app::Caller#run"), id("app::A#save"), line, scan],
+            )
+            .expect("insert edge");
+        }
+        tx.commit().expect("commit");
+
+        let counts = s.edge_counts(p).expect("counts");
+        assert_eq!(counts.total, 2, "two lines are two questions");
+        assert_eq!(counts.resolved, 2);
     }
 }
