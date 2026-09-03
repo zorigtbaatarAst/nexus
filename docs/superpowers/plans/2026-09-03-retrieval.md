@@ -1515,6 +1515,60 @@ PY
 
 Expected: all three rows within 20% of each other. Record the numbers — they go in the commit message. If 200,000 is materially slower than 0, `facts_for_seeds` is not using the index; run `EXPLAIN QUERY PLAN` on the generated SQL before going further.
 
+- [ ] **Step 1b: Make the measurement a gate, not an eyeball**
+
+The Task 2 review established that no automated test fails if retrieval goes back to loading
+every fact: `subject_match` floors at 0.3 and the pre-existing guard already dropped unrelated
+facts before they became candidates, so the candidate set is identical either way. One of that
+task's three tests gates the change; the other two gate a property that was already true. The
+performance goal — the entire point of this plan — is currently protected by code inspection
+alone.
+
+A timing assertion in CI is flaky, so this is `#[ignore]`d: it is run deliberately, and it is
+runnable, which "read the numbers and squint" is not.
+
+Append to `crates/nexus-core/tests/memory_scale.rs`:
+
+```rust
+/// Run with: `cargo test -p nexus-core --test memory_scale -- --ignored --nocapture`
+///
+/// Ignored because a timing assertion in CI is flaky. It exists anyway because nothing else
+/// in the suite fails if retrieval goes back to loading every live fact: the candidate set is
+/// identical either way, so only the clock can tell the difference. Ratio, not absolute time,
+/// so it means the same thing on a slow machine.
+#[test]
+#[ignore]
+fn retrieval_does_not_slow_down_as_memory_grows() {
+    use std::time::Instant;
+    let (_root, mut engine) = scanned("scaling");
+    let ask = |e: &Engine| {
+        let t = Instant::now();
+        for _ in 0..20 {
+            e.context(&task("refactor mn.pay.PaymentService#pay")).expect("context");
+        }
+        t.elapsed()
+    };
+
+    let small = ask(&engine);
+    for i in 0..20_000 {
+        record(&mut engine, &format!("arch.bulk-{i:06}"), &format!("unrelated.Mod{i}"));
+    }
+    let large = ask(&engine);
+
+    let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-9);
+    assert!(
+        ratio < 3.0,
+        "retrieval scaled with total memory rather than with the request: \
+         {small:?} at 0 facts, {large:?} at 20,000 — {ratio:.1}x. \
+         That is the O(all facts) path returning."
+    );
+}
+```
+
+Run it once to confirm it passes, and once with `facts_for_seeds` temporarily reverted to
+`facts(self.project_id, None)` to confirm it fails. Record both numbers in the report. If it
+does not fail on the revert, the test is worthless — say so rather than keeping it.
+
 - [ ] **Step 2: Add the trap to `AGENTS.md`**
 
 Under `## Traps`, above the cache-key entry:
