@@ -2407,12 +2407,19 @@ impl Store {
     /// `idx_facts_subject`, which has existed since `0001_init.sql` and was never used
     /// because the hot path passed `None`.
     ///
-    /// Two arms, mirroring `memory::subject_match` exactly:
+    /// Two arms:
     ///   * equality against every seed and every ancestor of it — a fact about the module a
-    ///     seed lives in is a fact about the seed;
+    ///     seed lives in is a fact about the seed. This one mirrors `memory::subject_match`
+    ///     exactly, via [`subject_prefixes`].
     ///   * a half-open range per seed — a fact about something *below* the seed. Written as a
     ///     range rather than `LIKE seed || '%'` because a range on an indexed column is an
     ///     index seek and `LIKE` with a bound parameter is not guaranteed to be.
+    ///
+    /// The range arm is deliberately *wider* than `subject_match`, not anchored the same way:
+    /// it is a raw byte range, so a seed of `a::b` also pulls in a fact subject `a::bc`, which
+    /// is not really a descendant. Do not "fix" that to match — over-fetching here is safe,
+    /// because the Rust-side filter below still runs and throws the extra away; under-fetching
+    /// is not, because a fact the range arm failed to return never reaches that filter at all.
     ///
     /// The Rust-side filter still runs. This narrows what it has to look at; it does not
     /// replace the one definition of a match.
@@ -2981,28 +2988,32 @@ fn simple_key(fqn: &str) -> String {
 }
 
 /// A subject and every ancestor of it: `a::b::C#m` yields `a::b::C#m`, `a`, `a::b`, `a::b::C`.
+/// A signature is an ancestor cut too: `Type#m(String)` yields `Type#m` among its ancestors,
+/// since `(` is one of [`SUBJECT_ANCHORS`] — a fact recorded against the bare method name, the
+/// way a person writes it, is still an ancestor of the signature-bearing symbol the index
+/// stores.
 ///
-/// `memory::subject_match` scores 0.6 when either string is a prefix of the other. This is the
-/// half of that rule SQL can answer with an equality set; the other half is a range scan.
-/// Separators are ASCII, so every cut lands on a char boundary.
+/// `memory::subject_match` scores 0.6 when either string is a prefix of the other *and* the
+/// next character is one of [`SUBJECT_ANCHORS`]. This is the half of that rule SQL can answer
+/// with an equality set; the other half is a range scan (see `facts_for_seeds`, which is
+/// deliberately *not* anchored the same way — a wider descendant match there is safe, because
+/// the Rust-side filter discards what shouldn't have matched). Separators are ASCII, so every
+/// cut lands on a char boundary.
 pub(crate) fn subject_prefixes(fqn: &str) -> Vec<String> {
     let mut out = vec![fqn.to_string()];
     let bytes = fqn.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        let sep = match bytes[i] {
-            b'#' | b'.' => Some(1),
-            b':' if bytes.get(i + 1) == Some(&b':') => Some(2),
-            _ => None,
-        };
-        match sep {
-            Some(len) => {
-                if i > 0 {
-                    out.push(fqn[..i].to_string());
-                }
-                i += len;
+        if SUBJECT_ANCHORS.contains(&bytes[i]) {
+            if i > 0 {
+                out.push(fqn[..i].to_string());
             }
-            None => i += 1,
+            // Consume the whole run so a two-byte separator like `::` cuts once, not twice.
+            while i < bytes.len() && SUBJECT_ANCHORS.contains(&bytes[i]) {
+                i += 1;
+            }
+        } else {
+            i += 1;
         }
     }
     out
@@ -3536,6 +3547,28 @@ mod tests {
                 "mn".to_string(),
                 "mn.pay".to_string(),
                 "mn.pay.PaymentService".to_string(),
+            ]
+        );
+        // A Java signature: '(' is a boundary too, so the bare method name — the way a fact
+        // is conventionally recorded — is among its own ancestors.
+        assert_eq!(
+            subject_prefixes("mn.pay.PaymentService#pay(String)"),
+            vec![
+                "mn.pay.PaymentService#pay(String)".to_string(),
+                "mn".to_string(),
+                "mn.pay".to_string(),
+                "mn.pay.PaymentService".to_string(),
+                "mn.pay.PaymentService#pay".to_string(),
+            ]
+        );
+        // A slash-separated TS/JS module path.
+        assert_eq!(
+            subject_prefixes("lib/router/index#Router"),
+            vec![
+                "lib/router/index#Router".to_string(),
+                "lib".to_string(),
+                "lib/router".to_string(),
+                "lib/router/index".to_string(),
             ]
         );
         assert_eq!(subject_prefixes("bare"), vec!["bare".to_string()]);

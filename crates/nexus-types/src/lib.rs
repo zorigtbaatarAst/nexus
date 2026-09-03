@@ -15,6 +15,21 @@ pub type ScanId = i64;
 pub type FileId = i64;
 pub type SymbolId = i64;
 
+/// The five characters that end an identifier and start the next segment, across every
+/// language this project indexes: `:` (Rust `::`, `graphql:`), `#` (member), `.` (Java
+/// package, TS `Class.method`), `/` (TS/JS module path), `(` (a signature). Measured across
+/// two real indexes rather than guessed — `-` deliberately did not make this set: it sits
+/// *inside* identifiers (`some-file`, `nexus-cli`), and treating it as a boundary would let
+/// `some` match `some-file`.
+///
+/// Defined once, here, because it already drifted once: `nexus_core::memory::subject_match`
+/// (ranking) and `nexus_store::subject_prefixes` (the SQL that narrows candidates before
+/// ranking) both decide what counts as a module boundary, and a fix applied to one and not the
+/// other is exactly the class of bug this whole task exists to close. Neither crate may depend
+/// on the other, so a shared constant needs a crate neither of them owns — which is what this
+/// one is for (see the module doc above).
+pub const SUBJECT_ANCHORS: &[u8; 5] = b":.#/(";
+
 // ─────────────────────────── language ───────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

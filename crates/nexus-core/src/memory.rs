@@ -9,6 +9,7 @@
 //! that is specific to a fact — its subject, its provenance, its lifecycle state and its age.
 
 use nexus_store::FactRow;
+use nexus_types::SUBJECT_ANCHORS;
 
 /// The `fact_key` namespaces of §2. Flat, dotted, greppable, and closed.
 ///
@@ -59,7 +60,35 @@ pub fn check_key(key: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// True when `short` is a real ancestor of `long`: a strict prefix whose next character in
+/// `long` is one of [`SUBJECT_ANCHORS`], not mid-identifier. `mn.pay` is a module of
+/// `mn.pay.A#x`; `User` is not a module of `UserService` — it is a shorter identifier that
+/// happens to share a run of letters, and treating that as a relationship is a false positive,
+/// not a discount.
+///
+/// Testing one character against the set handles `::` for free: for prefix `a` of `a::b`, the
+/// character right after `a` is `:`, in the set, so no `::`-vs-`:` special case is needed —
+/// `is_anchored_prefix` never looks past that one byte to see whether a second `:` follows.
+fn is_anchored_prefix(short: &str, long: &str) -> bool {
+    long.len() > short.len()
+        && long.starts_with(short)
+        && SUBJECT_ANCHORS.contains(&long.as_bytes()[short.len()])
+}
+
 /// §4: exact FQN 1.0 · module prefix 0.6 · project 0.3.
+///
+/// The module tier is anchored at a separator in both directions — matching
+/// `nexus_store::subject_prefixes`, which SQL already answers this way (`facts_for_seeds`
+/// asks for ancestors by walking separators, never by byte-prefix). A raw `str::starts_with`
+/// here would score `User` at 0.6 against seed `UserService`, a false positive this function
+/// was silently producing before the two definitions were compared.
+///
+/// `(` is in the anchor set for the same reason: a fact is conventionally recorded against
+/// `PaymentService#pay`, the way a person refers to a method, while the index holds the
+/// signature-bearing `PaymentService#pay(String)`. Without `(` as a boundary, that pair scored
+/// 0.0 under the first cut of this fix — a human fact about the exact method under discussion
+/// vanishing from its own task — because `(` was missing from the anchor set, not because the
+/// anchoring idea was wrong.
 ///
 /// With no seeds the answer is the project term: the caller asked for everything, so nothing
 /// is more relevant than anything else, and 0.3 keeps the other factors deciding the order.
@@ -75,7 +104,7 @@ pub fn subject_match(subject: Option<&str>, seeds: &[String]) -> f64 {
         .map(|seed| {
             if seed == subject {
                 1.0
-            } else if seed.starts_with(subject) || subject.starts_with(seed.as_str()) {
+            } else if is_anchored_prefix(subject, seed) || is_anchored_prefix(seed, subject) {
                 0.6
             } else {
                 0.0
@@ -322,6 +351,46 @@ mod tests {
         let r = |f: &FactRow| relevance(f, &seeds, 1);
         assert!(r(&candidate) < r(&validated), "candidate < validated");
         assert!(r(&validated) < r(&durable), "validated < durable");
+    }
+
+    #[test]
+    fn the_module_tier_requires_a_separator_not_just_shared_letters() {
+        // Java package/member: mn.pay is a real ancestor of mn.pay.A#x — the boundary lands
+        // on '.'.
+        assert_eq!(
+            subject_match(Some("mn.pay"), &["mn.pay.A#x".to_string()]),
+            0.6
+        );
+        // The regression from fix round 1: a fact recorded the way a person writes it, without
+        // a signature, must still be a module-tier match against the signature-bearing symbol
+        // the index actually stores. '(' is the boundary.
+        assert_eq!(
+            subject_match(
+                Some("mn.pay.PaymentService#pay"),
+                &["mn.pay.PaymentService#pay(String)".to_string()]
+            ),
+            0.6
+        );
+        // TS/JS module path: lib/router is a real ancestor of lib/router/index#Router — '/'
+        // is a boundary too.
+        assert_eq!(
+            subject_match(Some("lib/router"), &["lib/router/index#Router".to_string()]),
+            0.6
+        );
+        // User is not a module of UserService — no separator, just a shorter identifier that
+        // shares a run of letters. This used to score 0.6 under raw `starts_with`; it must
+        // fall all the way to the project floor.
+        assert_eq!(
+            subject_match(Some("User"), &["UserService".to_string()]),
+            0.3
+        );
+        // '-' is deliberately not a boundary: some is not a module of some-file — hyphens sit
+        // inside identifiers (nexus-cli, some-file), and treating one as a separator would
+        // reopen the exact false positive the anchor set exists to close.
+        assert_eq!(
+            subject_match(Some("some"), &["some-file#x".to_string()]),
+            0.3
+        );
     }
 
     #[test]
