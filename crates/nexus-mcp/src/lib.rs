@@ -485,8 +485,11 @@ impl Nexus {
     }
 
     #[tool(
-        description = "Dependency graph size and how much of it resolved, broken down by tier. \
-                       Use it to judge how much to trust an impact result on this project."
+        description = "Dependency graph size and how many call sites resolved, broken down by \
+                       tier. This is coverage, not accuracy: it says how much of the graph \
+                       exists, never how much of it is correct — nothing verifies that a bound \
+                       destination is the right one. Use it to judge how much of the project an \
+                       impact result could have seen."
     )]
     async fn nexus_get_graph(
         &self,

@@ -190,6 +190,16 @@ impl Engine {
         )?;
         self.store.set_baseline(self.project_id, scan_id)?;
 
+        // One implementation of the denominator, not two.
+        //
+        // `ResolveStats` counts what *this scan* resolved; `edge_counts` counts what the
+        // index *holds*. They agreed by accident until the ambiguous tiers began writing one
+        // row per candidate, after which `scan` and `graph` reported different resolution
+        // rates for the same database — measured at 45 % and 48 % on one clone at 46ff.
+        // `resolve` is still what warns about siblings and unresolved hints, because that is
+        // a property of the run rather than of the index.
+        let counts = self.store.edge_counts(self.project_id)?;
+
         Ok(ScanReport {
             scan_uid,
             kind: "full",
@@ -201,10 +211,10 @@ impl Engine {
             symbols_indexed,
             facts_invalidated,
             facts_validated,
-            edges_resolved: resolve.resolved(),
-            edges_total: resolve.total,
-            edges_external: resolve.external,
-            edges_sibling: resolve.sibling,
+            edges_resolved: counts.resolved as usize,
+            edges_total: counts.total as usize,
+            edges_external: counts.external as usize,
+            edges_sibling: counts.sibling as usize,
             health,
             warnings,
             duration_ms: started.elapsed().as_millis(),
