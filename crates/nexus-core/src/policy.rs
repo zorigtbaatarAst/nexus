@@ -187,3 +187,65 @@ mod tests {
         );
     }
 }
+
+/// What the committed policy permits an execution to do.
+#[derive(Debug, Clone)]
+pub struct Execution {
+    /// `docker` | `host` | `none`. Default `none`, and the default is the point: a freshly
+    /// initialized project can index, diff and analyze but cannot run anything until someone
+    /// commits a change saying otherwise.
+    pub execute: String,
+    pub timeout_seconds: u64,
+}
+
+impl Default for Execution {
+    fn default() -> Self {
+        Execution {
+            execute: "none".into(),
+            timeout_seconds: 600,
+        }
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ExecutionFile {
+    #[serde(default)]
+    permissions: PermissionsSection,
+    #[serde(default)]
+    execute: ExecuteSection,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct PermissionsSection {
+    #[serde(default)]
+    execute: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ExecuteSection {
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
+}
+
+/// Read `[permissions] execute` and `[execute] timeout_seconds`.
+///
+/// An unreadable or malformed file yields the safe default rather than an error. Failing
+/// closed here means "we could not read the permission, so we did not run anything", which is
+/// the only safe way for a permission check to fail.
+pub fn load_execution(policy_toml: &std::path::Path) -> Execution {
+    let Ok(raw) = std::fs::read_to_string(policy_toml) else {
+        return Execution::default();
+    };
+    let Ok(f) = toml::from_str::<ExecutionFile>(&raw) else {
+        return Execution::default();
+    };
+    let execute = f.permissions.execute.unwrap_or_else(|| "none".into());
+    Execution {
+        // Anything unrecognised is treated as "none". A typo must not be a grant.
+        execute: match execute.as_str() {
+            "host" | "docker" => execute,
+            _ => "none".into(),
+        },
+        timeout_seconds: f.execute.timeout_seconds.unwrap_or(600).clamp(1, 3600),
+    }
+}

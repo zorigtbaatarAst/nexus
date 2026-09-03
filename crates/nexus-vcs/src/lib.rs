@@ -18,6 +18,8 @@ pub enum VcsError {
     Git(#[from] git2::Error),
     #[error("baseline commit {0} is unreachable (force-push, rebase, or shallow clone)")]
     Unreachable(String),
+    #[error("could not prepare a worktree for {sha}: {detail}")]
+    Worktree { sha: String, detail: String },
 }
 
 pub type Result<T> = std::result::Result<T, VcsError>;
@@ -141,6 +143,71 @@ impl Repo {
             .collect();
         out.sort();
         Ok(out)
+    }
+
+    /// Check `sha` out into `dir` as a detached worktree, reusing one that is already there.
+    ///
+    /// **`git stash` is never used, anywhere.** A verifier that mutates the developer's
+    /// working tree can lose uncommitted work, and one that loses uncommitted work is
+    /// uninstalled the first time it does — rightly. A worktree touches nothing the developer
+    /// is holding.
+    ///
+    /// Reused per sha, because a baseline is a property of a commit and computing it twice
+    /// costs a full build for no new information.
+    pub fn detached_worktree(&self, sha: &str, dir: &Path) -> Result<bool> {
+        if dir.join(".git").exists() {
+            return Ok(false); // already there, and a commit's contents do not change
+        }
+        if !self.is_reachable(sha) {
+            return Err(VcsError::Unreachable(sha.to_string()));
+        }
+        let workdir = self.inner.workdir().ok_or_else(|| VcsError::Worktree {
+            sha: sha.to_string(),
+            detail: "this is a bare repository, so it has no worktree".into(),
+        })?;
+
+        // Drop stale registrations first. A cache directory that was deleted — by a cleanup,
+        // by a person, by `rm -rf` on a scratch area — leaves git still holding the
+        // registration, and without this the baseline for that sha can never be built again.
+        let _ = std::process::Command::new("git")
+            .args(["worktree", "prune"])
+            .current_dir(workdir)
+            .output();
+
+        if let Some(parent) = dir.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let out = std::process::Command::new("git")
+            .args(["worktree", "add", "--detach", "--quiet"])
+            .arg(dir)
+            .arg(sha)
+            .current_dir(workdir)
+            .output()
+            .map_err(|e| VcsError::Worktree {
+                sha: sha.to_string(),
+                detail: e.to_string(),
+            })?;
+        if !out.status.success() {
+            return Err(VcsError::Worktree {
+                sha: sha.to_string(),
+                detail: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            });
+        }
+        Ok(true)
+    }
+
+    /// Remove a worktree created by [`Self::detached_worktree`]. Best effort: a leftover
+    /// directory under the cache is untidy, and failing a verification over it would be worse.
+    pub fn remove_worktree(&self, dir: &Path) {
+        let Some(workdir) = self.inner.workdir() else {
+            return;
+        };
+        let _ = std::process::Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(dir)
+            .current_dir(workdir)
+            .output();
+        let _ = std::fs::remove_dir_all(dir);
     }
     pub fn commit_subject(&self, sha: &str) -> Option<String> {
         self.inner

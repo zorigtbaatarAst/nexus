@@ -186,3 +186,41 @@ fn the_prompt_hook_command_also_fails_open() {
         String::from_utf8_lossy(&out.stdout)
     );
 }
+
+#[test]
+fn all_four_hooks_are_installed_and_every_one_fails_open() {
+    // ADR-024's table, entire. Fail-open is not a property of one of them: a single hook that
+    // hangs or errors is enough for someone to disable the lot, and then none of them run.
+    let root = fixture("allfour");
+    assert!(run(&root, &["init", "--hooks"]).status.success());
+    let v = settings(&root).expect("written");
+
+    for event in ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"] {
+        let entries = v["hooks"][event]
+            .as_array()
+            .unwrap_or_else(|| panic!("no {event} array in {v}"));
+        assert_eq!(entries.len(), 1, "{event}: {entries:?}");
+        let hook = &entries[0]["hooks"][0];
+        assert!(hook["timeout"].is_number(), "{event} has no timeout");
+
+        let cmd = hook["command"].as_str().expect("command").to_string();
+        let out = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&cmd)
+            .env("PATH", "/nonexistent")
+            .current_dir(&root)
+            .output()
+            .expect("sh");
+        assert!(out.status.success(), "{event} did not exit 0: {out:?}");
+        assert!(
+            out.stdout.is_empty(),
+            "{event} printed on failure: {:?}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+
+    // And installing again adds none of them a second time.
+    assert!(run(&root, &["init", "--hooks"]).status.success());
+    assert_eq!(settings(&root).expect("written"), v);
+    let _ = std::fs::remove_dir_all(&root);
+}

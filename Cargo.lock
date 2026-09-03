@@ -844,6 +844,7 @@ dependencies = [
  "nexus-store",
  "nexus-types",
  "nexus-vcs",
+ "nexus-verify",
  "rayon",
  "schemars",
  "serde",

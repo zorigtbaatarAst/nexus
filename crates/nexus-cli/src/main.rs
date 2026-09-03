@@ -139,6 +139,13 @@ enum Command {
         #[arg(trailing_var_arg = true)]
         question: Vec<String>,
     },
+    /// Run this project's own build, test and lint, and judge the result
+    Verify {
+        /// Reserved for scoping a future run to the changed set. Accepted now so the Stop
+        /// hook's command string does not change when scoping lands.
+        #[arg(long)]
+        changed: bool,
+    },
     /// Move findings and facts between machines, over a file rather than a server
     Share {
         #[command(subcommand)]
@@ -638,6 +645,21 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             });
         }
 
+        Command::Verify { changed: _ } => {
+            let engine = open(&root)?;
+            let report = engine.verify()?;
+            let failed = report.verdict == "failed";
+            emit!(&report, {
+                render::verify(&mut out, &st, &report)?;
+            });
+            // Finding a problem is the tool doing its job, so it is not a runtime error. An
+            // inconclusive verdict is not a failure either: nothing was concluded, and
+            // exiting non-zero for that is how a gate gets switched off.
+            if failed {
+                return Ok(exit::FINDINGS);
+            }
+        }
+
         Command::Share { cmd } => match cmd {
             ShareCommand::Export { out: dest } => {
                 let engine = open(&root)?;
@@ -952,6 +974,7 @@ fn envelope<T: Serialize>(cli: &Cli, value: T) -> Result<String, serde_json::Err
             Command::Context { .. } => "context",
             Command::Memory { .. } => "memory",
             Command::Share { .. } => "share",
+            Command::Verify { .. } => "verify",
             Command::Fact { .. } => "fact",
             Command::Ignore { .. } => "ignore",
             Command::Doctor => "doctor",

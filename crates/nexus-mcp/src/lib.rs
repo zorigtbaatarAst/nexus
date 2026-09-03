@@ -605,6 +605,30 @@ impl Nexus {
     }
 
     #[tool(
+        description = "Check a completion claim: run this project's own build, test and lint \
+                       and return a verdict, judged against the baseline revision so that a \
+                       suite which was already failing proves nothing about the change. \
+                       Returns permission_required rather than executing anything unless the \
+                       project's committed policy allows it."
+    )]
+    async fn nexus_verify(
+        &self,
+        Parameters(_): Parameters<NoArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self
+            .with_engine(|e| e.verify().map_err(|err| err.to_string()))
+            .await
+        {
+            Ok(r) => Ok(ok(budget::fit(
+                &serde_json::to_value(&r).unwrap_or(json!({})),
+                "checks",
+                "nothing to narrow",
+            ))),
+            Err(m) => Ok(failure("no_project", m, &["nexus_scan"])),
+        }
+    }
+
+    #[tool(
         description = "Remember something about this project that is not a symbol or a \
                        finding — an invariant, a convention, a decision. It survives every \
                        later session and every later model, which is the point: expensive \

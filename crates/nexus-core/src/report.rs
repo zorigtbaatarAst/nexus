@@ -105,6 +105,22 @@ pub struct RescanReport {
     pub duration_ms: u128,
 }
 
+/// What the gate concluded.
+#[derive(Debug, Clone, Serialize)]
+pub struct VerifyReport {
+    /// verified | failed | inconclusive | permission_required
+    pub verdict: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    pub checks: Vec<nexus_verify::Check>,
+    /// What happened to the baseline half, including why it was skipped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    pub duration_ms: u128,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusReport {
     pub project: String,

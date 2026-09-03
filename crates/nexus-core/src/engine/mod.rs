@@ -9,6 +9,7 @@ mod memory;
 mod query;
 mod rescan;
 mod scan;
+mod verify;
 
 use crate::capability::{Registry as Capabilities, Scope};
 use crate::detect::Detector;

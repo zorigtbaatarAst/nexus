@@ -1035,3 +1035,43 @@ pub fn context_explain(w: &mut impl Write, st: &Style, p: &ContextPackage) -> st
     }
     Ok(())
 }
+
+/// The verdict, and the checks behind it.
+pub fn verify(w: &mut impl Write, st: &Style, r: &VerifyReport) -> std::io::Result<()> {
+    let headline = match r.verdict.as_str() {
+        "verified" => st.good("VERIFIED"),
+        "failed" => st.bad("FAILED"),
+        "permission_required" => st.warn("PERMISSION REQUIRED"),
+        _ => st.warn("INCONCLUSIVE"),
+    };
+    writeln!(w, "{headline}")?;
+    if let Some(why) = &r.why {
+        writeln!(w, "  {why}")?;
+    }
+    if let Some(note) = &r.note {
+        writeln!(w, "  {}", st.dim(note))?;
+    }
+    if !r.checks.is_empty() {
+        writeln!(w)?;
+        for c in &r.checks {
+            let state = match (&c.blocked, c.exit_code) {
+                (Some(_), _) => st.warn("blocked"),
+                (None, Some(0)) => st.good("ok"),
+                (None, _) => st.bad("failed"),
+            };
+            writeln!(
+                w,
+                "  {:<8} {:<9} {}",
+                c.kind.as_str(),
+                state,
+                st.dim(&c.argv.join(" "))
+            )?;
+        }
+    }
+    if let Some(baseline) = &r.baseline {
+        writeln!(w)?;
+        writeln!(w, "  {}", st.dim(baseline))?;
+    }
+    writeln!(w, "  {}", st.dim(&format!("{} ms", r.duration_ms)))?;
+    Ok(())
+}

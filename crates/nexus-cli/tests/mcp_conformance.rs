@@ -180,6 +180,7 @@ fn the_server_handshakes_advertises_tools_and_answers() {
         "nexus_get_known",
         "nexus_get_context",
         "nexus_what_next",
+        "nexus_verify",
         "nexus_capabilities",
     ] {
         assert!(
@@ -440,6 +441,26 @@ fn the_context_tool_returns_a_ranked_package_over_mcp() {
     assert!(
         next["question"].is_string() || next["status"].is_string(),
         "{next}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn verification_refuses_to_execute_without_a_committed_permission() {
+    // security.md §2 and T5: an MCP client must not be able to trigger execution. The default
+    // is `execute = "none"`, and the tool returns a *result* saying so rather than running
+    // anything. A permission system that can be talked into running something is not one.
+    let root = fixture("verify");
+    let Some(mut s) = Server::start(&root) else {
+        return;
+    };
+    s.handshake();
+    s.call(2, "nexus_scan", serde_json::json!({}));
+    let v = s.call(3, "nexus_verify", serde_json::json!({}));
+    assert_eq!(v["verdict"], "permission_required", "{v}");
+    assert!(
+        v["checks"].as_array().is_some_and(|c| c.is_empty()),
+        "nothing ran: {v}"
     );
     let _ = std::fs::remove_dir_all(&root);
 }

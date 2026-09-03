@@ -32,8 +32,22 @@ pub const SESSION_START_COMMAND: &str = "nexus context --session --budget 800 2>
 pub const USER_PROMPT_COMMAND: &str =
     "nexus context --task \"$CLAUDE_USER_PROMPT\" --budget 4000 2>/dev/null || true";
 
-/// Seconds. A ceiling, not a target: the budgets are 400 ms and 150 ms.
+/// Keep the index warm after an edit (ADR-024). A no-op rescan is the fast path, so this is
+/// the cheapest hook in the set and the one that makes the others cheap.
+pub const POST_TOOL_USE_COMMAND: &str = "nexus rescan --quiet 2>/dev/null || true";
+
+/// The gate. "Done" gets checked before the turn ends.
+///
+/// It exits 0 whatever the verdict, because a hook's exit code is not the channel: the verdict
+/// is on stdout, where the agent reads it. Making a failing gate fail the hook would stop the
+/// turn rather than inform it.
+pub const STOP_COMMAND: &str = "nexus verify --changed 2>/dev/null || true";
+
+/// Seconds. A ceiling, not a target: the budgets are 400 ms and 150 ms for the context hooks.
 const TIMEOUT_SECONDS: u64 = 5;
+
+/// The gate runs a real build. Its budget is seconds, not milliseconds.
+const VERIFY_TIMEOUT_SECONDS: u64 = 600;
 
 pub enum Outcome {
     Installed,
@@ -46,15 +60,28 @@ pub enum Outcome {
 /// valid JSON is an error rather than a thing to overwrite — someone's configuration is not
 /// ours to discard because we could not read it.
 pub fn install(root: &Path) -> std::io::Result<Outcome> {
-    let session = install_one(root, "SessionStart", SESSION_START_COMMAND)?;
-    let prompt = install_one(root, "UserPromptSubmit", USER_PROMPT_COMMAND)?;
-    Ok(match (session, prompt) {
-        (Outcome::AlreadyPresent, Outcome::AlreadyPresent) => Outcome::AlreadyPresent,
-        _ => Outcome::Installed,
+    let mut any = false;
+    for (event, command, timeout) in [
+        ("SessionStart", SESSION_START_COMMAND, TIMEOUT_SECONDS),
+        ("UserPromptSubmit", USER_PROMPT_COMMAND, TIMEOUT_SECONDS),
+        ("PostToolUse", POST_TOOL_USE_COMMAND, TIMEOUT_SECONDS),
+        ("Stop", STOP_COMMAND, VERIFY_TIMEOUT_SECONDS),
+    ] {
+        if matches!(
+            install_one(root, event, command, timeout)?,
+            Outcome::Installed
+        ) {
+            any = true;
+        }
+    }
+    Ok(if any {
+        Outcome::Installed
+    } else {
+        Outcome::AlreadyPresent
     })
 }
 
-fn install_one(root: &Path, event: &str, command: &str) -> std::io::Result<Outcome> {
+fn install_one(root: &Path, event: &str, command: &str, timeout: u64) -> std::io::Result<Outcome> {
     let dir = root.join(".claude");
     let path = dir.join("settings.json");
 
@@ -106,7 +133,7 @@ fn install_one(root: &Path, event: &str, command: &str) -> std::io::Result<Outco
         "hooks": [{
             "type": "command",
             "command": command,
-            "timeout": TIMEOUT_SECONDS,
+            "timeout": timeout,
         }]
     }));
 

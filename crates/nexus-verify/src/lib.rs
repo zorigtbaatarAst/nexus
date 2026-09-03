@@ -125,6 +125,11 @@ pub enum Verdict {
         check: CheckKind,
         detail: String,
         checks: Vec<Check>,
+        /// Set when the baseline half did not run. A failure that implies a comparison it
+        /// never made is a lie by omission, and this is the case where a gate most easily
+        /// blames a change for a suite that was already broken.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     /// Nothing could be concluded. Never a synonym for failure.
     Inconclusive { why: String, checks_run: Vec<Check> },
@@ -429,6 +434,7 @@ pub fn judge_single(checks: Vec<Check>, plan: &Plan) -> Verdict {
             check: f.kind,
             detail: format!("{} exited {}", f.kind.as_str(), f.exit_code.unwrap_or(-1)),
             checks,
+            note: None,
         },
         None => Verdict::Verified { checks, note: None },
     }
@@ -613,6 +619,313 @@ mod tests {
                 !code_only.contains(banned),
                 "{banned:?} appears in the implementation — argv-only execution is what makes \
                  a shell metacharacter in a test name just a character"
+            );
+        }
+    }
+}
+
+// ─────────────────────────── planning ───────────────────────────
+
+/// Build, test and lint commands for a detected build system.
+///
+/// Derived from the profile rather than configured, because a project that already tells you
+/// how it builds should not have to tell you twice. A build system with no mapping yields an
+/// empty plan **with a reason**, which becomes `Inconclusive` — a gate that reports success
+/// for having run nothing is worse than having no gate at all.
+///
+/// These are the ordinary invocations, not the allowlist: the allowlist governs commands a
+/// caller *chooses*, and nobody chooses these. They are what the project's own toolchain does.
+pub fn plan_for(build_system: Option<&str>, timeout_seconds: u64) -> Plan {
+    let steps: Vec<(CheckKind, &[&str])> = match build_system {
+        Some("cargo") => vec![
+            (CheckKind::Build, &["cargo", "build", "--workspace"]),
+            (CheckKind::Test, &["cargo", "test", "--workspace"]),
+            (
+                CheckKind::Lint,
+                &["cargo", "clippy", "--workspace", "--all-targets"],
+            ),
+        ],
+        Some("gradle") => vec![
+            (CheckKind::Build, &["./gradlew", "assemble"]),
+            (CheckKind::Test, &["./gradlew", "test"]),
+            (CheckKind::Lint, &["./gradlew", "check", "-x", "test"]),
+        ],
+        Some("maven") => vec![
+            (CheckKind::Build, &["mvn", "-q", "-B", "compile"]),
+            (CheckKind::Test, &["mvn", "-q", "-B", "test"]),
+        ],
+        Some("npm") => vec![
+            (CheckKind::Build, &["npm", "run", "build"]),
+            (CheckKind::Test, &["npm", "test"]),
+            (CheckKind::Lint, &["npm", "run", "lint"]),
+        ],
+        Some("pnpm") => vec![
+            (CheckKind::Build, &["pnpm", "build"]),
+            (CheckKind::Test, &["pnpm", "test"]),
+            (CheckKind::Lint, &["pnpm", "lint"]),
+        ],
+        Some("yarn") => vec![
+            (CheckKind::Build, &["yarn", "build"]),
+            (CheckKind::Test, &["yarn", "test"]),
+            (CheckKind::Lint, &["yarn", "lint"]),
+        ],
+        Some("pip") | Some("poetry") | Some("uv") => {
+            vec![(CheckKind::Test, &["pytest", "-q"])]
+        }
+        Some(other) => {
+            return Plan::empty(format!(
+                "no build, test or lint commands are known for '{other}' — verification cannot \
+                 conclude anything without running something"
+            ))
+        }
+        None => {
+            return Plan::empty(
+                "no build system was detected, so there is nothing to build, test or lint",
+            )
+        }
+    };
+    Plan {
+        steps: steps
+            .into_iter()
+            .map(|(kind, argv)| Step {
+                kind,
+                argv: argv.iter().map(|s| s.to_string()).collect(),
+            })
+            .collect(),
+        timeout_seconds,
+        reason: None,
+    }
+}
+
+// ─────────────────────────── judgement ───────────────────────────
+
+/// What one revision's run said, reduced to the only thing the matrix needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Passed,
+    Failed,
+    /// Could not be established. A blocked check, a missing baseline, an unreachable commit.
+    Unknown,
+}
+
+/// Reduce a set of checks to one outcome.
+pub fn outcome_of(checks: &[Check]) -> Outcome {
+    if checks.is_empty() || checks.iter().any(|c| c.blocked.is_some()) {
+        return Outcome::Unknown;
+    }
+    if checks.iter().any(|c| c.failed()) {
+        Outcome::Failed
+    } else {
+        Outcome::Passed
+    }
+}
+
+/// §3's four-cell matrix, entire.
+///
+/// | baseline | head | verdict |
+/// |---|---|---|
+/// | pass | pass | verified |
+/// | pass | fail | failed — the change did it |
+/// | fail | fail | inconclusive — already broken |
+/// | fail | pass | verified, and it fixed something |
+///
+/// Halving this to save time removes the ability to tell "this change introduced a bug" from
+/// "this suite was already red", which is the entire question being asked.
+pub fn judge(head: Vec<Check>, baseline: Option<Vec<Check>>, plan: &Plan) -> Verdict {
+    if let Some(reason) = &plan.reason {
+        return Verdict::Inconclusive {
+            why: reason.clone(),
+            checks_run: head,
+        };
+    }
+    let head_outcome = outcome_of(&head);
+
+    // With no comparable baseline the honest answer is the single-revision one, and the
+    // caller is told the comparison did not happen rather than left to assume it did.
+    let Some(baseline) = baseline else {
+        const UNCOMPARED: &str = "no baseline run, so a pre-existing failure could not be ruled \
+                                  out — this verdict is about the current revision alone";
+        return match judge_single(head, plan) {
+            Verdict::Verified { checks, .. } => Verdict::Verified {
+                checks,
+                note: Some(UNCOMPARED.into()),
+            },
+            Verdict::Failed {
+                check,
+                detail,
+                checks,
+                ..
+            } => Verdict::Failed {
+                check,
+                detail,
+                checks,
+                note: Some(UNCOMPARED.into()),
+            },
+            other => other,
+        };
+    };
+
+    match (outcome_of(&baseline), head_outcome) {
+        (Outcome::Passed, Outcome::Passed) => Verdict::Verified {
+            checks: head,
+            note: None,
+        },
+        (Outcome::Passed, Outcome::Failed) => {
+            let detail = head
+                .iter()
+                .find(|c| c.failed())
+                .map(|c| format!("{} passed at the baseline and fails here", c.kind.as_str()))
+                .unwrap_or_else(|| "a check that passed at the baseline fails here".into());
+            let kind = head
+                .iter()
+                .find(|c| c.failed())
+                .map_or(CheckKind::Test, |c| c.kind);
+            Verdict::Failed {
+                check: kind,
+                detail,
+                checks: head,
+                note: None,
+            }
+        }
+        (Outcome::Failed, Outcome::Failed) => Verdict::Inconclusive {
+            why: "this was already failing at the baseline, so the change is not what broke it"
+                .into(),
+            checks_run: head,
+        },
+        (Outcome::Failed, Outcome::Passed) => Verdict::Verified {
+            checks: head,
+            note: Some("this change fixed a failure that already existed at the baseline".into()),
+        },
+        // Either side unknown: a blocked check on one revision says nothing about the other.
+        (_, _) => Verdict::Inconclusive {
+            why: "a check could not run at one of the two revisions, so the pair cannot be \
+                  compared"
+                .into(),
+            checks_run: head,
+        },
+    }
+}
+
+#[cfg(test)]
+mod judgement_tests {
+    use super::*;
+
+    fn check(kind: CheckKind, exit: Option<i32>, blocked: Option<Blocked>) -> Check {
+        Check {
+            kind,
+            argv: vec!["x".into()],
+            exit_code: exit,
+            duration_ms: 1,
+            blocked,
+            output: String::new(),
+        }
+    }
+    fn pass() -> Vec<Check> {
+        vec![check(CheckKind::Test, Some(0), None)]
+    }
+    fn fail() -> Vec<Check> {
+        vec![check(CheckKind::Test, Some(1), None)]
+    }
+    fn plan() -> Plan {
+        Plan {
+            steps: vec![Step {
+                kind: CheckKind::Test,
+                argv: vec!["x".into()],
+            }],
+            timeout_seconds: 5,
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn the_four_cells_are_exactly_what_the_design_specifies() {
+        assert_eq!(judge(pass(), Some(pass()), &plan()).as_str(), "verified");
+        assert_eq!(judge(fail(), Some(pass()), &plan()).as_str(), "failed");
+        assert_eq!(
+            judge(fail(), Some(fail()), &plan()).as_str(),
+            "inconclusive",
+            "an already-red suite proves nothing about the change"
+        );
+        assert_eq!(judge(pass(), Some(fail()), &plan()).as_str(), "verified");
+    }
+
+    #[test]
+    fn an_already_red_baseline_is_never_reported_as_a_failure() {
+        // ADR-025 calls this the single assertion that decides whether the gate survives
+        // contact with a real project. A gate that blames the change for a suite that was
+        // already broken gets switched off, and then it verifies nothing at all.
+        match judge(fail(), Some(fail()), &plan()) {
+            Verdict::Inconclusive { why, .. } => {
+                assert!(why.contains("already failing"), "{why}")
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn fixing_a_pre_existing_failure_is_verified_and_says_so() {
+        match judge(pass(), Some(fail()), &plan()) {
+            Verdict::Verified { note, .. } => {
+                assert!(
+                    note.is_some_and(|n| n.contains("fixed")),
+                    "the note is the point"
+                )
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn without_a_baseline_the_verdict_says_the_comparison_did_not_happen() {
+        match judge(pass(), None, &plan()) {
+            Verdict::Verified { note, .. } => assert!(
+                note.is_some_and(|n| n.contains("could not be ruled out")),
+                "a verdict that implies a comparison it did not make is a lie by omission"
+            ),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_blocked_check_on_either_side_is_inconclusive() {
+        let blocked = vec![check(
+            CheckKind::Test,
+            None,
+            Some(Blocked::NotFound("gradle".into())),
+        )];
+        assert_eq!(
+            judge(blocked.clone(), Some(pass()), &plan()).as_str(),
+            "inconclusive"
+        );
+        assert_eq!(
+            judge(pass(), Some(blocked), &plan()).as_str(),
+            "inconclusive"
+        );
+    }
+
+    #[test]
+    fn a_plan_with_nothing_to_run_is_inconclusive_whatever_happened() {
+        let p = Plan::empty("no build system detected");
+        assert_eq!(judge(pass(), Some(pass()), &p).as_str(), "inconclusive");
+    }
+
+    #[test]
+    fn a_cargo_project_gets_build_test_and_lint() {
+        let p = plan_for(Some("cargo"), 600);
+        let kinds: Vec<CheckKind> = p.steps.iter().map(|s| s.kind).collect();
+        assert_eq!(kinds, [CheckKind::Build, CheckKind::Test, CheckKind::Lint]);
+        assert_eq!(p.steps[0].argv[0], "cargo");
+        assert!(p.reason.is_none());
+    }
+
+    #[test]
+    fn an_unknown_build_system_yields_an_empty_plan_that_says_why() {
+        for bs in [Some("bazel"), None] {
+            let p = plan_for(bs, 600);
+            assert!(p.steps.is_empty(), "{bs:?}");
+            assert!(
+                p.reason.is_some(),
+                "an empty plan must explain itself: {bs:?}"
             );
         }
     }

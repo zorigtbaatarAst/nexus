@@ -10,6 +10,7 @@ repository.workspace = true
 nexus-types.workspace = true
 nexus-store.workspace = true
 nexus-vcs.workspace = true
+nexus-verify.workspace = true
 nexus-lang.workspace = true
 nexus-lang-java.workspace = true
 nexus-lang-ts.workspace = true
