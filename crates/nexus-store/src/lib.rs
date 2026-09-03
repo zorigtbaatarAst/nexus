@@ -1977,6 +1977,81 @@ impl Store {
         )?)
     }
 
+    /// Record one verification attempt against one finding. Append-only.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_finding_verification(
+        tx: &Transaction<'_>,
+        finding_id: i64,
+        scan_id: ScanId,
+        hypothesis: &str,
+        run_current_id: Option<i64>,
+        outcome: &str,
+        detail: Option<&str>,
+    ) -> Result<()> {
+        let attempt: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(attempt), 0) + 1 FROM finding_verifications WHERE finding_id = ?1",
+            params![finding_id],
+            |r| r.get(0),
+        )?;
+        tx.execute(
+            "INSERT INTO finding_verifications (finding_id, scan_id, attempt, hypothesis,
+                                                run_current_id, outcome, notes, created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                finding_id,
+                scan_id,
+                attempt,
+                hypothesis,
+                run_current_id,
+                outcome,
+                detail,
+                now()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every finding this project holds, whatever its status. Verification needs the fixed
+    /// ones too: a fixed finding that fails again is the regression, and it is the single
+    /// most useful thing the ledger can tell anyone.
+    pub fn all_findings_brief(&self, project_id: ProjectId) -> Result<Vec<OpenFindingRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT b.id, b.finding_uid, b.fingerprint, b.detector, b.status,
+                    (SELECT file_path FROM finding_occurrences o WHERE o.finding_id = b.id
+                     ORDER BY o.scan_id DESC LIMIT 1),
+                    b.capability, b.component
+             FROM findings b
+             WHERE b.project_id = ?1 AND b.status <> 'IGNORED'",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id], |r| {
+                Ok((
+                    OpenFindingRow {
+                        id: r.get(0)?,
+                        uid: r.get(1)?,
+                        fingerprint: r.get(2)?,
+                        detector: r.get(3)?,
+                        status: r.get(4)?,
+                        file_path: r.get(5)?,
+                        capability: r.get(6)?,
+                    },
+                    r.get::<_, Option<String>>(7)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows.into_iter().map(|(row, _)| row).collect())
+    }
+
+    pub fn verification_attempt_count(&self, project_id: ProjectId) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM finding_verifications v
+              JOIN findings f ON f.id = v.finding_id
+              WHERE f.project_id = ?1",
+            params![project_id],
+            |r| r.get(0),
+        )?)
+    }
+
     // ── commits: the history ledger ──────────────────────────
 
     /// Record a commit. Append-only: an sha already present is left exactly as it is.

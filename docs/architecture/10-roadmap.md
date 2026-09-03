@@ -281,6 +281,39 @@ run, a lint, and a verdict.
 **Dependencies:** Phase 1 (change detection via the split engine), Phase 2.5 (baseline revision
 handling shares the history primitives).
 
+**Status (2026-09-03): complete.** All ten tasks landed — the `nexus-verify` crate,
+`nexus verify`, the `nexus_verify` MCP tool, all four ADR-024 hooks, and the three tables
+that were dead since the schema was written.
+
+Success criteria, each against the code:
+
+- **An already-red suite yields `Inconclusive`, never `Failed`** — asserted twice, once
+  against a synthetic runner so the logic is testable without a toolchain, and once against a
+  real `cargo test` (`nexus-core/tests/verification.rs`).
+- A missing build tool yields `Inconclusive` with a remedy, never a crash.
+- `policy.execute = "none"` yields `permission_required` over MCP, never an execution — and an
+  unrecognised value is treated as `none`, because a typo must not be a grant.
+- Review's "nothing tests this" finding cites a `test_coverage` row when a run has produced
+  one, and says it is guessing from filenames when it has not.
+- **A dirty tree still gets a baseline verdict**, computed once per sha in a detached
+  worktree. `git stash` is never used, anywhere.
+
+**Three defects found by running it rather than reading it.** A deleted cache directory left
+git holding the worktree registration, so that sha's baseline could never be built again. The
+worktree error reused the unreachable-commit variant and produced a garbled sentence. And a
+failure with no baseline did not carry the caveat that no comparison happened — exactly the
+case where a gate most easily blames a change for a suite that was already broken.
+
+**What is honest about its limits.** Attribution to a specific finding is narrow: without a
+reproduction test a failing suite does not say *which* finding it failed for, so a finding is
+credited only when the failing output names its file. Everything else records an attempt and
+changes no status. Nothing in this phase can set `FIXED`: a passing test is not evidence that
+a defect is gone, only that this run did not hit it. The runner parser reads cargo and pytest
+output and returns nothing for formats it cannot state precisely, because an invented
+coverage row is worse than the filename guess it replaces.
+
+Next: **Phase 5**, starting at 5.1.
+
 **Risks:** **R3 (executing project commands — the largest security surface in the system)**, and
 the gate being switched off if it cries wolf.
 

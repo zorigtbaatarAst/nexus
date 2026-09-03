@@ -58,6 +58,7 @@ impl Engine {
             Verdict::Failed { detail, note, .. } => ("failed", Some(detail.clone()), note.clone()),
             Verdict::Inconclusive { why, .. } => ("inconclusive", Some(why.clone()), None),
         };
+        self.feed_findings(name, verdict.checks())?;
         Ok(VerifyReport {
             verdict: name.into(),
             why,
@@ -194,5 +195,73 @@ impl Engine {
                 Some(format!("no baseline run: {e}")),
             ),
         }
+    }
+}
+
+impl Engine {
+    /// What a verdict means for the findings this project already holds (§6).
+    ///
+    /// Attribution is deliberately narrow. Without a reproduction test — Phase 5 — a failing
+    /// suite does not say *which* finding it failed for, so a finding is only credited when
+    /// the failing output actually names its anchor or its component. Everything else records
+    /// an attempt and changes no status.
+    ///
+    /// Nothing here can set `FIXED`. That is the scan's job, on evidence of absence: a test
+    /// passing is not evidence that a defect is gone, only that this run did not hit it.
+    fn feed_findings(&mut self, verdict_name: &str, checks: &[nexus_verify::Check]) -> Result<()> {
+        let Some(baseline) = self.store.baseline(self.project_id)? else {
+            return Ok(());
+        };
+        let failing: String = checks
+            .iter()
+            .filter(|c| c.failed())
+            .map(|c| c.output.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for finding in self.store.all_findings_brief(self.project_id)? {
+            let named = !failing.is_empty()
+                && finding
+                    .file_path
+                    .as_deref()
+                    .is_some_and(|f| failing.contains(f));
+            let outcome = match (verdict_name, named) {
+                // The failing output names this finding's file: the defect is real and this
+                // run reproduced it.
+                ("failed", true) => "reproduced",
+                // It failed at the baseline too, so the failure predates the change. Recorded
+                // as its own outcome rather than as a reproduction, because "this is broken"
+                // and "this change broke it" are different claims.
+                ("inconclusive", true) => "reproduced_preexisting",
+                ("verified", _) => "not_reproduced",
+                _ => "inconclusive",
+            };
+
+            let next = match (finding.status.as_str(), outcome) {
+                ("UNVERIFIED", "reproduced") | ("SUSPECTED", "reproduced") => Some("VERIFIED"),
+                // The strongest thing this ledger can say: it broke, it was fixed, and it
+                // broke again — with both histories still on disk to prove it.
+                ("FIXED", "reproduced") => Some("REGRESSED"),
+                _ => None,
+            };
+
+            let tx = self.store.transaction()?;
+            Store::insert_finding_verification(
+                &tx,
+                finding.id,
+                baseline.scan_id,
+                &format!("{} still holds", finding.uid),
+                None,
+                outcome,
+                Some(&format!("verdict {verdict_name}")),
+            )?;
+            tx.commit().map_err(nexus_store::StoreError::from)?;
+
+            if let Some(status) = next {
+                self.store
+                    .set_finding_status(self.project_id, &finding.uid, status)?;
+            }
+        }
+        Ok(())
     }
 }

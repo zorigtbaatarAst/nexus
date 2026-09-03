@@ -646,7 +646,7 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
         }
 
         Command::Verify { changed: _ } => {
-            let engine = open(&root)?;
+            let mut engine = open(&root)?;
             let report = engine.verify()?;
             let failed = report.verdict == "failed";
             emit!(&report, {

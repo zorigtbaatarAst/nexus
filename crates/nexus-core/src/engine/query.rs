@@ -697,6 +697,10 @@ impl Engine {
         Ok(report)
     }
 
+    /// How many verification attempts have been recorded against findings.
+    pub fn verification_attempts(&self) -> Result<i64> {
+        Ok(self.store.verification_attempt_count(self.project_id)?)
+    }
     /// How many verification runs this project has recorded.
     pub fn test_run_count(&self) -> Result<i64> {
         Ok(self.store.test_run_count(self.project_id)?)

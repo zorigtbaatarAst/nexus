@@ -129,3 +129,45 @@ fn a_suite_that_was_already_red_is_inconclusive_never_failed() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_verification_records_an_attempt_against_every_finding_it_could_bear_on() {
+    // §6: a verification result is not a terminal event. Every run appends, which is what
+    // makes "this has been failing for eleven runs" answerable.
+    let (root, mut e) = project("feedback", GREEN);
+    allow_host(&root);
+    e.record_finding(
+        "bughunter",
+        nexus_core::findings::Finding {
+            finding_type: nexus_types::FindingType::Logic,
+            title: "a suspected defect".into(),
+            component: "demo".into(),
+            anchor_fqn: None,
+            severity: nexus_types::Severity::Medium,
+            confidence: 0.7,
+            detector: "test".into(),
+            structural_key: "k".into(),
+            slug: "suspected".into(),
+            evidence: vec![nexus_core::findings::CodeRef {
+                file: "src/lib.rs".into(),
+                line: 1,
+                note: "here".into(),
+            }],
+            capability_data: None,
+        },
+    )
+    .expect("record");
+
+    e.verify().expect("verify");
+    let attempts = e.verification_attempts().expect("attempts");
+    assert!(attempts > 0, "an attempt was recorded against the finding");
+
+    // A green run is not evidence that a defect is gone, only that this run did not hit it,
+    // so nothing may be marked FIXED here.
+    let after = e.findings(None, None, None).expect("findings");
+    assert!(
+        after.iter().all(|f| f.status != "FIXED"),
+        "verification must never set FIXED: {after:?}"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
