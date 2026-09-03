@@ -394,3 +394,54 @@ fn an_unanchored_turn_with_nothing_carried_reports_that_it_does_not_know() {
         .iter()
         .any(|n| n.contains("intent was not determined")));
 }
+
+#[test]
+fn an_external_graph_is_ignored_unless_the_config_asks_and_is_labelled_when_it_does() {
+    // Roadmap 2.12. A scan that silently starts trusting a file someone left in the working
+    // tree is not something to ship on by default, so the flag is the whole switch.
+    let (root, mut engine) = scanned("graphify");
+    write(&root, "svc/handler.py", "def handle():\n    pass\n");
+    write(&root, "svc/util.py", "def helper():\n    pass\n");
+    fs::create_dir_all(root.join("graphify-out")).expect("mkdir");
+    fs::write(
+        root.join("graphify-out/graph.json"),
+        r#"{"edges":[{"from":"svc/handler.py","to":"svc/util.py","kind":"imports","confidence":0.99}]}"#,
+    )
+    .expect("write");
+
+    let external = |g: &nexus_core::GraphReport| -> i64 {
+        g.by_resolution
+            .iter()
+            .find(|(r, _)| r == "external-graph")
+            .map_or(0, |(_, n)| *n)
+    };
+
+    // Off by default: the file exists and is not read. The fixture's own Java edge is
+    // untouched, which is the point — the flag adds a source, it does not replace one.
+    engine.scan().expect("scan");
+    let before = engine.graph().expect("graph");
+    assert_eq!(
+        external(&before),
+        0,
+        "python is unanalysed and the flag is off: {before:?}"
+    );
+    let parsed_before = before.edges_resolved;
+
+    fs::write(
+        root.join(".nexus/config.toml"),
+        "[scan]\nresolution = \"external-graph\"\n",
+    )
+    .expect("config");
+    engine.scan().expect("rescan with the flag on");
+    let after = engine.graph().expect("graph");
+    assert_eq!(
+        external(&after),
+        1,
+        "the edge is labelled, not laundered into heuristic: {after:?}"
+    );
+    // An edge nobody parsed must not lift the number ADR-017 exists to keep honest.
+    assert_eq!(
+        after.edges_resolved, parsed_before,
+        "external-graph edges stay out of the resolution rate: {after:?}"
+    );
+}

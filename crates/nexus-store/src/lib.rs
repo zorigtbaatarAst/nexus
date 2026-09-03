@@ -17,13 +17,14 @@ use nexus_types::*;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::Path;
 
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_init.sql")),
     (2, include_str!("../migrations/0002_graphql_seam.sql")),
     (3, include_str!("../migrations/0003_findings.sql")),
     (4, include_str!("../migrations/0004_sibling_resolution.sql")),
     (5, include_str!("../migrations/0005_capability_data.sql")),
+    (6, include_str!("../migrations/0006_external_graph.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -128,6 +129,10 @@ pub struct EdgeCounts {
     pub resolved: i64,
     pub external: i64,
     pub sibling: i64,
+    /// Imported from an external graph (roadmap 2.12). Excluded from `resolved` on purpose:
+    /// nobody resolved a symbol table to produce these, and a denominator that quietly
+    /// absorbs weaker evidence stops measuring what it claims to.
+    pub external_graph: i64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1189,9 +1194,10 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT
                COUNT(*),
-               SUM(dst_symbol_id IS NOT NULL),
+               SUM(dst_symbol_id IS NOT NULL AND resolution <> 'external-graph'),
                SUM(resolution = 'external'),
-               SUM(resolution = 'sibling')
+               SUM(resolution = 'sibling'),
+               SUM(resolution = 'external-graph')
              FROM symbol_edges WHERE project_id = ?1",
         )?;
         let row = stmt.query_row(params![project_id], |r| {
@@ -1200,6 +1206,7 @@ impl Store {
                 resolved: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
                 external: r.get::<_, Option<i64>>(2)?.unwrap_or(0),
                 sibling: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                external_graph: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
             })
         })?;
         Ok(row)
@@ -1745,6 +1752,77 @@ impl Store {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// The live file row for a path, or `None`. Used by the external-graph importer, which
+    /// must not invent a node for a path this scan never saw.
+    pub fn file_id_by_path(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        path: &str,
+    ) -> Result<Option<FileId>> {
+        Ok(tx
+            .query_row(
+                "SELECT id FROM files WHERE project_id = ?1 AND path = ?2 AND deleted = 0",
+                params![project_id, path],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    // ── external graph (roadmap 2.12) ────────────────────────
+
+    /// Give an unanalysed file a node so an edge has something to attach to.
+    ///
+    /// An external graph states relationships between *files*, and `symbol_edges` connects
+    /// symbols. A file no analyzer claims has no symbols at all, so one module-level symbol
+    /// per file is the minimum that makes the edge representable. Its fqn is the path, which
+    /// is also how the edge names it — there is no second naming scheme to keep in sync.
+    pub fn upsert_module_symbol(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        file_id: FileId,
+        scan_id: ScanId,
+        path: &str,
+    ) -> Result<i64> {
+        tx.execute(
+            "INSERT INTO symbols (project_id, file_id, kind, name, fqn, start_line, end_line,
+                                  sig_hash, body_hash, first_seen_scan_id, last_seen_scan_id,
+                                  deleted)
+             VALUES (?1,?2,'module',?3,?4,1,1,'external-graph','external-graph',?5,?5,0)
+             ON CONFLICT(project_id, fqn) DO UPDATE SET
+               last_seen_scan_id = excluded.last_seen_scan_id, deleted = 0, file_id = excluded.file_id",
+            params![project_id, file_id, path, path, scan_id],
+        )?;
+        Ok(tx.query_row(
+            "SELECT id FROM symbols WHERE project_id = ?1 AND fqn = ?2",
+            params![project_id, path],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Insert one imported edge, already resolved, at `external-graph`.
+    ///
+    /// Written pre-resolved so `resolve_edges` never sees it: an edge nobody parsed must not
+    /// enter the tier ladder and come out labelled `heuristic`, and it must not appear in the
+    /// resolution denominator, which is why `edge_counts` excludes it explicitly.
+    pub fn insert_external_edge(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        scan_id: ScanId,
+        src: i64,
+        dst: i64,
+        edge_type: &str,
+        confidence: f64,
+    ) -> Result<()> {
+        tx.execute(
+            "INSERT INTO symbol_edges (project_id, src_symbol_id, dst_symbol_id, dst_fqn_hint,
+                                       edge_type, resolution, confidence, site_line,
+                                       last_seen_scan_id)
+             VALUES (?1,?2,?3,NULL,?4,'external-graph',?5,NULL,?6)",
+            params![project_id, src, dst, edge_type, confidence, scan_id],
+        )?;
+        Ok(())
     }
 
     // ── commits: the history ledger ──────────────────────────

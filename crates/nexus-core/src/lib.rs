@@ -21,6 +21,7 @@ pub mod context;
 pub mod detect;
 pub mod engine;
 pub mod findings;
+pub mod graphify;
 pub mod history;
 pub mod impact;
 pub mod policy;

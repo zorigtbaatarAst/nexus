@@ -90,6 +90,54 @@ impl Engine {
         for (file_id, edges) in &pending_edges {
             Store::replace_edges_for_file(&tx, self.project_id, *file_id, scan_id, edges)?;
         }
+        // An external graph, if the project asked for one. After every parsed file has a
+        // row, so an unanalysed file can be given a module node without racing the walk.
+        if let crate::graphify::Mode::On(path) = crate::graphify::mode(&self.root) {
+            let (edges, note) = crate::graphify::read(&path);
+            if let Some(note) = note {
+                warnings.push(note);
+            }
+            let mut imported = 0usize;
+            let mut nodes: BTreeMap<String, i64> = BTreeMap::new();
+            for edge in &edges {
+                let mut resolve = |p: &str| -> Result<Option<i64>> {
+                    if let Some(id) = nodes.get(p) {
+                        return Ok(Some(*id));
+                    }
+                    // Only a file this scan actually saw. An edge naming a path outside the
+                    // index is the external graph's business, not ours to invent a node for.
+                    let Some(file_id) = Store::file_id_by_path(&tx, self.project_id, p)? else {
+                        return Ok(None);
+                    };
+                    let id =
+                        Store::upsert_module_symbol(&tx, self.project_id, file_id, scan_id, p)?;
+                    nodes.insert(p.to_string(), id);
+                    Ok(Some(id))
+                };
+                let (Some(src), Some(dst)) = (resolve(&edge.from)?, resolve(&edge.to)?) else {
+                    continue;
+                };
+                Store::insert_external_edge(
+                    &tx,
+                    self.project_id,
+                    scan_id,
+                    src,
+                    dst,
+                    edge.kind.as_deref().unwrap_or("imports"),
+                    crate::graphify::confidence(edge.confidence),
+                )?;
+                imported += 1;
+            }
+            if imported > 0 {
+                warnings.push(format!(
+                    "{imported} edges imported from {} at confidence ≤ {} — they are outside \
+                     the resolution rate because nobody parsed them",
+                    path.display(),
+                    crate::graphify::MAX_CONFIDENCE
+                ));
+            }
+        }
+
         // The commit ledger. Append-only and idempotent, so a rescan that sees the same
         // history re-inserts nothing. Recorded here rather than in a separate pass because
         // it belongs to the same transaction as the index it describes.
