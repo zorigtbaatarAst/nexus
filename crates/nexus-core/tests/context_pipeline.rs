@@ -216,3 +216,54 @@ fn expanding_from_no_seeds_is_empty_and_not_an_error() {
     let out = engine.expand(&[], Intent::Debug).expect("expand");
     assert!(out.items.is_empty(), "{out:?}");
 }
+
+#[test]
+fn a_scan_records_the_commit_ledger_and_a_rescan_does_not_duplicate_it() {
+    // `commits` is a ledger: append-only, so re-seeing history must be a no-op. An UPDATE or
+    // a duplicate here destroys the "what did Nexus believe at scan 12" question.
+    let (root, mut engine) = scanned("commits");
+    let before = engine.commit_count().expect("count");
+    assert!(before >= 1, "the fixture has one commit: {before}");
+
+    write(
+        &root,
+        SERVICE,
+        "package mn.pay;\npublic class PaymentService {}\n",
+    );
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "second"]);
+    engine.rescan().expect("rescan");
+    assert_eq!(engine.commit_count().expect("count"), before + 1);
+
+    engine.rescan().expect("rescan again");
+    assert_eq!(
+        engine.commit_count().expect("count"),
+        before + 1,
+        "re-seeing the same history must insert nothing"
+    );
+}
+
+#[test]
+fn churn_is_normalised_against_the_busiest_path() {
+    let (root, engine) = scanned("churn");
+    // Touch one file three more times; the other stays at its single initial commit.
+    for i in 0..3 {
+        write(
+            &root,
+            SERVICE,
+            &format!("package mn.pay;\npublic class PaymentService {{ int v = {i}; }}\n"),
+        );
+        git(&root, &["add", "-A"]);
+        git(&root, &["commit", "-qm", "touch"]);
+    }
+    let churn = engine.churn();
+    let hot = churn.get(SERVICE).copied().unwrap_or(0.0);
+    let cold = churn.get(CONTROLLER).copied().unwrap_or(0.0);
+    assert!(hot > cold, "hot {hot} cold {cold}");
+    assert!(
+        (hot - 1.0).abs() < 1e-9,
+        "the busiest path normalises to 1.0: {hot}"
+    );
+    assert!(cold > 0.0, "a path touched once is not zero: {cold}");
+    assert_eq!(churn.get("nothing/here.java"), None);
+}

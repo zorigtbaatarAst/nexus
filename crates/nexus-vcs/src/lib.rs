@@ -155,6 +155,139 @@ impl Repo {
     }
 }
 
+/// One commit, as the `commits` ledger records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitInfo {
+    pub sha: String,
+    pub parent_shas: String,
+    pub author: Option<String>,
+    /// ISO 8601, UTC. Stored as text because that is what every other timestamp here is,
+    /// and because a sortable string needs no timezone library to compare.
+    pub authored_at: String,
+    pub subject: Option<String>,
+}
+
+/// How many commits back history questions look.
+///
+/// A cap rather than the whole history: churn over a five-year window answers a question
+/// nobody asked, and an unbounded revwalk on a large repository is the one thing that could
+/// put this stage over ADR-024's 150 ms budget.
+pub const HISTORY_WINDOW_COMMITS: usize = 500;
+
+impl Repo {
+    /// The most recent commits reachable from HEAD, newest first.
+    ///
+    /// One revwalk. An empty or unborn repository yields an empty vector rather than an
+    /// error: a project with no commits is a supported configuration, and history questions
+    /// about it have the honest answer "none".
+    pub fn recent_commits(&self, limit: usize) -> Result<Vec<CommitInfo>> {
+        let Some(head) = self.head_sha()? else {
+            return Ok(Vec::new());
+        };
+        let head = match self.inner.revparse_single(&head) {
+            Ok(o) => o.id(),
+            Err(_) => return Ok(Vec::new()),
+        };
+        let mut walk = self.inner.revwalk()?;
+        walk.push(head)?;
+        let mut out = Vec::new();
+        for oid in walk.take(limit) {
+            let Ok(oid) = oid else { continue };
+            let Ok(commit) = self.inner.find_commit(oid) else {
+                continue;
+            };
+            out.push(CommitInfo {
+                sha: oid.to_string(),
+                parent_shas: commit
+                    .parent_ids()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                author: commit.author().name().map(str::to_string),
+                authored_at: format_iso8601(commit.time().seconds()),
+                subject: commit.summary().map(str::to_string),
+            });
+        }
+        Ok(out)
+    }
+
+    /// How many of the last `limit` commits touched each path.
+    ///
+    /// One revwalk, one diff per commit against its first parent. This is the raw material
+    /// for the churn signal, and it is computed here rather than stored because the `commits`
+    /// table has no path column — it is a commit ledger, not a file-touch index, and adding
+    /// a second source of truth about history to avoid one traversal is a bad trade.
+    ///
+    /// A merge is diffed against its first parent only. Counting a merge's whole second side
+    /// would attribute every commit in a long-lived branch to the day it landed, which makes
+    /// churn a measure of merge strategy rather than of change.
+    pub fn touch_counts(&self, limit: usize) -> Result<std::collections::HashMap<String, usize>> {
+        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let Some(head) = self.head_sha()? else {
+            return Ok(counts);
+        };
+        let head = match self.inner.revparse_single(&head) {
+            Ok(o) => o.id(),
+            Err(_) => return Ok(counts),
+        };
+        let mut walk = self.inner.revwalk()?;
+        walk.push(head)?;
+        for oid in walk.take(limit) {
+            let Ok(oid) = oid else { continue };
+            let Ok(commit) = self.inner.find_commit(oid) else {
+                continue;
+            };
+            let Ok(tree) = commit.tree() else { continue };
+            let parent = commit.parent(0).ok().and_then(|p| p.tree().ok());
+            let mut opts = DiffOptions::new();
+            let Ok(diff) =
+                self.inner
+                    .diff_tree_to_tree(parent.as_ref(), Some(&tree), Some(&mut opts))
+            else {
+                continue;
+            };
+            for delta in diff.deltas() {
+                for file in [delta.new_file().path(), delta.old_file().path()]
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(p) = file.to_str() {
+                        *counts.entry(p.to_string()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        Ok(counts)
+    }
+}
+
+/// Seconds since the epoch to `YYYY-MM-DDTHH:MM:SSZ`.
+///
+/// Hand-rolled for the same reason the store's own formatter is: a date library is a large
+/// dependency to buy for one format string, and this one is total — it cannot panic and has
+/// no locale.
+fn format_iso8601(secs: i64) -> String {
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let (h, m, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let (y, mo, d) = civil_from_days(days);
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
+}
+
+/// Howard Hinnant's `civil_from_days`, the standard branch-free conversion.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -354,6 +354,16 @@ pub struct Baseline {
     pub tool_versions_json: String,
 }
 
+/// A commit, as the ledger stores it.
+#[derive(Debug, Clone)]
+pub struct CommitRecord {
+    pub sha: String,
+    pub parent_shas: String,
+    pub author: Option<String>,
+    pub authored_at: String,
+    pub subject: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ChangeRecord {
     pub entity: &'static str,
@@ -1735,6 +1745,41 @@ impl Store {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    // ── commits: the history ledger ──────────────────────────
+
+    /// Record a commit. Append-only: an sha already present is left exactly as it is.
+    ///
+    /// `commits` is a ledger (data-model.md §2), so this never `UPDATE`s. Re-recording a
+    /// commit with different text would mean history changed, which it does not — and the
+    /// regression detection that reads this table depends on that.
+    pub fn insert_commit(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        c: &CommitRecord,
+    ) -> Result<bool> {
+        let n = tx.execute(
+            "INSERT OR IGNORE INTO commits (project_id, sha, parent_shas, author, authored_at, subject)
+             VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                project_id,
+                c.sha,
+                c.parent_shas,
+                c.author,
+                c.authored_at,
+                c.subject
+            ],
+        )?;
+        Ok(n == 1)
+    }
+
+    pub fn commit_count(&self, project_id: ProjectId) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM commits WHERE project_id = ?1",
+            params![project_id],
+            |r| r.get(0),
+        )?)
     }
 
     // ── facts: what Nexus has learned ────────────────────────

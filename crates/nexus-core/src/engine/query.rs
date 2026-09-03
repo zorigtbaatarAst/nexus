@@ -231,6 +231,14 @@ impl Engine {
     pub fn expand(&self, seeds: &[Seed], intent: Intent) -> Result<ImpactReport> {
         Ok(expand::run(&self.store, self.project_id, seeds, intent)?)
     }
+    /// How many commits this project's ledger holds.
+    pub fn commit_count(&self) -> Result<i64> {
+        Ok(self.store.commit_count(self.project_id)?)
+    }
+    /// Per-path churn over the history window, normalised to 0.0..=1.0.
+    pub fn churn(&self) -> std::collections::HashMap<String, f64> {
+        crate::history::churn(self.repo.as_ref())
+    }
     /// The scan before the current baseline — what `--changed` is measured against.
     pub fn previous_scan_id(&self) -> Result<Option<i64>> {
         Ok(self.store.previous_scan_id(self.project_id)?)

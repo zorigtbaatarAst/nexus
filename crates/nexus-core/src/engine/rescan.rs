@@ -506,6 +506,17 @@ impl Engine {
         }
         // Tier 3: an added or renamed symbol can resolve edges elsewhere without those
         // files changing, so resolution re-runs over the unresolved set every scan.
+        // The commit ledger. Append-only and idempotent, so a rescan that sees the same
+        // history re-inserts nothing. Recorded here rather than in a separate pass because
+        // it belongs to the same transaction as the index it describes.
+        for c in self
+            .repo
+            .as_ref()
+            .and_then(|r| r.recent_commits(nexus_vcs::HISTORY_WINDOW_COMMITS).ok())
+            .unwrap_or_default()
+        {
+            Store::insert_commit(&tx, self.project_id, &crate::history::to_record(c))?;
+        }
         Store::resolve_edges(&tx, self.project_id)?;
         // A fact about code this scan changed or removed is a trap for the next reader.
         // Inside the transaction, so a crash cannot leave the index new and the memory old.

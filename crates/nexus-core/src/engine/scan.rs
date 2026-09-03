@@ -90,6 +90,17 @@ impl Engine {
         for (file_id, edges) in &pending_edges {
             Store::replace_edges_for_file(&tx, self.project_id, *file_id, scan_id, edges)?;
         }
+        // The commit ledger. Append-only and idempotent, so a rescan that sees the same
+        // history re-inserts nothing. Recorded here rather than in a separate pass because
+        // it belongs to the same transaction as the index it describes.
+        for c in self
+            .repo
+            .as_ref()
+            .and_then(|r| r.recent_commits(nexus_vcs::HISTORY_WINDOW_COMMITS).ok())
+            .unwrap_or_default()
+        {
+            Store::insert_commit(&tx, self.project_id, &crate::history::to_record(c))?;
+        }
         let resolve = Store::resolve_edges(&tx, self.project_id)?;
         let facts_invalidated =
             Store::invalidate_moved_facts(&tx, self.project_id, &anchors, &nexus_store::now())?
