@@ -13,21 +13,28 @@ One thing survives on purpose — `Engine::migrate_legacy_dir` moves a `.bughunt
 to `.nexus/` on first open, so a project indexed before the rename is not silently re-scanned
 from nothing.
 
-It has **two entry points**, and confusing them is the fastest way to design something wrong.
+It has **two entry shapes**, and confusing them is the fastest way to design something wrong.
 `rescan` is change-driven — forward from a known changed symbol. `investigate` is
 symptom-driven — backward from an unknown one, seeded by what an agent read off a screenshot.
-The hard part of the second is *anchoring*, which the first has no concept of. See
-[`docs/investigation.md`](docs/investigation.md).
+The hard part of the second is *anchoring*, which the first has no concept of. **`investigate`
+is designed and not built**; the anchoring half of it now exists as the Context Engine's text
+seeding over `ui_strings`. See [`docs/investigation.md`](docs/investigation.md).
 
-**Status: the MVP ships.** Thirteen crates, ~16.6k lines, 173 tests. `scan`, `rescan`,
-`status`, `changes`, `impact`, `graph`, `ask`, `analyze` and `doctor` work; Java, TypeScript
-and GraphQL are indexed; three capabilities run. Still absent, and every surface says so
-rather than leaving anyone to infer it: the verification engine, Python and Rust analyzers,
-and any direct LLM provider. Do not start implementing outside the scope in
-[`docs/roadmap.md`](docs/roadmap.md) — the design deliberately defers things that look easy
-and are not.
+**Status: all six roadmap phases ship.** Eighteen crates, ~32k lines, 394 tests. On top of
+the original cascade — `scan`, `rescan`, `status`, `changes`, `impact`, `graph`, `ask`,
+`analyze`, `doctor` — the Context Engine (`context`), the fact lifecycle with Markdown export
+and file-based sharing (`fact`, `memory`, `share`), and the verification gate (`verify`) all
+work. Five languages are indexed: Java, TypeScript, GraphQL, Rust and Python. **Nexus indexes
+itself** — 1,831 symbols where it once reported zero.
 
-A Rust workspace of fourteen crates producing one binary image under two names — `nexus` is
+Still absent, and every surface says so rather than leaving anyone to infer it: any direct
+LLM provider, and `investigate`. Two things are honest about being weaker than they look —
+Rust edge resolution is 13 % against Java's 96 % (bare method hints need a receiver type),
+and no ranking weight has been tuned, because tuning without ledger evidence is the folklore
+`docs/architecture/11-risks.md` R8 names. `docs/architecture/10-roadmap.md` records what each
+phase delivered and what it left undone.
+
+A Rust workspace of eighteen crates producing one binary image under two names — `nexus` is
 the platform, `bughunter` the capability's own CLI — which is both the CLI and the MCP server.
 Which name is running is decided by `argv[0]`, so there is a single dispatch path.
 
@@ -53,10 +60,15 @@ that is hard to attribute.
    later" becomes a core change.
 
 1. **`nexus-core` must not depend on `nexus-mcp`, `nexus-cli`, or any concrete AI provider.** It
-   depends on `nexus-ai` with `default-features = false`, which means the deterministic build
-   has no HTTP client in its dependency tree at all. A `cargo metadata` test asserts this.
-   *`nexus-ai` does not exist yet. The rule is enforced today in its stronger form: the test
-   asserts `nexus-core` depends on no HTTP client at all.*
+   would depend on `nexus-ai` with `default-features = false`, so the deterministic build has
+   no HTTP client in its dependency tree at all. *`nexus-ai` does not exist. The rule is
+   enforced today in its stronger form: a `cargo metadata` test asserts `nexus-core` depends
+   on no HTTP client whatsoever.*
+
+1b. **`nexus-core` must not name a language either.** The analyzers are registered by the
+   composition root through `nexus-lang-pack`, and the core may depend on neither a concrete
+   `nexus-lang-*` nor the pack. Adding a language is a new crate and one line at the root —
+   never an edit to the core.
 
 2. **`nexus-mcp` must not depend on `nexus-store`, `nexus-lang*` or `nexus-verify`.** A handler reaches
    them only through `nexus-core`, so it physically cannot grow logic the CLI lacks. Every
@@ -71,10 +83,10 @@ that is hard to attribute.
 
 5. **`nexus-verify` writes only through `SafeWriter`**, rooted at `.nexus/generated-tests/`,
    canonicalizing the parent path *before* the prefix check. A jail that compares unresolved
-   paths is not a jail. *`nexus-verify` does not exist yet.
-   [`docs/verification-engine.md`](docs/verification-engine.md) is its design; the rule binds
-   when the crate lands, and `tests/boundaries.rs` already names it so that it cannot land
-   without one.*
+   paths is not a jail — a textual prefix check accepts a symlink inside the root that points
+   at `/etc`, and there is a test that builds exactly that. The crate must also not depend on
+   `nexus-store` or `nexus-core`: it takes a plan and returns a verdict, and `nexus-core`
+   writes down what it decided.
 
 6. **Ledger tables are append-only.** `scans`, `changes`, `commits`, `finding_occurrences`,
    `finding_verifications`, `test_runs`, `audit_events` are never `UPDATE`d. See
@@ -142,7 +154,14 @@ that is hard to attribute.
 - **Commands are argv, never strings.** Allowlist entries are templates with typed holes;
   `{test}` becomes exactly one argv element. `sh -c` is never used, anywhere.
 
-- **stdout is results, stderr is everything else.** `--json | jq` must work with `-v` on.
+- **stdout is results, stderr is everything else.** `--json | jq` must work with `-v` on, and
+  a command emits **exactly one** JSON document — two concatenated objects parse as neither.
+  `scan` once printed its report and then Architect's findings separately, and the project's
+  own CI smoke check died on `Extra data: line 28`. `nexus-cli/tests/json_contract.rs` pins it.
+
+- **Exit codes are interface**: 0 ok, 1 runtime, 2 usage, 3 findings (`--fail-on`), 5 no
+  baseline, 6 ambiguous target. Finding a change is success, not an error — a tool that exits
+  non-zero for doing its job is removed from the pipeline within a week.
 
 - **Never generate a clarifying question from a template.** Ask only when the ambiguity was
   actually measured — one anchor candidate means no question. Asking something BugHunter
@@ -275,4 +294,7 @@ that is hard to attribute.
 | what can an agent call | [mcp-api.md](docs/mcp-api.md) |
 | what is safe to execute | [security.md](docs/security.md) §3–4 |
 | how to add a capability | [capabilities.md](docs/capabilities.md) |
-| what should I build first | [roadmap.md](docs/roadmap.md) |
+| how context is selected and ranked | [architecture/05-context-engine.md](docs/architecture/05-context-engine.md) |
+| how a fact is validated and retired | [architecture/06-memory.md](docs/architecture/06-memory.md) |
+| what each phase delivered, and what it left undone | [architecture/10-roadmap.md](docs/architecture/10-roadmap.md) |
+| what Nexus will not build, and what would reverse that | [architecture/12-non-goals.md](docs/architecture/12-non-goals.md) |
