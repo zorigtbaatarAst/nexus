@@ -22,7 +22,9 @@ pub fn direction_for(intent: Intent) -> &'static str {
     match intent {
         Intent::Refactor | Intent::Review | Intent::Build => "reverse",
         Intent::Debug => "forward",
-        Intent::Explain | Intent::Unknown => "both",
+        // A referential turn carries seeds from a previous package but no fresh verb, so
+        // neither direction is implied. Both, as with Unknown.
+        Intent::Explain | Intent::Unknown | Intent::Referential => "both",
     }
 }
 

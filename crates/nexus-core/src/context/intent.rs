@@ -25,6 +25,11 @@ pub enum Intent {
     Refactor,
     Review,
     Explain,
+    /// The prompt refers to something the previous turn established — "now do the same for
+    /// orders" — and names nothing this index can resolve. `13-evaluation.md` §14.1: the
+    /// harness has the conversation, so it supplies the carried seeds; Nexus stays a pure
+    /// function of (request, index, memory) and stores nothing.
+    Referential,
     /// Nothing matched. Balanced weights downstream, and the package says it guessed nothing.
     Unknown,
 }
@@ -37,6 +42,7 @@ impl Intent {
             Intent::Refactor => "refactor",
             Intent::Review => "review",
             Intent::Explain => "explain",
+            Intent::Referential => "referential",
             Intent::Unknown => "unknown",
         }
     }
@@ -165,6 +171,20 @@ fn looks_like_a_stack_trace(text: &str) -> bool {
         || lower.contains("panicked at")
 }
 
+/// Markers of a prompt that points at the previous turn rather than at the code.
+///
+/// Whole words only, same as the verb table: "that" must not match "thatch".
+const REFERENTIAL: &[&str] = &[
+    "the same", "that", "those", "it", "them", "also", "now do", "again", "likewise",
+];
+
+/// Does this prompt point backwards? Only meaningful when nothing in it names code — a
+/// sentence can say "fix that in PaymentService" and be perfectly anchored.
+pub fn is_referential(text: &str) -> bool {
+    let w = words(text);
+    REFERENTIAL.iter().any(|m| matches(m, &w))
+}
+
 /// Classify. Deterministic, allocation-light, and total: every input produces an answer, and
 /// "no answer" is one of them.
 pub fn classify(text: &str) -> IntentMatch {
@@ -217,5 +237,71 @@ pub fn classify(text: &str) -> IntentMatch {
             confident: true,
         },
         None => unknown,
+    }
+}
+
+/// Classification for a turn that may be referring to the previous one.
+///
+/// `anchored` is whether stage 2 found anything in the text to anchor on. This is deliberately
+/// *not* decided here: a verb table has no index and cannot know whether `PaymentService`
+/// exists, and guessing would put a classifier in the one place §3 keeps free of them.
+///
+/// The rule from §14.1: an unanchored prompt carrying a referential marker is `Referential`.
+/// With carried seeds it uses them; without, the honest answer is `Unknown` — an empty-anchored
+/// prompt with no carried seeds is a case where Nexus genuinely does not know, and saying so
+/// beats inventing seeds.
+pub fn classify_turn(text: &str, anchored: bool, has_carried_seeds: bool) -> IntentMatch {
+    let base = classify(text);
+    if anchored || !is_referential(text) {
+        return base;
+    }
+    if has_carried_seeds {
+        return IntentMatch {
+            intent: Intent::Referential,
+            signal: Some("refers to the previous turn".into()),
+            confident: true,
+        };
+    }
+    IntentMatch {
+        intent: Intent::Unknown,
+        signal: None,
+        confident: false,
+    }
+}
+
+#[cfg(test)]
+mod referential_tests {
+    use super::*;
+
+    #[test]
+    fn an_unanchored_referential_prompt_with_carried_seeds_is_referential() {
+        let got = classify_turn("now do the same for orders", false, true);
+        assert_eq!(got.intent, Intent::Referential, "{got:?}");
+        assert!(got.confident);
+    }
+
+    #[test]
+    fn the_same_prompt_without_carried_seeds_says_it_does_not_know() {
+        // §14.1: an empty-anchored prompt with no carried seeds is a case where Nexus
+        // genuinely does not know, and saying so beats inventing seeds.
+        let got = classify_turn("now do the same for orders", false, false);
+        assert_eq!(got.intent, Intent::Unknown, "{got:?}");
+        assert!(!got.confident);
+    }
+
+    #[test]
+    fn an_anchored_prompt_keeps_its_verb_even_when_it_says_that() {
+        // "fix that in PaymentService" is anchored; treating it as referential would discard
+        // the anchor the developer actually gave.
+        let got = classify_turn("fix that in PaymentService", true, true);
+        assert_eq!(got.intent, Intent::Debug, "{got:?}");
+    }
+
+    #[test]
+    fn referential_markers_are_whole_words() {
+        assert!(is_referential("do that now"));
+        assert!(!is_referential("the thatch is broken"));
+        assert!(is_referential("now do the same"));
+        assert!(!is_referential("rename the sameness helper"));
     }
 }

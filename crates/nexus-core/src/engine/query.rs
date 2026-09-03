@@ -260,10 +260,26 @@ impl Engine {
         let loaded = crate::policy::load(&self.root.join(crate::NEXUS_DIR).join("policy.toml"));
         let w = loaded.weights;
 
-        // 1 — intent.
-        let intent = crate::context::classify(&req.text);
-        // 2 — seeds.
-        let seeded = seeds::resolve(&self.store, self.project_id, req, intent.intent)?;
+        // 1 — intent. `--recent` is read here and nowhere else: §14.1 makes the previous
+        // message an input to classification, never something stored.
+        let for_intent = match &req.recent {
+            Some(prev) => format!("{prev}\n{}", req.text),
+            None => req.text.clone(),
+        };
+        // 2 — seeds. Resolved before the intent is final, because whether a turn is
+        // referential depends on whether anything in it anchored — which only the index can
+        // say, and which a verb table must not guess at.
+        let provisional = crate::context::classify(&for_intent);
+        let seeded = seeds::resolve(&self.store, self.project_id, req, provisional.intent)?;
+        let anchored = seeded
+            .seeds
+            .iter()
+            .any(|s| s.source != crate::context::SeedSource::Carried);
+        let intent = crate::context::intent::classify_turn(
+            &for_intent,
+            anchored,
+            !req.carry_seeds.is_empty(),
+        );
         // 3 — expand.
         let reached = expand::run(&self.store, self.project_id, &seeded.seeds, intent.intent)?;
         // 4 — signals, once.

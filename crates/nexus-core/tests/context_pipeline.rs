@@ -353,3 +353,44 @@ fn an_identical_question_is_served_from_cache_and_an_edit_is_a_miss() {
     );
     assert_eq!(after_edit.purpose, req.purpose);
 }
+
+#[test]
+fn a_referential_turn_uses_carried_seeds_and_never_stores_the_previous_message() {
+    // §14.1: the harness has the conversation, so it supplies what Nexus cannot know. Nexus
+    // stays a pure function of (request, index, memory) — which is what keeps a golden
+    // package meaningful and keeps this off the road to a daemon.
+    let (_root, engine) = scanned("referential");
+    let mut req = request("now do the same for the other one");
+    req.carry_seeds = vec!["mn.pay.PaymentService#pay".into()];
+    req.recent = Some("refactor mn.pay.PaymentService#pay".into());
+
+    let pkg = engine.context(&req).expect("package");
+    assert!(
+        pkg.items.iter().any(|i| i.text.contains("PaymentService")),
+        "a carried seed anchors the turn: {:?}",
+        pkg.items.iter().map(|i| &i.text).collect::<Vec<_>>()
+    );
+    // The previous message reached the verb table and nothing else.
+    assert!(
+        engine.facts(None).expect("facts").is_empty(),
+        "--recent must never reach the store"
+    );
+}
+
+#[test]
+fn an_unanchored_turn_with_nothing_carried_reports_that_it_does_not_know() {
+    let (_root, engine) = scanned("unanchored");
+    let pkg = engine
+        .context(&request("now do the same for the other one"))
+        .expect("package");
+    assert_eq!(
+        pkg.intent.as_ref().map(|i| i.intent),
+        Some(Intent::Unknown),
+        "inventing seeds would be worse than saying so: {:?}",
+        pkg.intent
+    );
+    assert!(pkg
+        .notes
+        .iter()
+        .any(|n| n.contains("intent was not determined")));
+}

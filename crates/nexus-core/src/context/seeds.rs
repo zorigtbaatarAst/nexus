@@ -31,6 +31,9 @@ pub enum SeedSource {
     TextMatch,
     /// The text names a module some fact is about.
     FactSubject,
+    /// Carried forward by the harness from the previous turn (§14.1). Last in priority: a
+    /// seed this prompt names is better evidence than one the last prompt named.
+    Carried,
 }
 
 impl SeedSource {
@@ -42,6 +45,7 @@ impl SeedSource {
             SeedSource::NameMatch => "name match",
             SeedSource::TextMatch => "text match",
             SeedSource::FactSubject => "fact subject",
+            SeedSource::Carried => "carried from the previous turn",
         }
     }
 }
@@ -180,6 +184,18 @@ pub fn resolve(
                     );
                 }
             }
+        }
+    }
+
+    // Carried seeds last, and only as a fallback source: they are what the harness
+    // remembered, not what this prompt said.
+    for fqn in &req.carry_seeds {
+        for s in store.find_symbols(project_id, fqn, 25)? {
+            offer(
+                s,
+                SeedSource::Carried,
+                format!("carried from the previous turn: {fqn}"),
+            );
         }
     }
 

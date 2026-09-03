@@ -70,6 +70,14 @@ pub struct TaskRequest {
     pub symbols: Vec<String>,
     pub budget_tokens: usize,
     pub purpose: Purpose,
+    /// Anchors from the previous package in this conversation, supplied by the harness
+    /// (§14.1). They enter stage 2 as a source below `Explicit`, because a seed the caller
+    /// carried forward is weaker evidence than one this prompt actually names.
+    pub carry_seeds: Vec<String>,
+    /// The previous user message. Reaches the verb table and **nothing else** — never the
+    /// store, never `facts`, never an index. Nexus stays a pure function of (request, index,
+    /// memory), which is what keeps a golden package meaningful.
+    pub recent: Option<String>,
 }
 
 impl TaskRequest {
@@ -81,6 +89,8 @@ impl TaskRequest {
             symbols: Vec::new(),
             budget_tokens,
             purpose: Purpose::Session,
+            carry_seeds: Vec::new(),
+            recent: None,
         }
     }
 }

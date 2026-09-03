@@ -106,6 +106,13 @@ pub struct ContextArgs {
     pub symbols: Vec<String>,
     /// Token ceiling. The package is selected to fit, never truncated to fit.
     pub budget: Option<usize>,
+    /// Anchors from the previous package in this conversation. You have the conversation;
+    /// Nexus does not and will not.
+    #[serde(default)]
+    pub carry_seeds: Vec<String>,
+    /// The previous user message, for reading intent from a prompt like "now do the same for
+    /// orders". Never stored and never indexed.
+    pub recent: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -556,6 +563,8 @@ impl Nexus {
             symbols: a.symbols,
             budget_tokens: a.budget.unwrap_or(nexus_core::context::TASK_BUDGET_TOKENS),
             purpose: nexus_core::Purpose::Task,
+            carry_seeds: a.carry_seeds,
+            recent: a.recent,
         };
         match self
             .with_engine(move |e| e.context(&request).map_err(|e| e.to_string()))

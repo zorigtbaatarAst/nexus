@@ -139,6 +139,14 @@ enum Command {
         /// Counts only: considered, included, tokens
         #[arg(long)]
         stats: bool,
+        /// Anchors from the previous package in this conversation. The harness has the
+        /// conversation; Nexus does not and will not.
+        #[arg(long, value_name = "FQN", value_delimiter = ',')]
+        carry_seeds: Vec<String>,
+        /// The previous user message. Reaches intent classification and nothing else — it is
+        /// never stored, never indexed, and never reaches the database.
+        #[arg(long, value_name = "TEXT")]
+        recent: Option<String>,
     },
     /// Record something learned about this project, so the next session starts with it
     Fact {
@@ -598,6 +606,8 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             symbol,
             explain,
             stats,
+            carry_seeds,
+            recent,
         } => {
             // Exactly one shape per invocation. Defaulting to one of them would make a bare
             // `nexus context` mean something different depending on which flags exist.
@@ -619,6 +629,8 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                     symbols: symbol.clone(),
                     budget_tokens: budget.unwrap_or(nexus_core::context::TASK_BUDGET_TOKENS),
                     purpose: nexus_core::Purpose::Task,
+                    carry_seeds: carry_seeds.clone(),
+                    recent: recent.clone(),
                 },
             };
             let engine = open(&root)?;
