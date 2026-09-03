@@ -19,6 +19,10 @@ pub fn default_registry() -> Registry {
     registry
         .register(Box::new(nexus_lang_java::JavaAnalyzer::new()))
         .register(Box::new(nexus_lang_ts::TypeScriptAnalyzer::new()))
+        // JavaScript, by the same parser. Without it `nexus scan` on a 141-file Express
+        // project indexed 0 symbols and 0 edges, and said nothing about why — an empty
+        // index reads as "no dependencies found", which is worse than a shallow one.
+        .register(Box::new(nexus_lang_ts::JavaScriptAnalyzer::new()))
         // The schema is indexed as the contract both sides are generated from, so "no
         // resolver serves this" means the field is absent from the schema — not merely that
         // no annotation shape this analyzer knows was found.
@@ -39,7 +43,17 @@ mod tests {
     fn the_pack_is_not_empty_and_claims_the_languages_it_says_it_does() {
         let r = default_registry();
         assert!(!r.is_empty());
-        for path in ["A.java", "a.ts", "schema.graphqls", "lib.rs", "app.py"] {
+        for path in [
+            "A.java",
+            "a.ts",
+            "schema.graphqls",
+            "lib.rs",
+            "app.py",
+            "a.js",
+            "a.jsx",
+            "a.mjs",
+            "a.cjs",
+        ] {
             assert!(r.for_path(path).is_some(), "{path} is unclaimed");
         }
     }
