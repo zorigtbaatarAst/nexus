@@ -1388,6 +1388,64 @@ impl Store {
     ///
     /// Detectors get a snapshot rather than the store: it keeps them pure and unit-testable,
     /// and it keeps SQL in this crate where boundary rule 3 says it belongs.
+    /// Symbols for a scope: everything, or only the named files and one hop around them.
+    pub fn symbol_facts_for(
+        &self,
+        project_id: ProjectId,
+        paths: Option<&[String]>,
+    ) -> Result<Vec<SymbolFactRow>> {
+        match paths {
+            Some(p) => self.symbol_facts_in(project_id, p),
+            None => self.symbol_facts(project_id),
+        }
+    }
+
+    /// Symbols in the named files, plus every symbol one edge away from them.
+    ///
+    /// The neighbours matter: a rule that looks up a symbol an edge points at would
+    /// otherwise see a hole where the index has a row, and "not in this snapshot" would be
+    /// indistinguishable from "not in the project" — which is how a scoped run invents a
+    /// missing dependency. One hop, and the context is marked partial so no rule reads
+    /// absence past it as evidence.
+    pub fn symbol_facts_in(
+        &self,
+        project_id: ProjectId,
+        paths: &[String],
+    ) -> Result<Vec<SymbolFactRow>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let list = placeholders(paths.len());
+        let sql = format!(
+            "SELECT DISTINCT s.fqn, s.name, s.kind, f.path, s.start_line, s.visibility,
+                    p.fqn, s.annotations_json
+             FROM live_symbols s
+             JOIN files f ON f.id = s.file_id
+             LEFT JOIN symbols p ON p.id = s.parent_id
+             WHERE s.project_id = ?
+               AND (f.path IN ({list})
+                    OR s.id IN (SELECT e.dst_symbol_id FROM symbol_edges e
+                                JOIN live_symbols src ON src.id = e.src_symbol_id
+                                JOIN files sf ON sf.id = src.file_id
+                                WHERE sf.path IN ({list}))
+                    OR s.id IN (SELECT e.src_symbol_id FROM symbol_edges e
+                                JOIN live_symbols dst ON dst.id = e.dst_symbol_id
+                                JOIN files df ON df.id = dst.file_id
+                                WHERE df.path IN ({list})))"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut args: Vec<&dyn rusqlite::ToSql> = vec![&project_id];
+        for _ in 0..3 {
+            for p in paths {
+                args.push(p);
+            }
+        }
+        let rows = stmt
+            .query_map(args.as_slice(), map_symbol_fact)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     pub fn symbol_facts(&self, project_id: ProjectId) -> Result<Vec<SymbolFactRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT s.fqn, s.name, s.kind, f.path, s.start_line, s.visibility,
@@ -1398,18 +1456,7 @@ impl Store {
              WHERE s.project_id = ?1",
         )?;
         let rows = stmt
-            .query_map(params![project_id], |r| {
-                Ok(SymbolFactRow {
-                    fqn: r.get(0)?,
-                    name: r.get(1)?,
-                    kind: r.get(2)?,
-                    file: r.get(3)?,
-                    line: r.get::<_, i64>(4)? as u32,
-                    visibility: r.get(5)?,
-                    parent_fqn: r.get(6)?,
-                    annotations_json: r.get(7)?,
-                })
-            })?
+            .query_map(params![project_id], map_symbol_fact)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -2673,6 +2720,25 @@ fn simple_key(fqn: &str) -> String {
         Some(m) => format!("{simple_type}#{}", m.split('(').next().unwrap_or(m)),
         None => simple_type.to_string(),
     }
+}
+
+/// `?2, ?3, ...` for an `IN` list. Bound parameters rather than interpolation: a path from a
+/// project is data, and data does not belong in SQL text.
+fn placeholders(n: usize) -> String {
+    (0..n).map(|_| "?").collect::<Vec<_>>().join(",")
+}
+
+fn map_symbol_fact(r: &rusqlite::Row<'_>) -> rusqlite::Result<SymbolFactRow> {
+    Ok(SymbolFactRow {
+        fqn: r.get(0)?,
+        name: r.get(1)?,
+        kind: r.get(2)?,
+        file: r.get(3)?,
+        line: r.get::<_, i64>(4)? as u32,
+        visibility: r.get(5)?,
+        parent_fqn: r.get(6)?,
+        annotations_json: r.get(7)?,
+    })
 }
 
 pub fn now() -> String {

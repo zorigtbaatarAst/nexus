@@ -171,3 +171,45 @@ fn a_verification_records_an_attempt_against_every_finding_it_could_bear_on() {
     );
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_scoped_run_loads_less_than_a_full_one_and_says_the_graph_is_partial() {
+    // Roadmap 5.4, and P7: ProjectContext materialised everything and then narrowed, which
+    // is fine at this size and wrong at 500 KLOC. The saving is real only if the snapshot is
+    // smaller; the honesty is required because a rule that traverses can no longer see
+    // everything.
+    let root = std::env::temp_dir().join(format!("nexus-scoped-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    for (path, body) in [
+        (
+            "src/a.rs",
+            "pub fn a() { b::b(); }\npub mod b { pub fn b() {} }\n",
+        ),
+        ("src/c.rs", "pub fn c() {}\npub fn d() {}\npub fn e() {}\n"),
+    ] {
+        let p = root.join(path);
+        fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+        fs::write(p, body).expect("write");
+    }
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname=\"s\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    )
+    .expect("write");
+    git(&root, &["init", "-q", "-b", "main"]);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "x"]);
+    let (mut e, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
+    e.scan().expect("scan");
+
+    let full = e.context_symbol_count(None).expect("full");
+    let scoped = e
+        .context_symbol_count(Some(vec!["src/c.rs".to_string()]))
+        .expect("scoped");
+    assert!(
+        scoped < full,
+        "a scoped run must load less: {scoped} of {full}"
+    );
+    assert!(scoped > 0, "and still load what was asked for");
+    let _ = fs::remove_dir_all(&root);
+}

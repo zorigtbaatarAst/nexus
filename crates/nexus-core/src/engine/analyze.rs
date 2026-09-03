@@ -36,9 +36,28 @@ impl Engine {
             .ok_or(EngineError::NoBaseline)?;
         let (scan_uid, scan_id) = (baseline.scan_uid.clone(), baseline.scan_id);
 
+        // What this run is allowed to load. `Everything` and `Changed` need the whole graph —
+        // a change's blast radius is not bounded by the files that changed — so only the
+        // explicitly narrow scopes narrow the snapshot (roadmap 5.4).
+        let scope_paths: Option<Vec<String>> = match &scope {
+            Scope::Files(paths) => Some(paths.clone()),
+            Scope::Symbols(fqns) => {
+                let mut paths: Vec<String> = Vec::new();
+                for fqn in fqns {
+                    for m in self.store.find_symbols(self.project_id, fqn, 25)? {
+                        if !paths.contains(&m.file_path) {
+                            paths.push(m.file_path);
+                        }
+                    }
+                }
+                Some(paths)
+            }
+            Scope::Everything | Scope::Changed { .. } => None,
+        };
+
         let symbols: Vec<SymbolFacts> = self
             .store
-            .symbol_facts(self.project_id)?
+            .symbol_facts_for(self.project_id, scope_paths.as_deref())?
             .into_iter()
             .map(|r| SymbolFacts {
                 fqn: r.fqn,
@@ -110,7 +129,7 @@ impl Engine {
         // Loaded once and handed over: a capability that re-derived the profile would be
         // re-reading build files the platform already read.
         let profile = self.load_profile().ok().flatten();
-        let ctx = ProjectContext::new(&self.root, &symbols, &edges, &files)
+        let mut ctx = ProjectContext::new(&self.root, &symbols, &edges, &files)
             .with_changes(&changed, commit.as_deref())
             .with_profile(profile.as_ref())
             .with_coverage(
@@ -119,6 +138,10 @@ impl Engine {
                     .into_iter()
                     .collect(),
             );
+        if scope_paths.is_some() {
+            // Said out loud, so a rule that traverses can decline to assert absence.
+            ctx = ctx.partial();
+        }
 
         let mut candidates = capability
             .analyze(&ctx, &scope)

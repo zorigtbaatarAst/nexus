@@ -91,6 +91,13 @@ pub struct ProjectContext<'a> {
     /// Indexed lookup, built once: a capability that scans the symbol list per edge turns a
     /// linear pass into a quadratic one, and the graph is the biggest thing here.
     pub by_fqn: BTreeMap<&'a str, &'a SymbolFacts>,
+    /// True when this snapshot holds only part of the graph (roadmap 5.4).
+    ///
+    /// A scoped run loads the named files and one hop around them, which is the saving. It
+    /// also means a rule that traverses further is looking at a hole, and **a rule must not
+    /// read absence past a hole as evidence** — "no test reaches this" and "no test reaches
+    /// this within what I was given" are different claims, and only one of them is a finding.
+    pub partial_graph: bool,
     /// Symbols a test run actually reached (roadmap 4.5).
     ///
     /// Empty until something has been verified, and empty is *not* the same as uncovered — a
@@ -126,8 +133,15 @@ impl<'a> ProjectContext<'a> {
             commit: None,
             profile: None,
             by_fqn,
+            partial_graph: false,
             covered: Default::default(),
         }
+    }
+
+    /// Mark this snapshot as holding only part of the graph.
+    pub fn partial(mut self) -> Self {
+        self.partial_graph = true;
+        self
     }
 
     /// Attach what a real run proved. Called by the engine, which is the only thing that has

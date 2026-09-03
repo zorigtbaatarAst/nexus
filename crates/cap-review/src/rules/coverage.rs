@@ -44,6 +44,14 @@ impl Rule for ChangedWithoutTest {
             scoped.symbols.iter().map(|s| s.fqn.as_str()).collect();
         let mut out = Vec::new();
 
+        // A scoped snapshot holds the named files and one hop (roadmap 5.4). This rule
+        // traverses four, so past the first hop it is looking at a hole — and "no test
+        // reaches this" would then mean "no test reaches this within what I was given",
+        // which is not a finding. Absence is only evidence when you can see everything.
+        if ctx.partial_graph {
+            return out;
+        }
+
         for changed in ctx.changed {
             // A deletion has nothing left to test, and an addition of a test is not an
             // untested change.

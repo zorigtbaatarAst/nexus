@@ -701,6 +701,14 @@ impl Engine {
     pub fn verification_attempts(&self) -> Result<i64> {
         Ok(self.store.verification_attempt_count(self.project_id)?)
     }
+    /// How many symbols a snapshot for this scope would hold. Exists so the saving in
+    /// roadmap 5.4 is measurable rather than asserted.
+    pub fn context_symbol_count(&self, paths: Option<Vec<String>>) -> Result<usize> {
+        Ok(self
+            .store
+            .symbol_facts_for(self.project_id, paths.as_deref())?
+            .len())
+    }
     /// How many verification runs this project has recorded.
     pub fn test_run_count(&self) -> Result<i64> {
         Ok(self.store.test_run_count(self.project_id)?)
