@@ -820,15 +820,20 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                     eprintln!("nexus context: one of --session or --task is required");
                     return Ok(exit::USAGE);
                 }
-                (true, None) => nexus_core::TaskRequest::session(
-                    budget.unwrap_or(nexus_core::context::SESSION_BUDGET_TOKENS),
-                ),
+                (true, None) => {
+                    let mut r = nexus_core::TaskRequest::session(
+                        budget.unwrap_or(nexus_core::context::SESSION_BUDGET_TOKENS),
+                    );
+                    r.explain = *explain;
+                    r
+                }
                 (false, Some(text)) => nexus_core::TaskRequest {
                     text: text.clone(),
                     files: file.clone(),
                     symbols: symbol.clone(),
                     budget_tokens: budget.unwrap_or(nexus_core::context::TASK_BUDGET_TOKENS),
                     purpose: nexus_core::Purpose::Task,
+                    explain: *explain,
                     carry_seeds: carry_seeds.clone(),
                     recent: recent.clone(),
                 },

@@ -60,6 +60,14 @@ fn session(engine: &Engine) -> nexus_core::ContextPackage {
         .expect("context")
 }
 
+/// The same package with its reasoning attached. Off by default because an agent pays for
+/// every token of it; a test that asserts on the ledger has to ask for it like a human would.
+fn explained(engine: &Engine) -> nexus_core::ContextPackage {
+    let mut req = TaskRequest::session(SESSION_BUDGET_TOKENS);
+    req.explain = true;
+    engine.context(&req).expect("context")
+}
+
 fn anchored_on_pay() -> Vec<CodeRef> {
     vec![CodeRef {
         file: SERVICE.into(),
@@ -116,7 +124,7 @@ fn an_anchored_fact_is_included_and_an_unanchored_one_is_excluded_with_a_reason(
         })
         .expect("unanchored");
 
-    let pkg = session(&engine);
+    let pkg = explained(&engine);
     let facts: Vec<_> = pkg
         .items
         .iter()
@@ -164,11 +172,20 @@ fn the_package_stays_within_its_budget_and_accounts_for_every_candidate() {
             .expect("fact");
     }
 
-    let pkg = session(&engine);
+    // The ceiling applies to what the agent is handed, and the agent is not handed the
+    // ledger. Asking for the reasoning is a human's deliberate purchase, so it is measured
+    // on its own package below rather than billed against the budget.
+    let shipped = session(&engine);
     assert!(
-        pkg.tokens_estimated <= SESSION_BUDGET_TOKENS,
+        shipped.tokens_estimated <= SESSION_BUDGET_TOKENS,
         "{} tokens exceeds the {SESSION_BUDGET_TOKENS} ceiling",
-        pkg.tokens_estimated
+        shipped.tokens_estimated
+    );
+
+    let pkg = explained(&engine);
+    assert!(
+        pkg.tokens_estimated > shipped.tokens_estimated,
+        "explaining 200 refusals is not free, and the number has to say so"
     );
     assert!(pkg.items_included > 0, "the budget bought something");
     assert!(

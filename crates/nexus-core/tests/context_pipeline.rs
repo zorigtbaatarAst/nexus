@@ -4,7 +4,9 @@
 //! wrong is the match between what the store returns and what the stage believes it returns.
 
 use nexus_core::context::{expand, Intent, SeedSource, TaskRequest};
+use nexus_core::findings::CodeRef;
 use nexus_core::Engine;
+use nexus_core::FactInput;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -53,6 +55,15 @@ fn scanned(name: &str) -> (PathBuf, Engine) {
     let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     engine.scan().expect("scan");
     (root, engine)
+}
+
+/// A request that also asks for the reasoning. The ledger and the score terms are
+/// explanation rather than content and are off by default, so a test that asserts on them
+/// has to pay for them like any other caller.
+fn explaining(text: &str) -> TaskRequest {
+    let mut r = request(text);
+    r.explain = true;
+    r
 }
 
 fn request(text: &str) -> TaskRequest {
@@ -303,7 +314,7 @@ fn churn_is_normalised_against_the_busiest_path() {
 #[test]
 fn a_task_package_is_ranked_anchored_and_fully_accounted_for() {
     let (_root, engine) = scanned("taskpkg");
-    let mut req = request("refactor PaymentService");
+    let mut req = explaining("refactor PaymentService");
     req.budget_tokens = 4000;
 
     let pkg = engine.context(&req).expect("package");
@@ -340,7 +351,7 @@ fn a_task_package_carries_every_score_term_it_used() {
     // §8 must be able to answer "why is this here". A total with no decomposition cannot.
     let (_root, engine) = scanned("terms");
     let pkg = engine
-        .context(&request("refactor PaymentService"))
+        .context(&explaining("refactor PaymentService"))
         .expect("package");
     let seed = pkg
         .items
@@ -560,7 +571,7 @@ fn both_retrieval_paths_agree_because_they_call_one_formula() {
     // The Context Engine path, seeded on the payment method: the same fact still leads, and
     // the unrelated module's fact is not in the package at all.
     let pkg = engine
-        .context(&request("refactor mn.pay.PaymentService#pay"))
+        .context(&explaining("refactor mn.pay.PaymentService#pay"))
         .expect("package");
     let fact_labels: Vec<&str> = pkg
         .ledger
@@ -583,7 +594,7 @@ fn both_retrieval_paths_agree_because_they_call_one_formula() {
 fn a_fact_key_outside_the_namespace_list_is_refused() {
     let (_root, mut engine) = scanned("namespace");
     let err = engine
-        .record_fact(nexus_core::FactInput {
+        .record_fact(FactInput {
             key: "task.did-a-thing".into(),
             scope: "project".into(),
             subject: None,
@@ -594,4 +605,100 @@ fn a_fact_key_outside_the_namespace_list_is_refused() {
         })
         .expect_err("refused");
     assert!(format!("{err}").contains("transcript"), "{err}");
+}
+
+#[test]
+fn the_reported_token_count_is_what_the_agent_actually_receives() {
+    // Measured, not asserted: `tokens_estimated` once counted the text of the included items
+    // and nothing else, reporting 253 tokens for a package that put 11,113 on the wire. A
+    // budget that measures a twentieth of the payload is not a budget.
+    let (_root, engine) = scanned("wirecost");
+    let pkg = engine
+        .context(&request("refactor PaymentService"))
+        .expect("package");
+    let wire = serde_json::to_string(&pkg).expect("serialize");
+    let actual = wire.len() / 4; // deliberately generous bytes-per-token
+    assert!(
+        pkg.tokens_estimated >= actual,
+        "reported {} but the serialized package is at least {actual} tokens",
+        pkg.tokens_estimated
+    );
+    assert!(
+        pkg.tokens_estimated <= pkg.budget_tokens,
+        "{} exceeds the {} budget",
+        pkg.tokens_estimated,
+        pkg.budget_tokens
+    );
+}
+
+#[test]
+fn explanation_is_off_by_default_and_costs_when_asked_for() {
+    // §8 requires the package to be *able* to say why. It does not require paying for that
+    // on every request — the ledger and the score terms were 5,759 of 11,113 tokens, and the
+    // ledger grows with candidates considered, the one number the budget never capped.
+    let (_root, engine) = scanned("explaincost");
+    let plain = engine
+        .context(&request("refactor PaymentService"))
+        .expect("plain");
+    let full = engine
+        .context(&explaining("refactor PaymentService"))
+        .expect("explained");
+
+    assert!(plain.ledger.rows.is_empty(), "no reasons unless asked");
+    assert!(
+        plain.items.iter().all(|i| i.terms == Default::default()),
+        "no score terms unless asked"
+    );
+    assert!(!full.ledger.rows.is_empty(), "and the reasons on request");
+    assert_eq!(
+        plain.items_considered, full.items_considered,
+        "the count of candidates survives even when their reasons do not"
+    );
+    assert!(
+        plain.tokens_estimated < full.tokens_estimated,
+        "the cheap package must actually be cheaper: {} vs {}",
+        plain.tokens_estimated,
+        full.tokens_estimated
+    );
+}
+
+#[test]
+fn recording_a_fact_invalidates_the_cached_package() {
+    // The cache key listed the index and the tree but not memory, so the first package was
+    // served forever: 140 facts sat in the database while every request returned an answer
+    // computed before any of them existed. That is the exact opposite of the promise that an
+    // expensive conclusion is reached once and reused.
+    let (_root, mut engine) = scanned("cachememory");
+    let before = engine
+        .context(&request("refactor mn.pay.PaymentService#pay"))
+        .expect("first");
+
+    engine
+        .record_fact(FactInput {
+            key: "invariant.pay.settles-once".into(),
+            scope: "symbol".into(),
+            subject: Some("mn.pay.PaymentService#pay".into()),
+            claim: "a payment settles exactly once".into(),
+            source: "human".into(),
+            evidence: vec![CodeRef {
+                file: SERVICE.into(),
+                line: 3,
+                note: String::new(),
+            }],
+            confidence: 1.0,
+        })
+        .expect("record");
+
+    let after = engine
+        .context(&request("refactor mn.pay.PaymentService#pay"))
+        .expect("second");
+    assert!(
+        after
+            .items
+            .iter()
+            .any(|i| i.text.contains("settles exactly once")),
+        "the fact recorded a moment ago must reach the very next package: {:?}",
+        after.items.iter().map(|i| &i.text).collect::<Vec<_>>()
+    );
+    assert!(after.items_considered > before.items_considered);
 }

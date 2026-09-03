@@ -70,6 +70,15 @@ pub struct TaskRequest {
     pub symbols: Vec<String>,
     pub budget_tokens: usize,
     pub purpose: Purpose,
+    /// Ship the reasoning as well as the answer.
+    ///
+    /// Off by default, and that is a cost decision measured rather than guessed: on this
+    /// repository the inclusion ledger and the per-item score terms were **5,759 of a
+    /// package's 11,113 tokens**, against 244 tokens of actual content. The explanation cost
+    /// twenty times the thing it explained, and it grew with candidates considered — the one
+    /// number the budget never capped. §8 requires the package to be *able* to answer why;
+    /// it does not require paying for that answer on every request.
+    pub explain: bool,
     /// Anchors from the previous package in this conversation, supplied by the harness
     /// (§14.1). They enter stage 2 as a source below `Explicit`, because a seed the caller
     /// carried forward is weaker evidence than one this prompt actually names.
@@ -89,6 +98,7 @@ impl TaskRequest {
             symbols: Vec::new(),
             budget_tokens,
             purpose: Purpose::Session,
+            explain: false,
             carry_seeds: Vec::new(),
             recent: None,
         }
@@ -147,6 +157,9 @@ pub struct ContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<String>,
     pub score: f64,
+    /// Nine floats per item, and explanation rather than content — carried only under
+    /// `explain`. Serialised for every item they were 799 tokens of a 244-token package.
+    #[serde(default, skip_serializing_if = "ScoreTerms::is_zero")]
     pub terms: ScoreTerms,
     /// One clause, human-readable, saying why this is here.
     pub why: String,
@@ -181,6 +194,13 @@ pub struct InclusionLedger {
     pub rows: Vec<LedgerRow>,
 }
 
+impl ScoreTerms {
+    /// True when nothing was recorded — the shape a package takes without `explain`.
+    pub fn is_zero(&self) -> bool {
+        *self == ScoreTerms::default()
+    }
+}
+
 impl InclusionLedger {
     pub fn included(&mut self, kind: ItemKind, label: String, score: f64, tokens: usize) {
         self.rows.push(LedgerRow {
@@ -208,6 +228,9 @@ impl InclusionLedger {
             score,
             tokens,
         });
+    }
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
     }
     pub fn count(&self, decision: Decision) -> usize {
         self.rows.iter().filter(|r| r.decision == decision).count()
@@ -237,6 +260,9 @@ pub struct ContextPackage {
     pub purpose: Purpose,
     pub project: ProjectSummary,
     pub items: Vec<ContextItem>,
+    /// Empty unless `explain` was asked for. `items_considered` still reports how many
+    /// candidates there were, so the count survives even when the reasons do not.
+    #[serde(default, skip_serializing_if = "InclusionLedger::is_empty")]
     pub ledger: InclusionLedger,
     pub basis: PackageBasis,
     pub budget_tokens: usize,
@@ -275,19 +301,44 @@ pub(crate) struct Candidate {
 }
 
 impl Candidate {
+    /// What this costs on the wire: the JSON object the agent actually receives, keys and
+    /// all — measured, not estimated from the text.
+    ///
+    /// `why` and the anchor ship with every item and the field names are not free. Counting
+    /// the text alone is why an 800-token session package delivered 2141 tokens: the budget
+    /// was capping about a third of what it was supposed to cap. Measured against the
+    /// unexplained shape, because the ledger and the score terms are a human's purchase and
+    /// are not billed to the agent's budget.
     pub(crate) fn tokens(&self) -> usize {
-        estimate_tokens(&self.text)
+        let probe = ContextItem {
+            kind: self.kind,
+            anchor: self.anchor.clone().unwrap_or(CodeRef {
+                file: String::new(),
+                line: 0,
+                note: String::new(),
+            }),
+            window: None,
+            score: self.score,
+            terms: ScoreTerms::default(),
+            why: self.why.clone(),
+            text: self.text.clone(),
+            tokens: 0,
+        };
+        // +1 for the separating comma and for `tokens` holding a real number rather than 0.
+        serde_json::to_string(&probe)
+            .map(|s| estimate_tokens(&s))
+            .unwrap_or(0)
+            + 1
     }
-    /// Score per token. §7 sorts by this, not by raw score: a 40-token fact scoring 0.6 beats
-    /// a 900-token class scoring 0.9, and that is where the token optimisation actually
-    /// happens.
-    pub(crate) fn density(&self) -> f64 {
-        let t = self.tokens();
-        if t == 0 {
-            return f64::NEG_INFINITY;
-        }
-        self.score / t as f64
+}
+
+/// Score per token. §7 sorts by this, not by raw score: a 40-token fact scoring 0.6 beats a
+/// 900-token class scoring 0.9, and that is where the token optimisation actually happens.
+fn density(score: f64, tokens: usize) -> f64 {
+    if tokens == 0 {
+        return f64::NEG_INFINITY;
     }
+    score / tokens as f64
 }
 
 /// How stage 6 chooses.
@@ -331,10 +382,18 @@ pub(crate) fn fill(
             max_per_component,
         } => (min_score_x1000 as f64 / 1000.0, max_per_component),
     };
-    let mut ranked: Vec<(usize, Candidate)> = candidates.into_iter().enumerate().collect();
+    // Costed once, not once per comparison: the measurement serialises the item, and paying
+    // for that inside a sort comparator would make ranking quadratic in serialisations.
+    let mut ranked: Vec<(usize, usize, Candidate)> = candidates
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| (i, c.tokens(), c))
+        .collect();
     if selection != Selection::Ordered {
-        ranked.sort_by(|(ia, a), (ib, b)| {
-            b.density().total_cmp(&a.density()).then_with(|| ia.cmp(ib))
+        ranked.sort_by(|(ia, ta, a), (ib, tb, b)| {
+            density(b.score, *tb)
+                .total_cmp(&density(a.score, *ta))
+                .then_with(|| ia.cmp(ib))
         });
     }
 
@@ -342,8 +401,7 @@ pub(crate) fn fill(
     let mut used = spent;
     let mut per_component: BTreeMap<String, usize> = BTreeMap::new();
 
-    for (_, c) in ranked {
-        let tokens = c.tokens();
+    for (_, tokens, c) in ranked {
         let Some(anchor) = c.anchor else {
             // §12: no item without a `file:line` anchor. Recorded, never dropped quietly.
             ledger.excluded(

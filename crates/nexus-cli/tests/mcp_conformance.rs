@@ -429,8 +429,15 @@ fn the_context_tool_returns_a_ranked_package_over_mcp() {
         "the package says how it selected: {pkg}"
     );
     assert!(
-        pkg["items_considered"].is_number() && pkg["ledger"]["rows"].is_array(),
+        pkg["items_considered"].is_number(),
         "the package accounts for itself: {pkg}"
+    );
+    // An agent pays for every token it is handed, and the inclusion ledger — one row per
+    // candidate considered — was four fifths of the payload while explaining nothing the
+    // agent could act on. It stays available behind `nexus context --explain`, for a human.
+    assert!(
+        pkg.get("ledger").is_none(),
+        "the reasoning is not billed to the agent: {pkg}"
     );
     assert!(
         pkg["intent"]["intent"].is_string(),

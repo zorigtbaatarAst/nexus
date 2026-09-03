@@ -564,6 +564,9 @@ impl Nexus {
             symbols: a.symbols,
             budget_tokens: a.budget.unwrap_or(nexus_core::context::TASK_BUDGET_TOKENS),
             purpose: nexus_core::Purpose::Task,
+            // An agent pays for every token of this. The reasoning is available on request
+            // through the CLI's --explain; it is not shipped by default.
+            explain: false,
             carry_seeds: a.carry_seeds,
             recent: a.recent,
         };
