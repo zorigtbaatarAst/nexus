@@ -253,7 +253,10 @@ One line in a Java method puts **six React components** at risk, each shown with
 that reaches it. Measured on a Java monorepo: 880 files, 5,665 symbols, **96%** of
 in-project dependencies resolved, 641 ms. The rate is language-dependent — Java call sites
 carry a qualified hint, Rust and JavaScript ones carry a bare method name, and this
-repository resolves 48%.
+repository resolves 48% (1,784 of 3,751, at `46e2fff`).
+
+That figure is *coverage* — the share of edges that found a destination — not accuracy.
+Nothing yet checks whether a destination is the right one.
 
 ### 3 · Nexus indexes itself
 

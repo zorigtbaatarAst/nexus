@@ -29,7 +29,7 @@ itself** — 1,831 symbols where it once reported zero.
 
 Still absent, and every surface says so rather than leaving anyone to infer it: any direct
 LLM provider, and `investigate`. Two things are honest about being weaker than they look —
-Rust edge resolution is 13 % against Java's 96 % (bare method hints need a receiver type),
+Rust edge resolution is 48 % against Java's 96 % (bare method hints need a receiver type),
 and no ranking weight has been tuned, because tuning without ledger evidence is the folklore
 `docs/architecture/11-risks.md` R8 names. `docs/architecture/10-roadmap.md` records what each
 phase delivered and what it left undone.

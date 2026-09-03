@@ -42,8 +42,19 @@ GraphQL tier has no cap at all, so its contribution is unbounded by construction
 `ResolveStats` (`nexus-store/src/lib.rs:140-158`) increments `ambiguous` **once per call
 site**; `edge_counts` counts **N rows** for that same site. `scan` renders the first
 (`nexus-core/src/engine/scan.rs:204-207`), `graph` renders the second
-(`nexus-core/src/engine/query.rs:1081-1089`). Two commands, one database, two different
-resolution rates. This is a live bug, independent of everything else in this document.
+(`nexus-core/src/engine/query.rs:1081-1089`).
+
+**Measured on a clean clone of `main` at `46e2fff`, one scan, one database:**
+
+```
+scan     edges 4458  (45% of 3606 in-project resolved, 852 external)
+graph    edges 4603  ·  3751 in-project · 1784 resolved (48%)
+```
+
+Two commands, two answers. The 145-edge gap is exactly the fan-out rows the ambiguous tiers
+insert during resolution: `scan` reports the pre-resolution site count, `graph` counts rows
+afterwards. This is a live bug, independent of everything else in this document, and the two
+numbers are the cheapest possible demonstration of §1.2.
 
 ### 1.4 The confidence constants are unvalidated
 
@@ -68,13 +79,18 @@ the resolver unguarded.
 
 ### 1.5 The repository already contradicts itself
 
-Three different values are published for Rust resolution:
+Three different values were published for Rust resolution:
 
-| Source | Claim | Audience |
-|---|---|---|
-| `README.en.md:255`, `README.md:251` | "this repository resolves **48%**" | user-facing |
-| `AGENTS.md:32`, `docs/architecture/10-roadmap.md:416` | "**13 %**" | internal |
-| `AGENTS.md:159` | "Rust sat at **23%**" | internal |
+| Source | Claim | Audience | Verdict |
+|---|---|---|---|
+| `README.en.md:255`, `README.md:251` | "this repository resolves **48%**" | user-facing | **correct** — matches `nexus graph` |
+| `AGENTS.md:32`, `docs/architecture/10-roadmap.md:416` | "**13 %**" (547/4,158) | internal | stale by 3.7×, predates the `by_member` tier |
+| `AGENTS.md:159` | "Rust sat at **23%**" | internal | correct *as history* — past tense, pre-`by_member` |
+
+Corrected 2026-09-03 to 48 % (1,784 / 3,751 at `46e2fff`), with provenance stamped at each
+site. The root cause was not arithmetic: **no published number carried a "measured at"
+marker**, so nobody could distinguish stale from wrong. Every corrected site now names the
+commit it was measured on.
 
 The documented tier table (`docs/architecture.md:251-257`, ADR-003 at
 `docs/architecture-decisions.md:117-123`) says `heuristic` spans 0.70–0.95 and lists no
