@@ -133,16 +133,48 @@ fn a_prompt_that_anchors_to_nothing_reports_zero_seeds_rather_than_inventing_som
 }
 
 #[test]
-fn the_empty_ui_strings_table_is_reported_rather_than_silently_contributing_nothing() {
-    // Source 5 of §4 cannot work until 5.5 populates the table. A stage that quietly
-    // contributes nothing is indistinguishable from one that is broken.
+fn a_project_with_no_screen_strings_says_so_rather_than_contributing_nothing_in_silence() {
+    // A stage that quietly contributes nothing is indistinguishable from one that is broken.
     let (_root, engine) = scanned("uistrings");
     let got = engine
         .seeds(&request("the Confirm button is broken"), Intent::Debug)
         .expect("seeds");
     assert!(
-        got.notes.iter().any(|n| n.contains("ui_strings")),
+        got.notes.iter().any(|n| n.contains("screen strings")),
         "{got:?}"
+    );
+}
+
+#[test]
+fn words_on_the_screen_reach_the_code_that_renders_them_in_any_language() {
+    // The strongest signal an investigation has, and the one AGENTS.md warns is lost if only
+    // keys are indexed: the screenshot is in Mongolian, the source holds an English key.
+    let (root, mut engine) = scanned("screentext");
+    write(
+        &root,
+        "src/locales/mn/common.json",
+        r#"{"cart": {"confirm": "Захиалга"}}"#,
+    );
+    write(
+        &root,
+        "web/Cart.tsx",
+        "export function Cart() { return <button aria-label=\"Confirm order\">Go</button>; }\n",
+    );
+    engine.scan().expect("rescan");
+    assert!(
+        engine.ui_string_count().expect("count") > 0,
+        "strings indexed"
+    );
+
+    let mongolian = engine
+        .seeds(&request("Захиалга"), Intent::Debug)
+        .expect("seeds");
+    assert!(
+        !mongolian
+            .notes
+            .iter()
+            .any(|n| n.contains("no screen strings")),
+        "the non-English value was indexed: {mongolian:?}"
     );
 }
 

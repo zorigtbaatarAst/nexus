@@ -709,6 +709,10 @@ impl Engine {
             .symbol_facts_for(self.project_id, paths.as_deref())?
             .len())
     }
+    /// How many screen strings are indexed.
+    pub fn ui_string_count(&self) -> Result<i64> {
+        Ok(self.store.ui_string_count(self.project_id)?)
+    }
     /// How many verification runs this project has recorded.
     pub fn test_run_count(&self) -> Result<i64> {
         Ok(self.store.test_run_count(self.project_id)?)

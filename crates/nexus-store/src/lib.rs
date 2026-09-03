@@ -2100,6 +2100,98 @@ impl Store {
         )?)
     }
 
+    // ── the screen surface (roadmap 5.5) ────────────────────
+
+    /// Replace one file's screen strings, and keep the full-text index in step.
+    ///
+    /// The FTS table is `content=`-backed, so it does not update itself: a delete and an
+    /// insert have to be mirrored, or a search returns rows that no longer exist. That is the
+    /// standard external-content contract and forgetting half of it is silent.
+    pub fn replace_ui_strings(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        file_id: FileId,
+        scan_id: ScanId,
+        strings: &[(String, String, Option<String>, i64)],
+    ) -> Result<usize> {
+        {
+            let mut stmt = tx.prepare("SELECT id, text FROM ui_strings WHERE file_id = ?1")?;
+            let gone: Vec<(i64, String)> = stmt
+                .query_map(params![file_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for (id, text) in gone {
+                tx.execute(
+                    "INSERT INTO ui_strings_fts(ui_strings_fts, rowid, text) VALUES('delete', ?1, ?2)",
+                    params![id, text],
+                )?;
+            }
+        }
+        tx.execute(
+            "DELETE FROM ui_strings WHERE file_id = ?1",
+            params![file_id],
+        )?;
+
+        for (text, kind, locale, line) in strings {
+            tx.execute(
+                "INSERT INTO ui_strings (project_id, file_id, symbol_id, text, kind, locale,
+                                         line, last_seen_scan_id)
+                 VALUES (?1,?2,NULL,?3,?4,?5,?6,?7)",
+                params![project_id, file_id, text, kind, locale, line, scan_id],
+            )?;
+            let id = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT INTO ui_strings_fts(rowid, text) VALUES (?1, ?2)",
+                params![id, text],
+            )?;
+        }
+        Ok(strings.len())
+    }
+
+    /// Files whose screen text matches, best match first.
+    ///
+    /// Matching the *value* is what reaches a non-English interface: the query is the words
+    /// on the screen, and the row that holds them names the file that renders them.
+    pub fn search_ui_strings(
+        &self,
+        project_id: ProjectId,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>> {
+        // FTS5 treats punctuation as syntax. A screen string is not a query language, so the
+        // words are extracted and quoted rather than passed through — otherwise "Are you
+        // sure?" is a syntax error rather than a search.
+        let terms: Vec<String> = query
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.chars().count() > 1)
+            .map(|w| format!("\"{w}\""))
+            .collect();
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT f.path, u.text
+             FROM ui_strings_fts x
+             JOIN ui_strings u ON u.id = x.rowid
+             JOIN live_files f ON f.id = u.file_id
+             WHERE x.text MATCH ?2 AND u.project_id = ?1
+             ORDER BY rank LIMIT ?3",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id, terms.join(" OR "), limit as i64], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn ui_string_count(&self, project_id: ProjectId) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM ui_strings WHERE project_id = ?1",
+            params![project_id],
+            |r| r.get(0),
+        )?)
+    }
+
     // ── commits: the history ledger ──────────────────────────
 
     /// Record a commit. Append-only: an sha already present is left exactly as it is.

@@ -181,12 +181,29 @@ pub fn resolve(
         }
     }
 
-    // 5 — text match against `ui_strings`. The table is empty until 5.5, and saying so is the
-    // difference between a stage that cannot help yet and one that is broken.
-    notes.push(
-        "ui_strings is empty until roadmap 5.5, so a user-visible label cannot seed anything"
-            .into(),
-    );
+    // 5 — text match. The strongest signal a bug report carries: someone names the words on
+    // the screen and nothing else, and those words are in the repository. Matching the
+    // *value* is what reaches a non-English interface, where the source holds an English key.
+    if !req.text.is_empty() {
+        let hits = store.search_ui_strings(project_id, &req.text, 20)?;
+        if hits.is_empty() && store.ui_string_count(project_id)? == 0 {
+            notes.push(
+                "no screen strings are indexed for this project, so a user-visible label \
+                 cannot seed anything"
+                    .into(),
+            );
+        }
+        for (path, matched) in hits {
+            for s in store.find_symbols(project_id, &path, 50)? {
+                offer(
+                    &mut found,
+                    s,
+                    SeedSource::TextMatch,
+                    format!("{matched:?} appears in {path}"),
+                );
+            }
+        }
+    }
 
     // 6 — a fact's subject named in the text. The cheapest way to reach a module the project
     // already recorded knowledge about.

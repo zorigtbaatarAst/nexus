@@ -4,6 +4,7 @@
 //! halves of a package move live in different files. That is why the buffering lives here
 //! rather than inside the per-file loop.
 
+use super::scan::ui_rows;
 use super::*;
 
 impl Engine {
@@ -392,6 +393,11 @@ impl Engine {
                     });
                 }
                 Store::replace_symbols(&tx, self.project_id, file_id, scan_id, &new_symbols)?;
+            }
+            {
+                if let Some(rows) = ui_rows(&self.root, &file.path) {
+                    Store::replace_ui_strings(&tx, self.project_id, file_id, scan_id, &rows)?;
+                }
             }
             if let Some(last) = pending_edges.last_mut() {
                 if last.0 == 0 {

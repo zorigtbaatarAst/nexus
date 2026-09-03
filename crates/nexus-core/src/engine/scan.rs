@@ -77,6 +77,10 @@ impl Engine {
                 symbols_indexed +=
                     Store::replace_symbols(&tx, self.project_id, file_id, scan_id, &syms)?;
             }
+            // What a person sees on the screen (roadmap 5.5).
+            if let Some(rows) = ui_rows(&self.root, &file.path) {
+                Store::replace_ui_strings(&tx, self.project_id, file_id, scan_id, &rows)?;
+            }
             if !edges.is_empty() {
                 pending_edges.push((file_id, edges));
             }
@@ -206,4 +210,28 @@ impl Engine {
             duration_ms: started.elapsed().as_millis(),
         })
     }
+}
+
+/// One screen string as the store takes it: text, kind, locale, line.
+pub(super) type UiRow = (String, String, Option<String>, i64);
+
+/// One file's screen strings as storage rows, or `None` when it cannot hold any.
+///
+/// A free function so both scan paths share the decision about which files hold screen text.
+/// Two copies would drift, and the one that drifted would silently stop indexing a language.
+///
+/// It deliberately does **not** take the transaction: naming `rusqlite::Transaction` here
+/// would let this crate write SQL, and the boundary that keeps a schema change to one blast
+/// radius is worth more than two saved lines at the call sites.
+pub(super) fn ui_rows(root: &Path, path: &str) -> Option<Vec<UiRow>> {
+    if !crate::ui_strings::is_candidate(path) {
+        return None;
+    }
+    let text = std::fs::read_to_string(root.join(path)).ok()?;
+    Some(
+        crate::ui_strings::extract(path, &text)
+            .into_iter()
+            .map(|s| (s.text, s.kind.to_string(), s.locale, s.line as i64))
+            .collect(),
+    )
 }
