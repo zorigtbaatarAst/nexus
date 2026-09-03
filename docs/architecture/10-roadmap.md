@@ -54,10 +54,10 @@ a session package — and pays off the debt that would otherwise resist everythi
 **Dependencies:** none. Every task is inside the existing architecture.
 
 **Status (2026-09-03, `0d7b212`):** 1.1, 1.2, 1.4, 1.5 landed on 2026-09-02 (commits
-`c82bb52`, `eded128`, `ba915d3`, `ffef5ba`); 1.3 is void, see the row. 1.6, 1.7, 1.8 are
-not started — `invalidated_at` is still only read (`nexus-store/src/lib.rs`, one `WHERE`),
-no `ContextPackage` type exists under `crates/`, and the binary has no `context` command
-and no `--hooks` flag. Next in order: **1.6**.
+`c82bb52`, `eded128`, `ba915d3`, `ffef5ba`); 1.3 is void, see the row. 1.6 landed on 2026-09-03 (`crates/nexus-core/src/engine/memory.rs`,
+`Store::invalidate_moved_facts`, `tests/fact_invalidation.rs`). 1.7 and 1.8 are not
+started — no `ContextPackage` type exists under `crates/`, and the binary has no `context`
+command and no `--hooks` flag. Next in order: **1.7**.
 
 **Risks:** R7 (core god object — 1.1 is the mitigation, which is why it is first), R2 (hook
 latency, first exposure).

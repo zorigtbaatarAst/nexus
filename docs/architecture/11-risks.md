@@ -99,6 +99,10 @@ surfacing while the row still exists.
 rest of the memory work — because every later memory improvement compounds on top of rot until
 it lands.
 
+**Status (2026-09-03):** mitigated. The detection test above exists as
+`crates/nexus-core/tests/fact_invalidation.rs::editing_the_anchored_symbol_invalidates_the_fact`;
+the row-kept half is `nexus-store`'s `a_fact_is_invalidated_when_its_symbol_changes_and_the_row_is_kept`.
+
 ---
 
 ## R6 — Nexus cannot index itself

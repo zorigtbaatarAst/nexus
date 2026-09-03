@@ -3,7 +3,11 @@
 > **Status: partly built.** The `facts` table, supersession and evidence-checked recording
 > work. §3's `ContextBuilder` in `nexus-core::context` does not exist: retrieval today is
 > `ORDER BY source, confidence` with no subject weighting, recency decay or token budget.
-> Invalidation-by-change is specified in §2 rule 3 and is not implemented.
+> Invalidation-by-change (§2 rule 3) is implemented: `Engine::fact_anchors` resolves each
+> fact's evidence before a scan, and `Store::invalidate_moved_facts` sets `invalidated_at`
+> inside the scan's transaction when the file is gone or the symbol at the anchor is gone or
+> has a different `sig_hash` or `body_hash`. Rows are kept. Pinned by
+> `crates/nexus-core/tests/fact_invalidation.rs`.
 
 Memory is what makes the second scan cheaper than the first and the tenth scan smarter than
 the second. It lives in SQLite at `.nexus/nexus.db` and survives across scans,
