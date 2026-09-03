@@ -8,7 +8,7 @@
 
 [![CI](https://github.com/zorigtbaatarAst/nexus/actions/workflows/ci.yml/badge.svg)](https://github.com/zorigtbaatarAst/nexus/actions/workflows/ci.yml)
 [![Rust 1.82+](https://img.shields.io/badge/rust-1.82%2B-b7410e?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-405%20passing-2ea043)](#nexus-өөр-дээрээ)
+[![Tests](https://img.shields.io/badge/tests-412%20passing-2ea043)](#nexus-өөр-дээрээ)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-20%20tools-6f42c1)](docs/mcp-api.md)
 
@@ -247,14 +247,16 @@ $ nexus impact 'mn.autoland.sales.vehicle.service.VehicleService#list' --paths
 ```
 
 Java методын нэг мөр **зургаан React компонентыг** эрсдэлд оруулж байна — холбогдож буй
-замтай нь хамт. Хэмжилт: 880 файл, 5,665 симбол, дотоод хамаарлын **96% холбогдсон**, 641 мс.
+замтай нь хамт. Java монорепо дээрх хэмжилт: 880 файл, 5,665 симбол, дотоод хамаарлын
+**96% холбогдсон**, 641 мс. Энэ хувь хэлнээс хамаарна — Java дуудлага бүрэн нэр агуулдаг,
+Rust, JavaScript нь зөвхөн методын нэр өгдөг. Энэ repo дээр 48%.
 
 ### 3 · Nexus өөрийгөө индекслэнэ
 
 Хэрэгслийн хамгийн шударга шалгалт — өөр дээр нь ажиллуулах:
 
 ```
-263 файл · 1,849 симбол · 4,404 хамаарал
+266 файл · 1,905 симбол · 4,458 хамаарал
 ```
 
 Урьд нь энэ тоо **0 симбол, 0 хамаарал** байсан. Nexus бүх төслийг тайлбарлаж чаддаг ч
@@ -284,9 +286,10 @@ Java методын нэг мөр **зургаан React компонентыг*
 
 ## Технологи
 
-**Rust · нэг статик binary · SQLite · tree-sitter · git2.** 18 crate, ~33,000 мөр, 405 тест.
+**Rust · нэг статик binary · SQLite · tree-sitter · git2.** 18 crate, ~33,000 мөр, 412 тест.
 
-Java · TypeScript · GraphQL · **Rust** · **Python** — тав нь ажиллаж байна. Хэл бүр
+Java · TypeScript · **JavaScript** · GraphQL · **Rust** · **Python** — зургаа нь ажиллаж
+байна. Хэл бүр
 `LanguageAnalyzer` интерфейсийн ард байрлаж, **композицийн үндэс дээр бүртгэгддэг**. Шинэ хэл
 нэмнэ гэдэг шинэ crate, үндэс дээр нэг мөр — цөмд гар хүрэхгүй. Framework-ийн мэдлэг (Spring,
 Next.js, Django, FastAPI) тусдаа өргөтгөлийн тэнхлэг — Spring гэдэг Java биш шүү дээ.
@@ -306,7 +309,7 @@ Next.js, Django, FastAPI) тусдаа өргөтгөлийн тэнхлэг —
 ### Nexus өөр дээрээ
 
 ```bash
-make check        # CI-ийн ажиллуулдаг: fmt · clippy (warning = алдаа) · 405 тест
+make check        # CI-ийн ажиллуулдаг: fmt · clippy (warning = алдаа) · 412 тест
 make fixtures     # benchmark корпус — тодорхойлолтоос, үргэлж ижил sha
 /nexus-architect  # кодоос одоогийн байдлыг тогтоож, дараагийн даалгаврыг төлөвлөнө
 ```
