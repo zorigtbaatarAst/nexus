@@ -4,6 +4,10 @@
 //! row and are here because they are what a caller asking a question does next.
 
 use super::*;
+use crate::context::{
+    self, estimate_tokens, Candidate, ContextPackage, InclusionLedger, ItemKind, PackageBasis,
+    ProjectSummary, Purpose, TaskRequest,
+};
 
 impl Engine {
     pub fn status(&self) -> Result<StatusReport> {
@@ -89,6 +93,132 @@ impl Engine {
                 confidence: r.confidence,
             })
             .collect())
+    }
+    /// The context package for a request.
+    ///
+    /// Phase 1 serves `Purpose::Session` with a **fixed query** — profile, open findings,
+    /// durable facts, greedy fill to the budget. There is no ranking here on purpose: a
+    /// scoring function invented before the ledger has any data to justify its weights is
+    /// folklore, and Phase 2.6 replaces this body with the real one behind this signature.
+    ///
+    /// Reads only. A hook that writes to the database when a session opens is a side effect
+    /// nobody asked for, so a project with no baseline gets `NoBaseline` and the advice to
+    /// scan, not an implicit scan.
+    pub fn context(&self, req: &TaskRequest) -> Result<ContextPackage> {
+        if req.purpose != Purpose::Session {
+            return Err(EngineError::Unsupported(format!(
+                "context for purpose '{}' is the Phase 2 context engine; only --session is built",
+                req.purpose.as_str()
+            )));
+        }
+        let status = self.status()?;
+        let Some(baseline) = status.baseline.clone() else {
+            return Err(EngineError::NoBaseline);
+        };
+
+        // A scan that covers one module of something larger answers impact questions with a
+        // confidently small blast radius. Saying so costs one query and is the single most
+        // useful correction an agent can be handed at session start.
+        let graph = self.graph()?;
+        let scope_warning = (graph.edges_sibling >= SIBLING_WARN_FLOOR as i64).then(|| {
+            format!(
+                "{} edges point at code this project owns that was not scanned — impact \
+                 answers here are understated; scan from the repository root",
+                graph.edges_sibling
+            )
+        });
+
+        let project = ProjectSummary {
+            name: status.project.clone(),
+            profile: status.profile.clone(),
+            files: status.files,
+            symbols: status.symbols,
+            scope_warning,
+        };
+
+        let mut candidates = Vec::new();
+
+        // Open findings: what is broken now. FIXED and IGNORED are history, not news.
+        for f in self.findings(None, None, None)? {
+            if matches!(f.status.as_str(), "FIXED" | "IGNORED") {
+                continue;
+            }
+            let anchor = match (&f.file, f.line) {
+                (Some(file), Some(line)) => Some(CodeRef {
+                    file: file.clone(),
+                    line: line.max(0) as u32,
+                    note: String::new(),
+                }),
+                _ => None,
+            };
+            candidates.push(Candidate {
+                kind: ItemKind::Finding,
+                label: f.uid.clone(),
+                anchor,
+                why: format!("open finding, {}", f.status.to_lowercase()),
+                text: format!(
+                    "{}  {}  {}  {}",
+                    f.uid,
+                    f.status,
+                    f.component.as_deref().unwrap_or("-"),
+                    f.title
+                ),
+            });
+        }
+
+        // Durable facts: what previous sessions worked out.
+        //
+        // The lifecycle states are Phase 3.1, so "durable" is approximated by the order the
+        // store already returns — human, then deterministic, then AI, each by confidence.
+        // The approximation gets better when the lifecycle lands; it does not get unwound.
+        for row in self.store.facts(self.project_id, None)? {
+            let anchor = row
+                .evidence_json
+                .as_deref()
+                .and_then(|j| serde_json::from_str::<Vec<CodeRef>>(j).ok())
+                .and_then(|refs| refs.into_iter().next());
+            candidates.push(Candidate {
+                kind: ItemKind::Fact,
+                label: row.key.clone(),
+                anchor,
+                why: format!(
+                    "{} fact about {}",
+                    row.source,
+                    row.subject.as_deref().unwrap_or("the project")
+                ),
+                text: format!("{}  {}  [{}]", row.key, row.claim, row.source),
+            });
+        }
+
+        let mut ledger = InclusionLedger::default();
+        let considered = candidates.len();
+        // The summary is not a candidate — it is what the package is *about*, and a package
+        // that dropped it under budget pressure would describe findings in an unnamed project.
+        let spent = estimate_tokens(&project.name)
+            + project
+                .scope_warning
+                .as_deref()
+                .map(estimate_tokens)
+                .unwrap_or(0);
+        let (items, tokens_estimated) =
+            context::fill(candidates, req.budget_tokens, spent, &mut ledger);
+
+        Ok(ContextPackage {
+            purpose: req.purpose,
+            project,
+            items_included: items.len(),
+            items,
+            ledger,
+            basis: PackageBasis {
+                scan_uid: baseline.scan_uid,
+                commit: status.current.commit.clone(),
+                dirty: status.current.dirty,
+                selection: "phase-1 fixed query: open findings then durable facts, in store order",
+            },
+            budget_tokens: req.budget_tokens,
+            tokens_estimated,
+            items_considered: considered,
+        })
     }
     /// The scan before the current baseline — what `--changed` is measured against.
     pub fn previous_scan_id(&self) -> Result<Option<i64>> {

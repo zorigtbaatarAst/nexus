@@ -47,6 +47,10 @@ pub enum EngineError {
     NotInitialized(String),
     #[error("no baseline for this project\n  run `nexus scan` first")]
     NoBaseline,
+    /// Asked for something this build does not serve. Named rather than approximated:
+    /// answering a different question than the one asked is worse than refusing.
+    #[error("{0}")]
+    Unsupported(String),
     #[error("unknown capability '{asked}'\n  available: {known}")]
     UnknownCapability { asked: String, known: String },
     #[error("capability failed: {0}")]

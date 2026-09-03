@@ -17,6 +17,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod capability;
+pub mod context;
 pub mod detect;
 pub mod engine;
 pub mod findings;
@@ -26,6 +27,7 @@ pub mod report;
 pub mod rules;
 pub mod walk;
 
+pub use context::{ContextPackage, Purpose, TaskRequest};
 pub use engine::{Engine, EngineError, Result, DB_FILE, NEXUS_DIR, SIBLING_WARN_FLOOR};
 pub use report::*;
 
