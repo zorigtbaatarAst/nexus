@@ -7,6 +7,7 @@
 //! Colour is removed under `NO_COLOR`, on a pipe, and in CI. Severity is a word as well as
 //! a colour, because a format that loses meaning without colour is broken by default.
 
+use nexus_core::context::{ContextItem, ContextPackage, ItemKind};
 use nexus_core::nexus_store;
 use nexus_core::report::*;
 use nexus_types::Health;
@@ -84,6 +85,64 @@ pub fn banner(w: &mut impl Write, st: &Style) -> std::io::Result<()> {
     writeln!(w, "{}", st.head(product_name()))?;
     writeln!(w, "{}", st.dim(RULE))?;
     writeln!(w)
+}
+
+/// The session package, in the shape `07-agent-integration.md` §4 specifies.
+///
+/// Every line here is a query result. Nothing is inferred and no token was spent producing
+/// it, which is the whole claim the package makes.
+pub fn context(w: &mut impl Write, st: &Style, p: &ContextPackage) -> std::io::Result<()> {
+    match &p.project.profile {
+        Some(prof) => profile(w, st, prof)?,
+        None => writeln!(w, "Project: {}", st.head(&p.project.name))?,
+    }
+
+    let findings: Vec<&ContextItem> = p
+        .items
+        .iter()
+        .filter(|i| i.kind == ItemKind::Finding)
+        .collect();
+    if !findings.is_empty() {
+        writeln!(w)?;
+        writeln!(
+            w,
+            "{}",
+            st.head(&format!("Open findings ({})", findings.len()))
+        )?;
+        for i in &findings {
+            writeln!(w, "  {}", i.text)?;
+        }
+    }
+
+    let facts: Vec<&ContextItem> = p
+        .items
+        .iter()
+        .filter(|i| i.kind == ItemKind::Fact)
+        .collect();
+    if !facts.is_empty() {
+        writeln!(w)?;
+        writeln!(w, "{}", st.head(&format!("Known ({})", facts.len())))?;
+        for i in &facts {
+            writeln!(w, "  {}", i.text)?;
+        }
+    }
+
+    if let Some(warning) = &p.project.scope_warning {
+        writeln!(w)?;
+        writeln!(w, "{} {}", st.warn("Scope warning:"), warning)?;
+    }
+
+    writeln!(w)?;
+    let excluded = p.items_considered.saturating_sub(p.items_included);
+    writeln!(
+        w,
+        "{}",
+        st.dim(&format!(
+            "considered {} · included {} · excluded {} · {} of {} tokens",
+            p.items_considered, p.items_included, excluded, p.tokens_estimated, p.budget_tokens
+        ))
+    )?;
+    Ok(())
 }
 
 pub fn profile(w: &mut impl Write, st: &Style, p: &Profile) -> std::io::Result<()> {

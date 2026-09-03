@@ -111,6 +111,15 @@ enum Command {
         #[arg(trailing_var_arg = true)]
         question: Vec<String>,
     },
+    /// What an agent should know before it reads a file
+    Context {
+        /// The session package: what this project is, what is open, what is known
+        #[arg(long)]
+        session: bool,
+        /// Token ceiling. The package is selected to fit, never truncated to fit.
+        #[arg(long, value_name = "TOKENS")]
+        budget: Option<usize>,
+    },
     /// Record something learned about this project, so the next session starts with it
     Fact {
         /// e.g. arch.payment.idempotency
@@ -544,6 +553,35 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             });
         }
 
+        Command::Context { session, budget } => {
+            // One shape today. The flag is required rather than defaulted so that adding
+            // `--task` in Phase 2 does not silently change what a bare `nexus context` means.
+            if !session {
+                eprintln!(
+                    "nexus context: --session is required (--task lands with the context engine)"
+                );
+                return Ok(exit::USAGE);
+            }
+            let engine = open(&root)?;
+            let budget = budget.unwrap_or(nexus_core::context::SESSION_BUDGET_TOKENS);
+            match engine.context(&nexus_core::TaskRequest::session(budget)) {
+                Ok(pkg) => {
+                    emit!(&pkg, {
+                        render::context(&mut out, &st, &pkg)?;
+                    });
+                }
+                Err(nexus_core::EngineError::NoBaseline) => {
+                    // Not an error worth a stack trace: the project simply has not been
+                    // scanned. The exit code carries it; the hook ignores the code.
+                    if !cli.quiet && !cli.json {
+                        writeln!(out, "No baseline — run `{} scan`.", render::binary_name())?;
+                    }
+                    return Ok(exit::NO_BASELINE);
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
         Command::Fact {
             key,
             claim,
@@ -667,6 +705,7 @@ fn envelope<T: Serialize>(cli: &Cli, value: T) -> Result<String, serde_json::Err
             Command::Analyze { .. } => "analyze",
             Command::Capabilities => "capabilities",
             Command::Ask { .. } => "ask",
+            Command::Context { .. } => "context",
             Command::Fact { .. } => "fact",
             Command::Ignore { .. } => "ignore",
             Command::Doctor => "doctor",
