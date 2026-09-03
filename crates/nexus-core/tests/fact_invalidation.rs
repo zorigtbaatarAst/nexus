@@ -206,3 +206,75 @@ fn a_full_scan_invalidates_too() {
     assert_eq!(report.facts_invalidated, 1, "{report:?}");
     assert!(engine.facts(None).expect("facts").is_empty());
 }
+
+/// Facts as the store holds them, for the lifecycle assertions below. The engine's `facts`
+/// method returns the retrieval view; these tests are about the state behind it.
+fn state(engine: &Engine, key: &str) -> (i64, bool) {
+    let f = engine
+        .fact_states()
+        .expect("states")
+        .into_iter()
+        .find(|(k, _, _)| k == key)
+        .unwrap_or_else(|| panic!("no fact {key}"));
+    (f.1, f.2)
+}
+
+#[test]
+fn an_agent_fact_is_validated_by_a_scan_and_durable_after_three() {
+    // §3: a candidate earns its weight by surviving. Nothing is durable because it was
+    // asserted confidently — only because the evidence kept holding.
+    let (root, mut engine) = scanned_with_fact("validate", "ai", on_pay());
+    assert_eq!(state(&engine, "invariant.pay.idempotent"), (0, false));
+
+    for expected in 1..=3 {
+        // A no-op edit elsewhere, so the scan has something to do and the anchor is untouched.
+        write(
+            &root,
+            "src/mn/pay/Other.java",
+            &format!("package mn.pay;\npublic class Other{expected} {{}}\n"),
+        );
+        let report = engine.rescan().expect("rescan");
+        assert_eq!(report.facts_validated, 1, "{report:?}");
+        assert_eq!(report.facts_invalidated, 0, "{report:?}");
+        let (count, durable) = state(&engine, "invariant.pay.idempotent");
+        assert_eq!(count, expected);
+        assert_eq!(durable, expected >= 3, "count {count}");
+    }
+}
+
+#[test]
+fn a_human_fact_is_durable_on_arrival() {
+    // §3, and it is not a shortcut: a human fact came through the door that records who wrote
+    // it, which is exactly what three survivals are evidence of for anyone else.
+    let (_root, engine) = scanned_with_fact("humandurable", "human", on_pay());
+    assert_eq!(state(&engine, "invariant.pay.idempotent"), (0, true));
+}
+
+#[test]
+fn a_fact_whose_evidence_moved_is_not_also_credited_with_surviving() {
+    let (root, mut engine) = scanned_with_fact("notboth", "ai", on_pay());
+    edit(&root, r#""pay ""#, r#""paid ""#);
+    let report = engine.rescan().expect("rescan");
+    assert_eq!(report.facts_invalidated, 1, "{report:?}");
+    assert_eq!(
+        report.facts_validated, 0,
+        "a scan cannot both move the evidence and credit the fact for surviving it: {report:?}"
+    );
+}
+
+#[test]
+fn re_running_one_scan_promotes_nothing_twice() {
+    // The count is of distinct scans. A rescan that finds nothing changed must not be a free
+    // promotion, or durability measures how often someone typed rescan.
+    let (root, mut engine) = scanned_with_fact("noduplicate", "ai", on_pay());
+    write(
+        &root,
+        "src/mn/pay/Other.java",
+        "package mn.pay;\npublic class Other {}\n",
+    );
+    engine.rescan().expect("first");
+    let after_one = state(&engine, "invariant.pay.idempotent");
+    let report = engine.rescan().expect("second, nothing changed");
+    assert_eq!(report.facts_validated, 0, "{report:?}");
+    assert_eq!(state(&engine, "invariant.pay.idempotent"), after_one);
+}

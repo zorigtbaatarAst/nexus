@@ -48,6 +48,7 @@ impl Engine {
                 files_deleted: 0,
                 symbols_changed: 0,
                 facts_invalidated: 0,
+                facts_validated: 0,
                 items: Vec::new(),
                 files_failed: 0,
                 health: Health::Ok,
@@ -148,6 +149,7 @@ impl Engine {
                 files_deleted: 0,
                 symbols_changed: 0,
                 facts_invalidated: 0,
+                facts_validated: 0,
                 items: Vec::new(),
                 files_failed: 0,
                 health: Health::Ok,
@@ -520,9 +522,8 @@ impl Engine {
         Store::resolve_edges(&tx, self.project_id)?;
         // A fact about code this scan changed or removed is a trap for the next reader.
         // Inside the transaction, so a crash cannot leave the index new and the memory old.
-        let facts_invalidated =
-            Store::invalidate_moved_facts(&tx, self.project_id, &anchors, &nexus_store::now())?
-                .len();
+        let (facts_invalidated, facts_validated) =
+            Store::settle_facts(&tx, self.project_id, &anchors, scan_id, &nexus_store::now())?;
         tx.commit().map_err(nexus_store::StoreError::from)?;
 
         let (files, symbols) = self.store.index_counts(self.project_id)?;
@@ -540,6 +541,7 @@ impl Engine {
             files_deleted: deleted_paths.len(),
             symbols_changed,
             facts_invalidated,
+            facts_validated,
             items,
             files_failed: failed,
             health: if failed > 0 {

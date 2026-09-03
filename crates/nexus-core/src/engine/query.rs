@@ -491,6 +491,18 @@ impl Engine {
             Err(_) => "unknown".into(),
         }
     }
+    /// Every live fact as `(key, validated_count, durable)`.
+    ///
+    /// The lifecycle behind the retrieval view, for a caller that needs the state rather than
+    /// the ranking — the Markdown exporter, and the tests that pin §3's transitions.
+    pub fn fact_states(&self) -> Result<Vec<(String, i64, bool)>> {
+        Ok(self
+            .store
+            .facts(self.project_id, None)?
+            .into_iter()
+            .map(|f| (f.key, f.validated_count, f.durable))
+            .collect())
+    }
     /// How many commits this project's ledger holds.
     pub fn commit_count(&self) -> Result<i64> {
         Ok(self.store.commit_count(self.project_id)?)

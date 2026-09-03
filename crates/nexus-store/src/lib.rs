@@ -17,7 +17,7 @@ use nexus_types::*;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::Path;
 
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_init.sql")),
     (2, include_str!("../migrations/0002_graphql_seam.sql")),
@@ -25,6 +25,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (4, include_str!("../migrations/0004_sibling_resolution.sql")),
     (5, include_str!("../migrations/0005_capability_data.sql")),
     (6, include_str!("../migrations/0006_external_graph.sql")),
+    (7, include_str!("../migrations/0007_fact_lifecycle.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -319,6 +320,13 @@ pub struct FactRow {
     pub source: String,
     pub confidence: f64,
     pub evidence_json: Option<String>,
+    /// Distinct scans whose evidence check this fact survived.
+    pub validated_count: i64,
+    /// Validated three times, or written by a person. Highest retrieval weight.
+    pub durable: bool,
+    /// The scan that recorded the belief. Retrieval decays gently from here — old facts are
+    /// usually still true.
+    pub created_scan_id: i64,
 }
 
 /// A fact that is current: neither superseded nor invalidated.
@@ -1910,9 +1918,12 @@ impl Store {
         // "the fact that replaced this", and there is no such thing as fact -1.
         let tx = self.conn.transaction()?;
         tx.execute(
+            // A human fact is durable on arrival (§3): it is not second-class, it just came
+            // through the door that records who wrote it. Everything else earns durability by
+            // surviving three scans.
             "INSERT INTO facts (project_id, fact_key, scope, subject, claim, source,
-                                evidence_json, confidence, created_scan_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+                                evidence_json, confidence, created_scan_id, durable)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, CASE WHEN ?6 = 'human' THEN 1 ELSE 0 END)
              ON CONFLICT(project_id, fact_key, created_scan_id) DO UPDATE SET
                claim = excluded.claim, confidence = excluded.confidence,
                evidence_json = excluded.evidence_json, superseded_by = NULL",
@@ -1946,13 +1957,18 @@ impl Store {
     /// never surface: a fact about code that no longer exists is a trap.
     pub fn facts(&self, project_id: ProjectId, subject: Option<&str>) -> Result<Vec<FactRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT fact_key, scope, subject, claim, source, confidence, evidence_json
+            // Ordered by key alone: stable, so a caller can rely on it, and *not* a ranking.
+            // Relevance needs the caller's seeds, which the store cannot know, so §4's formula
+            // lives in `nexus_core::memory` and every consumer calls that one function. Two
+            // rankings over one table would disagree, and the one further from the data is
+            // the one that would be wrong.
+            "SELECT fact_key, scope, subject, claim, source, confidence, evidence_json,
+                    validated_count, durable, created_scan_id
              FROM facts
              WHERE project_id = ?1
                AND superseded_by IS NULL AND invalidated_at IS NULL
                AND (?2 IS NULL OR subject = ?2 OR subject LIKE ?2 || '%')
-             ORDER BY CASE source WHEN 'human' THEN 0 WHEN 'deterministic' THEN 1 ELSE 2 END,
-                      confidence DESC",
+             ORDER BY fact_key",
         )?;
         let rows = stmt
             .query_map(params![project_id, subject], |r| {
@@ -1964,10 +1980,76 @@ impl Store {
                     source: r.get(4)?,
                     confidence: r.get(5)?,
                     evidence_json: r.get(6)?,
+                    validated_count: r.get(7)?,
+                    durable: r.get::<_, i64>(8)? == 1,
+                    created_scan_id: r.get(9)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Record that a scan found these facts' evidence intact.
+    ///
+    /// The mirror of [`Self::invalidate_moved_facts`], from the same anchors: one says the
+    /// evidence moved, the other says it did not. Computing the anchors twice would be two
+    /// definitions of "the evidence still means what it did", and they would drift.
+    ///
+    /// Counts distinct scans, not calls: the guard on `validated_scan_id` means re-running one
+    /// scan promotes nothing. Three survivals make a fact durable (§3); a human fact is
+    /// already durable by authorship and is untouched by the promotion arm.
+    pub fn validate_facts(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        fact_ids: &[i64],
+        scan_id: ScanId,
+    ) -> Result<Vec<i64>> {
+        let mut validated = std::collections::BTreeSet::new();
+        for id in fact_ids {
+            let n = tx.execute(
+                "UPDATE facts
+                    SET validated_count   = validated_count + 1,
+                        validated_scan_id = ?3,
+                        durable = CASE WHEN validated_count + 1 >= 3 THEN 1 ELSE durable END
+                  WHERE id = ?1 AND project_id = ?2
+                    AND invalidated_at IS NULL AND superseded_by IS NULL
+                    AND (validated_scan_id IS NULL OR validated_scan_id <> ?3)",
+                params![id, project_id, scan_id],
+            )?;
+            if n == 1 {
+                validated.insert(*id);
+            }
+        }
+        Ok(validated.into_iter().collect())
+    }
+
+    /// What a scan does to memory: invalidate what moved, validate what did not.
+    ///
+    /// Both passes from one anchor list, in that order. A fact whose evidence moved must not
+    /// also be credited with surviving the scan that moved it, and the guard on
+    /// `invalidated_at` in [`Self::validate_facts`] makes that impossible rather than merely
+    /// unlikely.
+    ///
+    /// A fact is validated only when *every* one of its anchors held. Partial evidence is not
+    /// evidence, and crediting it would make the survival count mean something different for
+    /// a fact with two anchors than for one with one.
+    ///
+    /// Returns `(invalidated, validated)`.
+    pub fn settle_facts(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        anchors: &[FactAnchor],
+        scan_id: ScanId,
+        at: &str,
+    ) -> Result<(usize, usize)> {
+        let invalidated = Self::invalidate_moved_facts(tx, project_id, anchors, at)?;
+        let intact: Vec<i64> = anchors
+            .iter()
+            .map(|a| a.fact_id)
+            .filter(|id| !invalidated.contains(id))
+            .collect();
+        let validated = Self::validate_facts(tx, project_id, &intact, scan_id)?;
+        Ok((invalidated.len(), validated.len()))
     }
 
     /// Every fact that would be retrieved right now, with its raw evidence. The engine turns

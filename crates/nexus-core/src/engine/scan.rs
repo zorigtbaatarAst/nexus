@@ -150,9 +150,8 @@ impl Engine {
             Store::insert_commit(&tx, self.project_id, &crate::history::to_record(c))?;
         }
         let resolve = Store::resolve_edges(&tx, self.project_id)?;
-        let facts_invalidated =
-            Store::invalidate_moved_facts(&tx, self.project_id, &anchors, &nexus_store::now())?
-                .len();
+        let (facts_invalidated, facts_validated) =
+            Store::settle_facts(&tx, self.project_id, &anchors, scan_id, &nexus_store::now())?;
         tx.commit().map_err(nexus_store::StoreError::from)?;
         if resolve.unresolved > 0 {
             warnings.push(format!(
@@ -197,6 +196,7 @@ impl Engine {
             files_skipped: skipped,
             symbols_indexed,
             facts_invalidated,
+            facts_validated,
             edges_resolved: resolve.resolved(),
             edges_total: resolve.total,
             edges_external: resolve.external,

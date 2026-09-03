@@ -49,6 +49,8 @@ pub struct ScanReport {
     /// Facts whose evidence pointed at a symbol or file this scan changed or removed.
     /// Always zero on a first scan: there is nothing to remember yet.
     pub facts_invalidated: usize,
+    /// Facts whose evidence this scan found intact. Three of these makes a fact durable.
+    pub facts_validated: usize,
     pub edges_total: usize,
     pub edges_resolved: usize,
     /// A third-party library, correctly outside the index. ADR-017.
@@ -94,6 +96,8 @@ pub struct RescanReport {
     /// Facts whose evidence pointed at a symbol or file this scan changed or removed. They
     /// stay on disk and stop being retrieved.
     pub facts_invalidated: usize,
+    /// Facts whose evidence this scan found intact. Three of these makes a fact durable.
+    pub facts_validated: usize,
     pub items: Vec<ChangeItem>,
     pub files_failed: usize,
     pub health: Health,
