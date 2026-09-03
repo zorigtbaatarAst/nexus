@@ -122,9 +122,23 @@ enum Command {
         /// The session package: what this project is, what is open, what is known
         #[arg(long)]
         session: bool,
+        /// The package for one task, ranked and budgeted
+        #[arg(long, value_name = "TEXT")]
+        task: Option<String>,
         /// Token ceiling. The package is selected to fit, never truncated to fit.
         #[arg(long, value_name = "TOKENS")]
         budget: Option<usize>,
+        /// Anchors the caller already has — a hook editing a file knows
+        #[arg(long, value_name = "PATH")]
+        file: Vec<String>,
+        #[arg(long, value_name = "FQN")]
+        symbol: Vec<String>,
+        /// Why every candidate is in or out, with the score terms that decided it
+        #[arg(long)]
+        explain: bool,
+        /// Counts only: considered, included, tokens
+        #[arg(long)]
+        stats: bool,
     },
     /// Record something learned about this project, so the next session starts with it
     Fact {
@@ -576,21 +590,49 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             });
         }
 
-        Command::Context { session, budget } => {
-            // One shape today. The flag is required rather than defaulted so that adding
-            // `--task` in Phase 2 does not silently change what a bare `nexus context` means.
-            if !session {
-                eprintln!(
-                    "nexus context: --session is required (--task lands with the context engine)"
-                );
-                return Ok(exit::USAGE);
-            }
+        Command::Context {
+            session,
+            task,
+            budget,
+            file,
+            symbol,
+            explain,
+            stats,
+        } => {
+            // Exactly one shape per invocation. Defaulting to one of them would make a bare
+            // `nexus context` mean something different depending on which flags exist.
+            let request = match (session, task) {
+                (true, Some(_)) => {
+                    eprintln!("nexus context: --session and --task ask different questions");
+                    return Ok(exit::USAGE);
+                }
+                (false, None) => {
+                    eprintln!("nexus context: one of --session or --task is required");
+                    return Ok(exit::USAGE);
+                }
+                (true, None) => nexus_core::TaskRequest::session(
+                    budget.unwrap_or(nexus_core::context::SESSION_BUDGET_TOKENS),
+                ),
+                (false, Some(text)) => nexus_core::TaskRequest {
+                    text: text.clone(),
+                    files: file.clone(),
+                    symbols: symbol.clone(),
+                    budget_tokens: budget.unwrap_or(nexus_core::context::TASK_BUDGET_TOKENS),
+                    purpose: nexus_core::Purpose::Task,
+                },
+            };
             let engine = open(&root)?;
-            let budget = budget.unwrap_or(nexus_core::context::SESSION_BUDGET_TOKENS);
-            match engine.context(&nexus_core::TaskRequest::session(budget)) {
+            match engine.context(&request) {
                 Ok(pkg) => {
                     emit!(&pkg, {
-                        render::context(&mut out, &st, &pkg)?;
+                        if *stats {
+                            render::context_stats(&mut out, &pkg)?;
+                        } else {
+                            render::context(&mut out, &st, &pkg)?;
+                            if *explain {
+                                render::context_explain(&mut out, &st, &pkg)?;
+                            }
+                        }
                     });
                 }
                 Err(nexus_core::EngineError::NoBaseline) => {

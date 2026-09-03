@@ -22,6 +22,9 @@ use std::collections::BTreeMap;
 /// The default ceiling for a session package. The `SessionStart` hook's budget in ADR-024.
 pub const SESSION_BUDGET_TOKENS: usize = 800;
 
+/// The default ceiling for a task package. The UserPromptSubmit budget in ADR-024.
+pub const TASK_BUDGET_TOKENS: usize = 4000;
+
 /// Bytes per token. The estimator `budget::fit` already uses, and an estimate on purpose:
 /// a real tokenizer is a dependency bought for a rounding error (§6).
 const BYTES_PER_TOKEN: f64 = 3.5;

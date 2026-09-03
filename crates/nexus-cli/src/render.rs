@@ -7,7 +7,7 @@
 //! Colour is removed under `NO_COLOR`, on a pipe, and in CI. Severity is a word as well as
 //! a colour, because a format that loses meaning without colour is broken by default.
 
-use nexus_core::context::{ContextItem, ContextPackage, ItemKind};
+use nexus_core::context::{ContextItem, ContextPackage, Decision, ItemKind};
 use nexus_core::nexus_store;
 use nexus_core::report::*;
 use nexus_types::Health;
@@ -111,6 +111,26 @@ pub fn context(w: &mut impl Write, st: &Style, p: &ContextPackage) -> std::io::R
         )?;
         for i in &findings {
             writeln!(w, "  {}", i.text)?;
+        }
+    }
+
+    // A task package is mostly symbols; a session package has none. Rendering both here
+    // rather than in two functions keeps one definition of what a package looks like.
+    let symbols: Vec<&ContextItem> = p
+        .items
+        .iter()
+        .filter(|i| i.kind == ItemKind::Symbol)
+        .collect();
+    if !symbols.is_empty() {
+        writeln!(w)?;
+        writeln!(w, "{}", st.head(&format!("Code ({})", symbols.len())))?;
+        for i in &symbols {
+            writeln!(
+                w,
+                "  {:<52} {}",
+                i.text,
+                st.dim(&format!("{}:{} · {}", i.anchor.file, i.anchor.line, i.why))
+            )?;
         }
     }
 
@@ -939,6 +959,78 @@ pub fn answer(w: &mut impl Write, st: &Style, a: &crate::ask::Answer) -> std::io
             for u in understood {
                 writeln!(w, "    nexus ask {u}")?;
             }
+        }
+    }
+    Ok(())
+}
+
+/// `--stats`: the three numbers §7 requires a package to be able to state about itself.
+pub fn context_stats(w: &mut impl Write, p: &ContextPackage) -> std::io::Result<()> {
+    writeln!(w, "items_considered {}", p.items_considered)?;
+    writeln!(w, "items_included   {}", p.items_included)?;
+    writeln!(w, "tokens_estimated {}", p.tokens_estimated)?;
+    Ok(())
+}
+
+/// `--explain`: §8's mandatory account, in the shape the design specifies.
+///
+/// Both halves, always. A ranker that explains only its inclusions cannot be debugged for the
+/// failure that matters most — the right item that never made it in — so every excluded
+/// candidate is printed with the rule that refused it, and none is elided.
+pub fn context_explain(w: &mut impl Write, st: &Style, p: &ContextPackage) -> std::io::Result<()> {
+    writeln!(w)?;
+    writeln!(w, "{}", st.head("Why"))?;
+    if let Some(intent) = &p.intent {
+        let signal = intent.signal.as_deref().unwrap_or("nothing matched");
+        writeln!(
+            w,
+            "  intent {} {}",
+            intent.intent.as_str(),
+            st.dim(&format!("({signal})"))
+        )?;
+    }
+    writeln!(w, "  {}", st.dim(&p.basis.selection))?;
+    writeln!(w)?;
+
+    for row in &p.ledger.rows {
+        let mark = match row.decision {
+            Decision::Included => st.good("included"),
+            Decision::Excluded => st.dim("excluded"),
+        };
+        writeln!(
+            w,
+            "  {mark}  {:>5.2}  {:<44} {}",
+            row.score,
+            row.label,
+            st.dim(&row.reason)
+        )?;
+        if row.decision == Decision::Included {
+            if let Some(item) = p.items.iter().find(|i| i.text.contains(&row.label)) {
+                let t = &item.terms;
+                writeln!(
+                    w,
+                    "            {}",
+                    st.dim(&format!(
+                        "seed {:.2} · graph {:.2} · churn {:.2} · recency {:.2} · hist {:.2} · \
+                         fact {:.2} · test {:.2} · arch {:.2} · cost {:.2}",
+                        t.seed,
+                        t.graph,
+                        t.churn,
+                        t.recency,
+                        t.history,
+                        t.fact,
+                        t.test,
+                        t.arch,
+                        t.cost
+                    ))
+                )?;
+            }
+        }
+    }
+    if !p.notes.is_empty() {
+        writeln!(w)?;
+        for note in &p.notes {
+            writeln!(w, "  {}", st.dim(note))?;
         }
     }
     Ok(())

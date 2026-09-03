@@ -178,6 +178,8 @@ fn the_server_handshakes_advertises_tools_and_answers() {
         "nexus_record_finding",
         "nexus_record_fact",
         "nexus_get_known",
+        "nexus_get_context",
+        "nexus_what_next",
         "nexus_capabilities",
     ] {
         assert!(
@@ -399,6 +401,45 @@ fn a_fact_survives_for_the_next_session() {
             .iter()
             .any(|c| c.contains("Idempotency is enforced at the controller")),
         "the fact must outlive the session that learned it: {known}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_context_tool_returns_a_ranked_package_over_mcp() {
+    // 07-agent-integration.md §2: the package is the product, and an agent must be able to
+    // ask for it without a CLI. One Engine call behind this handler, like every other.
+    let root = fixture("context");
+    let Some(mut s) = Server::start(&root) else {
+        return;
+    };
+    s.handshake();
+    s.call(2, "nexus_scan", serde_json::json!({}));
+    let pkg = s.call(
+        3,
+        "nexus_get_context",
+        serde_json::json!({"task": "refactor PaymentService", "budget": 4000}),
+    );
+    assert_eq!(pkg["purpose"], "task", "{pkg}");
+    assert!(
+        pkg["basis"]["selection"]
+            .as_str()
+            .is_some_and(|s| s.contains("ranked")),
+        "the package says how it selected: {pkg}"
+    );
+    assert!(
+        pkg["items_considered"].is_number() && pkg["ledger"]["rows"].is_array(),
+        "the package accounts for itself: {pkg}"
+    );
+    assert!(
+        pkg["intent"]["intent"].is_string(),
+        "and for how it read the request: {pkg}"
+    );
+
+    let next = s.call(4, "nexus_what_next", serde_json::json!({}));
+    assert!(
+        next["question"].is_string() || next["status"].is_string(),
+        "{next}"
     );
     let _ = std::fs::remove_dir_all(&root);
 }

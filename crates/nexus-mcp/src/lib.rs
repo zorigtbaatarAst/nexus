@@ -94,6 +94,21 @@ pub struct RecordFindingArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ContextArgs {
+    /// What is being worked on, in the developer's own words. Intent is read from it by a
+    /// verb table, never by a model.
+    pub task: String,
+    /// Anchors you already have. A caller editing a file knows, and an explicit anchor is
+    /// not a guess.
+    #[serde(default)]
+    pub files: Vec<String>,
+    #[serde(default)]
+    pub symbols: Vec<String>,
+    /// Token ceiling. The package is selected to fit, never truncated to fit.
+    pub budget: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct FactArgs {
     /// Dotted and greppable: `arch.payment.idempotency`, `invariant.order.status`.
     pub key: String,
@@ -521,6 +536,62 @@ impl Nexus {
                 "narrow the target",
             ))),
             (Err(m), _) | (_, Err(m)) => Ok(failure("no_project", m, &["nexus_scan"])),
+        }
+    }
+
+    #[tool(
+        description = "The context for a task: the code it reaches, what is known about that \
+                       code, and why each item is here — ranked and fitted to a token budget \
+                       in one call. Every item carries a file:line anchor rather than file \
+                       contents, so read what you need and pay for nothing you do not. \
+                       Deterministic: no model runs anywhere in this pipeline."
+    )]
+    async fn nexus_get_context(
+        &self,
+        Parameters(a): Parameters<ContextArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let request = nexus_core::TaskRequest {
+            text: a.task,
+            files: a.files,
+            symbols: a.symbols,
+            budget_tokens: a.budget.unwrap_or(nexus_core::context::TASK_BUDGET_TOKENS),
+            purpose: nexus_core::Purpose::Task,
+        };
+        match self
+            .with_engine(move |e| e.context(&request).map_err(|e| e.to_string()))
+            .await
+        {
+            Ok(p) => Ok(ok(budget::fit(
+                &serde_json::to_value(&p).unwrap_or(json!({})),
+                "items",
+                "lower the budget",
+            ))),
+            Err(m) => Ok(failure("no_baseline", m, &["nexus_scan"])),
+        }
+    }
+
+    #[tool(
+        description = "What to look at next: the changed symbols this scan reports, ranked. \
+                       This has existed in the CLI since the first release and has never been \
+                       reachable by an agent."
+    )]
+    async fn nexus_what_next(
+        &self,
+        Parameters(_): Parameters<NoArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self
+            .with_engine(|e| {
+                e.ask(&nexus_core::Question::Next)
+                    .map_err(|err| err.to_string())
+            })
+            .await
+        {
+            Ok(answer) => Ok(ok(budget::fit(
+                &serde_json::to_value(&answer).unwrap_or(json!({})),
+                "items",
+                "run nexus_rescan first",
+            ))),
+            Err(m) => Ok(failure("no_baseline", m, &["nexus_scan"])),
         }
     }
 
