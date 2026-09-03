@@ -5,6 +5,7 @@
 //! `tests/boundaries.rs` fails the build otherwise.
 
 mod analyze;
+mod memory;
 mod query;
 mod rescan;
 mod scan;

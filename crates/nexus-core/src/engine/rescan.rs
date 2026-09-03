@@ -47,6 +47,7 @@ impl Engine {
                 files_changed: 0,
                 files_deleted: 0,
                 symbols_changed: 0,
+                facts_invalidated: 0,
                 items: Vec::new(),
                 files_failed: 0,
                 health: Health::Ok,
@@ -146,6 +147,7 @@ impl Engine {
                 files_changed: 0,
                 files_deleted: 0,
                 symbols_changed: 0,
+                facts_invalidated: 0,
                 items: Vec::new(),
                 files_failed: 0,
                 health: Health::Ok,
@@ -205,6 +207,11 @@ impl Engine {
                 old_by_path.insert(path.clone(), map);
             }
         }
+
+        // Where every fact's evidence points, read against the index this scan is about to
+        // rewrite. Resolved here for the same reason `old_by_path` is: the transaction holds
+        // the connection.
+        let anchors = self.fact_anchors(&mut warnings)?;
 
         let tx = self.store.transaction()?;
 
@@ -500,6 +507,11 @@ impl Engine {
         // Tier 3: an added or renamed symbol can resolve edges elsewhere without those
         // files changing, so resolution re-runs over the unresolved set every scan.
         Store::resolve_edges(&tx, self.project_id)?;
+        // A fact about code this scan changed or removed is a trap for the next reader.
+        // Inside the transaction, so a crash cannot leave the index new and the memory old.
+        let facts_invalidated =
+            Store::invalidate_moved_facts(&tx, self.project_id, &anchors, &nexus_store::now())?
+                .len();
         tx.commit().map_err(nexus_store::StoreError::from)?;
 
         let (files, symbols) = self.store.index_counts(self.project_id)?;
@@ -516,6 +528,7 @@ impl Engine {
             files_changed: changed.len(),
             files_deleted: deleted_paths.len(),
             symbols_changed,
+            facts_invalidated,
             items,
             files_failed: failed,
             health: if failed > 0 {

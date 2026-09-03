@@ -88,6 +88,9 @@ pub struct RescanReport {
     pub files_changed: usize,
     pub files_deleted: usize,
     pub symbols_changed: usize,
+    /// Facts whose evidence pointed at a symbol or file this scan changed or removed. They
+    /// stay on disk and stop being retrieved.
+    pub facts_invalidated: usize,
     pub items: Vec<ChangeItem>,
     pub files_failed: usize,
     pub health: Health,
