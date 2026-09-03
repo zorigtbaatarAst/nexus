@@ -294,9 +294,11 @@ pub(crate) fn fill(
 pub mod expand;
 pub mod intent;
 pub mod seeds;
+pub mod signals;
 
 pub use intent::{classify, Intent, IntentMatch};
 pub use seeds::{Seed, SeedResult, SeedSource};
+pub use signals::{SignalIndex, Signals};
 
 #[cfg(test)]
 mod intent_tests {
