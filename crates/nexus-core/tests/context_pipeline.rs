@@ -445,3 +445,34 @@ fn an_external_graph_is_ignored_unless_the_config_asks_and_is_labelled_when_it_d
         "external-graph edges stay out of the resolution rate: {after:?}"
     );
 }
+
+#[test]
+fn naming_a_class_seeds_its_methods_so_expansion_reaches_the_callers() {
+    // The dependency graph is method-level: nothing calls a class. Seeding only the class
+    // means "refactor PaymentService" — the commonest way anyone names code — expands to
+    // nothing at all, which is the whole product claim failing on its most likely input.
+    let (_root, engine) = scanned("container");
+    let seeded = engine
+        .seeds(&request("refactor mn.pay.PaymentService"), Intent::Refactor)
+        .expect("seeds");
+    assert!(
+        seeded.seeds.iter().any(|s| s.symbol.fqn.contains('#')),
+        "the class's members are seeds too: {:?}",
+        seeded
+            .seeds
+            .iter()
+            .map(|s| &s.symbol.fqn)
+            .collect::<Vec<_>>()
+    );
+
+    let out = engine
+        .expand(&seeded.seeds, Intent::Refactor)
+        .expect("expand");
+    assert!(
+        out.items
+            .iter()
+            .any(|i| i.fqn.contains("PaymentController")),
+        "and the caller is reachable from them: {:?}",
+        out.items.iter().map(|i| &i.fqn).collect::<Vec<_>>()
+    );
+}

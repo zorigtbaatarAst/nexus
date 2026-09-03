@@ -1,0 +1,11 @@
+{
+  "task": "review mn.pay.PaymentController",
+  "intent": "review",
+  "included": [
+    "mn.pay.PaymentController",
+    "mn.pay.PaymentController#service",
+    "mn.pay.PaymentController#create(String)",
+    "invariant.payment.idempotency"
+  ],
+  "excluded": []
+}

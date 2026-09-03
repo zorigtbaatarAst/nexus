@@ -1341,6 +1341,38 @@ impl Store {
         Ok(rows)
     }
 
+    /// The symbols declared inside a container — a class's methods and fields.
+    ///
+    /// Needed because the dependency graph is method-level: nothing calls a class, so a seed
+    /// that is a class has no incoming edges and reaches nothing. Naming the class is the
+    /// commonest way a person names the code, so the members have to come with it.
+    pub fn members_of(
+        &self,
+        project_id: ProjectId,
+        container_fqn: &str,
+        limit: usize,
+    ) -> Result<Vec<SymbolRef>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.fqn, s.kind, f.path, s.start_line
+             FROM live_symbols s JOIN live_files f ON f.id = s.file_id
+             WHERE s.project_id = ?1
+               AND (s.fqn LIKE ?2 || '#%' OR s.fqn LIKE ?2 || '.%')
+             ORDER BY s.start_line LIMIT ?3",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id, container_fqn, limit as i64], |r| {
+                Ok(SymbolRef {
+                    id: r.get(0)?,
+                    fqn: r.get(1)?,
+                    kind: r.get(2)?,
+                    file_path: r.get(3)?,
+                    start_line: r.get(4)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     // ── detector snapshot ────────────────────────────────────
 
     /// Everything a detector needs about symbols, in one pass.

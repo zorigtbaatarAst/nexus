@@ -1,0 +1,14 @@
+{
+  "task": "refactor mn.pay.PaymentService",
+  "intent": "refactor",
+  "included": [
+    "mn.pay.PaymentService",
+    "mn.pay.PaymentService#pay(String)",
+    "mn.pay.PaymentService#repo",
+    "mn.pay.PaymentController#create(String)",
+    "invariant.payment.idempotency"
+  ],
+  "excluded": [
+    "mn.pay.PaymentService#refund(String)  at most 3 items from src/mn/pay/PaymentService.java"
+  ]
+}

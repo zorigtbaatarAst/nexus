@@ -98,26 +98,37 @@ pub fn resolve(
     let mut found: BTreeMap<i64, Seed> = BTreeMap::new();
     let mut notes = Vec::new();
 
-    let mut offer = |symbol: SymbolRef, source: SeedSource, why: String| {
-        found
-            .entry(symbol.id)
-            .and_modify(|existing| {
-                if source < existing.source {
-                    existing.source = source;
-                    existing.why = why.clone();
-                }
-            })
-            .or_insert(Seed {
-                symbol,
-                source,
-                why,
-            });
-    };
+    /// A symbol that declares others. The graph has no edges into one of these, so seeding
+    /// it alone reaches nothing.
+    fn is_container(kind: &str) -> bool {
+        matches!(
+            kind,
+            "class" | "interface" | "enum" | "record" | "module" | "package" | "trait" | "struct"
+        )
+    }
+
+    let offer =
+        |found: &mut BTreeMap<i64, Seed>, symbol: SymbolRef, source: SeedSource, why: String| {
+            found
+                .entry(symbol.id)
+                .and_modify(|existing| {
+                    if source < existing.source {
+                        existing.source = source;
+                        existing.why = why.clone();
+                    }
+                })
+                .or_insert(Seed {
+                    symbol,
+                    source,
+                    why,
+                });
+        };
 
     // 1 — explicit. The caller has the anchors; nothing here is a guess.
     for fqn in &req.symbols {
         for s in store.find_symbols(project_id, fqn, 25)? {
             offer(
+                &mut found,
                 s,
                 SeedSource::Explicit,
                 format!("named in the request: {fqn}"),
@@ -126,7 +137,12 @@ pub fn resolve(
     }
     for path in &req.files {
         for s in store.find_symbols(project_id, path, 200)? {
-            offer(s, SeedSource::Explicit, format!("in a named file: {path}"));
+            offer(
+                &mut found,
+                s,
+                SeedSource::Explicit,
+                format!("in a named file: {path}"),
+            );
         }
     }
 
@@ -141,7 +157,7 @@ pub fn resolve(
             } else {
                 SeedSource::NameMatch
             };
-            offer(s, source, format!("'{target}' in the request"));
+            offer(&mut found, s, source, format!("'{target}' in the request"));
         }
     }
 
@@ -152,7 +168,12 @@ pub fn resolve(
                 for (_, _, target, _) in store.changes_for_scan(b.scan_id, Some("symbol"))? {
                     let Some(fqn) = target else { continue };
                     for s in store.find_symbols(project_id, &fqn, 5)? {
-                        offer(s, SeedSource::Changed, "changed in this scan".into());
+                        offer(
+                            &mut found,
+                            s,
+                            SeedSource::Changed,
+                            "changed in this scan".into(),
+                        );
                     }
                 }
             }
@@ -178,6 +199,7 @@ pub fn resolve(
             if subject.len() > 2 && lower.contains(&subject.to_lowercase()) {
                 for s in store.find_symbols(project_id, subject, 10)? {
                     offer(
+                        &mut found,
                         s,
                         SeedSource::FactSubject,
                         format!("subject of fact {}", fact.key),
@@ -192,10 +214,42 @@ pub fn resolve(
     for fqn in &req.carry_seeds {
         for s in store.find_symbols(project_id, fqn, 25)? {
             offer(
+                &mut found,
                 s,
                 SeedSource::Carried,
                 format!("carried from the previous turn: {fqn}"),
             );
+        }
+    }
+
+    // Nothing calls a class. The dependency graph is method-level, so a seed that names a
+    // container has no incoming edges and expansion from it reaches nothing at all — while
+    // naming the class is the commonest way a person names the code. Its members are what
+    // the request actually meant, so they are seeded at the same strength, and the `why`
+    // says which container brought them.
+    // The closure above borrows `found` mutably for its whole lifetime, so members are
+    // collected and inserted directly rather than through it.
+    let containers: Vec<(String, SeedSource, String)> = found
+        .values()
+        .filter(|s| is_container(&s.symbol.kind))
+        .map(|s| (s.symbol.fqn.clone(), s.source, s.why.clone()))
+        .collect();
+    for (fqn, source, why) in containers {
+        for member in store.members_of(project_id, &fqn, 100)? {
+            let why = format!("{why} (member of {fqn})");
+            found
+                .entry(member.id)
+                .and_modify(|existing| {
+                    if source < existing.source {
+                        existing.source = source;
+                        existing.why = why.clone();
+                    }
+                })
+                .or_insert(Seed {
+                    symbol: member,
+                    source,
+                    why,
+                });
         }
     }
 

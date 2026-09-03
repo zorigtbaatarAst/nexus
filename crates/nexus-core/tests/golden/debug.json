@@ -1,0 +1,14 @@
+{
+  "task": "fix the bug in mn.pay.PaymentService",
+  "intent": "debug",
+  "included": [
+    "mn.pay.PaymentService",
+    "mn.pay.PaymentService#pay(String)",
+    "mn.pay.PaymentService#repo",
+    "mn.pay.PaymentRepository#save(String)",
+    "invariant.payment.idempotency"
+  ],
+  "excluded": [
+    "mn.pay.PaymentService#refund(String)  at most 3 items from src/mn/pay/PaymentService.java"
+  ]
+}
