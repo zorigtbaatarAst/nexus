@@ -26,7 +26,8 @@ pub fn default_registry() -> Registry {
         // The language Nexus is written in. Until this was here, `nexus scan` on this
         // repository reported files and zero symbols: the tool could describe every project
         // except the one it is.
-        .register(Box::new(nexus_lang_rust::RustAnalyzer::new()));
+        .register(Box::new(nexus_lang_rust::RustAnalyzer::new()))
+        .register(Box::new(nexus_lang_python::PythonAnalyzer::new()));
     registry
 }
 
@@ -38,7 +39,7 @@ mod tests {
     fn the_pack_is_not_empty_and_claims_the_languages_it_says_it_does() {
         let r = default_registry();
         assert!(!r.is_empty());
-        for path in ["A.java", "a.ts", "schema.graphqls", "lib.rs"] {
+        for path in ["A.java", "a.ts", "schema.graphqls", "lib.rs", "app.py"] {
             assert!(r.for_path(path).is_some(), "{path} is unclaimed");
         }
     }

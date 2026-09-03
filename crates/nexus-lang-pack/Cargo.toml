@@ -12,3 +12,4 @@ nexus-lang-java.workspace = true
 nexus-lang-ts.workspace = true
 nexus-lang-graphql.workspace = true
 nexus-lang-rust.workspace = true
+nexus-lang-python.workspace = true
