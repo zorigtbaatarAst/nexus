@@ -26,6 +26,7 @@ pub mod history;
 pub mod impact;
 pub mod memory;
 pub mod policy;
+pub mod portable;
 pub mod project;
 pub mod report;
 pub mod rules;

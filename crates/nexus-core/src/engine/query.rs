@@ -560,6 +560,143 @@ impl Engine {
         }
         Ok(by_namespace.into_iter().collect())
     }
+    /// Everything portable about this project's memory (§7).
+    ///
+    /// Read-only, and evidence travels as `path:line` references. Never source text: a
+    /// knowledge file carrying code would be a second copy of the repository with none of its
+    /// access control, and the whole point is that this is safe to commit.
+    pub fn export_portable(&self) -> Result<crate::portable::Portable> {
+        let facts = self
+            .store
+            .facts(self.project_id, None)?
+            .iter()
+            .map(|r| {
+                let e = crate::memory::ExportedFact::from_row(r);
+                crate::portable::PortableFact {
+                    key: r.key.clone(),
+                    scope: r.scope.clone(),
+                    subject: r.subject.clone(),
+                    claim: r.claim.clone(),
+                    source: r.source.clone(),
+                    confidence: r.confidence,
+                    evidence: e.evidence,
+                }
+            })
+            .collect();
+        let findings = self
+            .findings(None, None, None)?
+            .into_iter()
+            .map(|f| crate::portable::PortableFinding {
+                fingerprint: f.slug.clone(),
+                capability: f.capability,
+                uid: f.uid,
+                title: f.title,
+                finding_type: f.finding_type,
+                severity: f.severity,
+                status: f.status,
+                component: f.component,
+                file: f.file,
+                line: f.line,
+            })
+            .collect();
+        Ok(crate::portable::Portable {
+            format: crate::portable::FORMAT,
+            project: self.name(),
+            exported_at: nexus_store::now(),
+            facts,
+            findings,
+        })
+    }
+
+    /// Merge a portable document. Conflicts are reported and skipped.
+    ///
+    /// Two people who believe different things under one fact key have a disagreement, and
+    /// picking one silently produces a database that says something neither of them said. So
+    /// a differing claim is a line in the report and nothing else, and the local row stands.
+    pub fn import_portable(
+        &mut self,
+        doc: &crate::portable::Portable,
+    ) -> Result<crate::portable::ImportReport> {
+        let mut report = crate::portable::ImportReport::default();
+        if doc.format > crate::portable::FORMAT {
+            return Err(EngineError::Unsupported(format!(
+                "this file is format {} and this build reads {} — upgrade nexus",
+                doc.format,
+                crate::portable::FORMAT
+            )));
+        }
+
+        let existing: std::collections::BTreeMap<String, String> = self
+            .store
+            .facts(self.project_id, None)?
+            .into_iter()
+            .map(|f| (f.key, f.claim))
+            .collect();
+
+        for f in &doc.facts {
+            match existing.get(&f.key) {
+                Some(claim) if claim == &f.claim => {
+                    report.facts_unchanged += 1;
+                    continue;
+                }
+                Some(claim) => {
+                    report.conflicts.push(format!(
+                        "fact {}: here \"{claim}\", incoming \"{}\" — kept the local one",
+                        f.key, f.claim
+                    ));
+                    continue;
+                }
+                None => {}
+            }
+            let evidence = f
+                .evidence
+                .iter()
+                .filter_map(|e| {
+                    let (file, line) = e.rsplit_once(':')?;
+                    Some(CodeRef {
+                        file: file.to_string(),
+                        line: line.parse().ok()?,
+                        note: String::new(),
+                    })
+                })
+                .collect();
+            self.record_fact(FactInput {
+                key: f.key.clone(),
+                scope: f.scope.clone(),
+                subject: f.subject.clone(),
+                claim: f.claim.clone(),
+                source: f.source.clone(),
+                evidence,
+                confidence: f.confidence,
+            })?;
+            report.facts_added += 1;
+        }
+
+        // Findings are identified by fingerprint, which is what makes the same defect on two
+        // machines one finding rather than two. The local uid is not carried across: a
+        // display id is local, and importing one would collide with a number already in use.
+        let here: std::collections::BTreeMap<String, String> = self
+            .findings(None, None, None)?
+            .into_iter()
+            .map(|f| (f.slug, f.status))
+            .collect();
+        for f in &doc.findings {
+            match here.get(&f.fingerprint) {
+                Some(status) if status == &f.status => report.findings_unchanged += 1,
+                Some(status) => report.conflicts.push(format!(
+                    "finding {}: here {status}, incoming {} — kept the local status",
+                    f.fingerprint, f.status
+                )),
+                None => report.conflicts.push(format!(
+                    "finding {} ({}) is not present here — a finding is produced by running a \
+                     capability, not by importing one",
+                    f.fingerprint, f.title
+                )),
+            }
+        }
+        Ok(report)
+    }
+
     /// How many commits this project's ledger holds.
     pub fn commit_count(&self) -> Result<i64> {
         Ok(self.store.commit_count(self.project_id)?)

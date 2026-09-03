@@ -64,6 +64,18 @@ enum MemoryCommand {
 }
 
 #[derive(Subcommand)]
+enum ShareCommand {
+    /// Write facts and findings to one JSON document, safe to commit
+    Export {
+        /// Where to write. Defaults to stdout.
+        #[arg(long, value_name = "PATH")]
+        out: Option<PathBuf>,
+    },
+    /// Merge a document written by `export`. Conflicts are reported, never resolved.
+    Import { file: PathBuf },
+}
+
+#[derive(Subcommand)]
 enum Command {
     /// Detect the project, create .nexus/, migrate the database
     Init {
@@ -126,6 +138,11 @@ enum Command {
         /// changed | affected <target> | uses <target> | known <target> | facts | next
         #[arg(trailing_var_arg = true)]
         question: Vec<String>,
+    },
+    /// Move findings and facts between machines, over a file rather than a server
+    Share {
+        #[command(subcommand)]
+        cmd: ShareCommand,
     },
     /// Project memory: what has been learned, as files a person can read
     Memory {
@@ -621,6 +638,58 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             });
         }
 
+        Command::Share { cmd } => match cmd {
+            ShareCommand::Export { out: dest } => {
+                let engine = open(&root)?;
+                let doc = engine.export_portable()?;
+                let body = serde_json::to_string_pretty(&doc)?;
+                match dest {
+                    Some(path) => {
+                        std::fs::write(path, format!("{body}\n"))?;
+                        if !cli.quiet {
+                            writeln!(
+                                out,
+                                "wrote {} fact(s) and {} finding(s) to {}",
+                                doc.facts.len(),
+                                doc.findings.len(),
+                                path.display()
+                            )?;
+                        }
+                    }
+                    // stdout is results: the document *is* the result, so it goes there whole
+                    // and nothing else does.
+                    None => writeln!(out, "{body}")?,
+                }
+            }
+            ShareCommand::Import { file } => {
+                let raw = std::fs::read_to_string(file)?;
+                let doc: nexus_core::portable::Portable = serde_json::from_str(&raw)?;
+                let mut engine = open(&root)?;
+                let report = engine.import_portable(&doc)?;
+                emit!(&report, {
+                    writeln!(
+                        out,
+                        "{} fact(s) added, {} already here",
+                        report.facts_added, report.facts_unchanged
+                    )?;
+                    if !report.conflicts.is_empty() {
+                        writeln!(out)?;
+                        writeln!(
+                            out,
+                            "{}",
+                            st.warn(&format!(
+                                "{} conflict(s), none applied:",
+                                report.conflicts.len()
+                            ))
+                        )?;
+                        for c in &report.conflicts {
+                            writeln!(out, "  {c}")?;
+                        }
+                    }
+                });
+            }
+        },
+
         Command::Memory {
             cmd: MemoryCommand::Export { markdown },
         } => {
@@ -882,6 +951,7 @@ fn envelope<T: Serialize>(cli: &Cli, value: T) -> Result<String, serde_json::Err
             Command::Ask { .. } => "ask",
             Command::Context { .. } => "context",
             Command::Memory { .. } => "memory",
+            Command::Share { .. } => "share",
             Command::Fact { .. } => "fact",
             Command::Ignore { .. } => "ignore",
             Command::Doctor => "doctor",
