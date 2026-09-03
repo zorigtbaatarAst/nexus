@@ -145,6 +145,12 @@ enum Command {
         /// hook's command string does not change when scoping lands.
         #[arg(long)]
         changed: bool,
+        /// Write a reproduction scaffold for this finding instead of running anything.
+        ///
+        /// It does not reproduce the defect: it names it, quotes its evidence and fails until
+        /// somebody writes the assertion. Written only inside .nexus/generated-tests.
+        #[arg(long, value_name = "UID")]
+        reproduce: Option<String>,
     },
     /// Move findings and facts between machines, over a file rather than a server
     Share {
@@ -645,8 +651,23 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             });
         }
 
-        Command::Verify { changed: _ } => {
+        Command::Verify {
+            changed: _,
+            reproduce,
+        } => {
             let mut engine = open(&root)?;
+            if let Some(uid) = reproduce {
+                let path = engine.reproduce(uid)?;
+                if !cli.quiet {
+                    writeln!(out, "wrote {path}")?;
+                    writeln!(
+                        out,
+                        "  {}",
+                        st.dim("it fails until you write the assertion — that is the point")
+                    )?;
+                }
+                return Ok(exit::OK);
+            }
             let report = engine.verify()?;
             let failed = report.verdict == "failed";
             emit!(&report, {

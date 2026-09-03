@@ -213,3 +213,52 @@ fn a_scoped_run_loads_less_than_a_full_one_and_says_the_graph_is_partial() {
     assert!(scoped > 0, "and still load what was asked for");
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_reproduction_scaffold_lands_only_inside_the_jail() {
+    // T4: Nexus modifies production code. Every generated file goes through the SafeWriter
+    // root, and this asserts the path that came back is inside it.
+    let (root, mut e) = project("scaffold", GREEN);
+    e.record_finding(
+        "bughunter",
+        nexus_core::findings::Finding {
+            finding_type: nexus_types::FindingType::Logic,
+            title: "a suspected defect".into(),
+            component: "demo".into(),
+            anchor_fqn: None,
+            severity: nexus_types::Severity::Medium,
+            confidence: 0.7,
+            detector: "test".into(),
+            structural_key: "k".into(),
+            slug: "suspected".into(),
+            evidence: vec![nexus_core::findings::CodeRef {
+                file: "src/lib.rs".into(),
+                line: 1,
+                note: "here".into(),
+            }],
+            capability_data: None,
+        },
+    )
+    .expect("record");
+    let uid = e.findings(None, None, None).expect("findings")[0]
+        .uid
+        .clone();
+
+    let written = e.reproduce(&uid).expect("scaffold");
+    let jail = root
+        .join(".nexus/generated-tests")
+        .canonicalize()
+        .expect("jail root");
+    assert!(
+        std::path::Path::new(&written).starts_with(&jail),
+        "{written} is outside {jail:?}"
+    );
+
+    let body = fs::read_to_string(&written).expect("read");
+    assert!(body.contains(&uid), "it names the finding: {body}");
+    assert!(
+        body.contains("write the assertion"),
+        "and fails until somebody writes one: {body}"
+    );
+    let _ = fs::remove_dir_all(&root);
+}

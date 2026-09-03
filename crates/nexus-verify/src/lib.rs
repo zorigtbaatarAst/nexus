@@ -29,6 +29,11 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod reproduce;
+pub mod safe_writer;
+
+pub use safe_writer::{JailError, SafeWriter};
+
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1059,5 +1064,138 @@ mod parse_tests_tests {
     fn a_test_is_reported_once_even_if_the_runner_repeats_it() {
         let out = parse_tests("test works ... ok\ntest works ... ok");
         assert_eq!(out.len(), 1);
+    }
+}
+
+// ─────────────────────────── the sandbox ───────────────────────────
+
+/// Where a run happens. `security.md` §4 and ADR-009: Docker when available, host with an
+/// explicit committed opt-in, and nothing at all by default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sandbox {
+    Docker,
+    Host,
+}
+
+impl Sandbox {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Sandbox::Docker => "docker",
+            Sandbox::Host => "host",
+        }
+    }
+}
+
+/// Whether a container runtime is on this machine.
+pub fn docker_available() -> bool {
+    Command::new("docker")
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Wrap a step so it runs in a container with the profile `security.md` §4 specifies.
+///
+/// The repository is mounted read-only *inside* the container as well: a test that tries to
+/// rewrite a source file then fails on the filesystem rather than on trust. Only
+/// `.nexus/generated-tests` is writable, which is the same root the jail enforces on the
+/// outside — two independent mechanisms for one rule, because this is the one that runs
+/// somebody else's code.
+///
+/// Still argv, never a shell string: the container arguments are separate elements and the
+/// command they wrap is appended element by element.
+pub fn containerize(step: &Step, project_root: &Path, image: &str, network: bool) -> Step {
+    let mut argv: Vec<String> = [
+        "docker",
+        "run",
+        "--rm",
+        "--read-only",
+        "--security-opt",
+        "no-new-privileges",
+        "--memory",
+        "4g",
+        "--cpus",
+        "4",
+        "--pids-limit",
+        "512",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+
+    if !network {
+        // T9: a test run must not be able to exfiltrate the source it was given.
+        argv.push("--network=none".into());
+    }
+    argv.push("-v".into());
+    argv.push(format!("{}:/work:ro", project_root.display()));
+    argv.push("-v".into());
+    argv.push(format!(
+        "{}/.nexus/generated-tests:/work/.nexus/generated-tests:rw",
+        project_root.display()
+    ));
+    argv.push("-w".into());
+    argv.push("/work".into());
+    argv.push(image.to_string());
+    argv.extend(step.argv.iter().cloned());
+
+    Step {
+        kind: step.kind,
+        argv,
+    }
+}
+
+#[cfg(test)]
+mod sandbox_tests {
+    use super::*;
+
+    fn step() -> Step {
+        Step {
+            kind: CheckKind::Test,
+            argv: vec!["cargo".into(), "test".into()],
+        }
+    }
+
+    #[test]
+    fn the_container_profile_is_the_one_the_security_model_specifies() {
+        let s = containerize(&step(), Path::new("/proj"), "rust:1", false);
+        let joined = s.argv.join(" ");
+        for required in [
+            "--rm",
+            "--read-only",
+            "--security-opt no-new-privileges",
+            "--network=none",
+            "--pids-limit 512",
+        ] {
+            assert!(
+                joined.contains(required),
+                "{required} missing from {joined}"
+            );
+        }
+        assert!(joined.contains("/proj:/work:ro"), "{joined}");
+        assert!(
+            joined.contains("generated-tests:rw"),
+            "the jail root is the only writable path: {joined}"
+        );
+    }
+
+    #[test]
+    fn the_wrapped_command_survives_as_separate_arguments() {
+        // Still argv, never a shell string. The command is appended element by element, so a
+        // metacharacter in it is a character wherever it ends up.
+        let s = containerize(&step(), Path::new("/proj"), "rust:1", false);
+        assert_eq!(&s.argv[s.argv.len() - 2..], ["cargo", "test"]);
+    }
+
+    #[test]
+    fn network_access_has_to_be_asked_for() {
+        let closed = containerize(&step(), Path::new("/p"), "i", false);
+        let open = containerize(&step(), Path::new("/p"), "i", true);
+        assert!(closed.argv.iter().any(|a| a == "--network=none"));
+        assert!(!open.argv.iter().any(|a| a == "--network=none"));
     }
 }

@@ -42,6 +42,31 @@ impl Engine {
             policy.timeout_seconds,
         );
 
+        // `docker` means the container profile of security.md §4, and it means *refuse*
+        // when there is no container runtime. Silently falling back to the host would run
+        // somebody's test suite unsandboxed on a machine whose committed policy asked for a
+        // sandbox — a permission downgrade nobody agreed to.
+        let sandbox = match policy.execute.as_str() {
+            "docker" if !nexus_verify::docker_available() => {
+                return Ok(VerifyReport {
+                    verdict: "inconclusive".into(),
+                    why: Some(
+                        "policy.execute is \"docker\" and no container runtime is available. \
+                         Nothing was run: falling back to the host would be a permission \
+                         downgrade nobody agreed to."
+                            .into(),
+                    ),
+                    checks: Vec::new(),
+                    baseline: None,
+                    note: None,
+                    duration_ms: started.elapsed().as_millis(),
+                });
+            }
+            "docker" => nexus_verify::Sandbox::Docker,
+            _ => nexus_verify::Sandbox::Host,
+        };
+        let plan = containerize_plan(plan, sandbox, &self.root, &policy);
+
         let head = run_plan(&HostRunner, &plan, &self.root);
         // The ledger, before the judgement: what ran is a fact whatever the verdict turns out
         // to be, and a run that is only recorded when it is interesting is a run nobody can
@@ -67,6 +92,41 @@ impl Engine {
             note,
             duration_ms: started.elapsed().as_millis(),
         })
+    }
+
+    /// Write a reproduction scaffold for a finding, through the jail (roadmap 5.6).
+    ///
+    /// The scaffold does not reproduce anything. It names the finding, quotes its evidence
+    /// and fails until somebody writes the assertion — a generated test that passes because
+    /// it asserts nothing looks like coverage, which is worse than having none.
+    pub fn reproduce(&self, uid: &str) -> Result<String> {
+        let Some(finding) = self.finding(uid)? else {
+            return Err(EngineError::Unsupported(format!("no finding {uid}")));
+        };
+        let profile = self.load_profile()?;
+        let framework = nexus_verify::reproduce::Framework::for_build_system(
+            profile.as_ref().and_then(|p| p.build_system.as_deref()),
+        )
+        .ok_or_else(|| {
+            EngineError::Unsupported(
+                "no test framework is known for this build system, and a scaffold in the wrong \
+                 language is a file somebody has to find and delete"
+                    .into(),
+            )
+        })?;
+        let subject = nexus_verify::reproduce::Subject {
+            uid: finding.summary.uid.clone(),
+            title: finding.summary.title.clone(),
+            evidence: finding
+                .evidence
+                .iter()
+                .map(|e| format!("{}:{}", e.file, e.line))
+                .collect(),
+            anchor: finding.summary.component.clone(),
+        };
+        let path = nexus_verify::reproduce::write(&self.root, &subject, framework)
+            .map_err(|e| EngineError::Unsupported(e.to_string()))?;
+        Ok(path.display().to_string())
     }
 
     /// Everything a run leaves behind: the ledger row, the tests it named, and the coverage
@@ -263,5 +323,30 @@ impl Engine {
             }
         }
         Ok(())
+    }
+}
+
+/// Wrap every step for the chosen sandbox.
+///
+/// A separate function so the choice is made once and visibly. The image comes from the
+/// language rather than from configuration for now: a wrong image fails loudly at `docker
+/// run`, where a configurable one silently runs the suite somewhere unexpected.
+fn containerize_plan(
+    plan: Plan,
+    sandbox: nexus_verify::Sandbox,
+    root: &std::path::Path,
+    policy: &crate::policy::Execution,
+) -> Plan {
+    if sandbox != nexus_verify::Sandbox::Docker {
+        return plan;
+    }
+    let image = policy.image.clone();
+    Plan {
+        steps: plan
+            .steps
+            .iter()
+            .map(|s| nexus_verify::containerize(s, root, &image, policy.allow_network))
+            .collect(),
+        ..plan
     }
 }

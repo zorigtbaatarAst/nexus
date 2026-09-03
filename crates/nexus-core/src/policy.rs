@@ -196,6 +196,11 @@ pub struct Execution {
     /// commits a change saying otherwise.
     pub execute: String,
     pub timeout_seconds: u64,
+    /// Inside the sandbox. False by default (T9: a test run must not be able to exfiltrate
+    /// the source it was given).
+    pub allow_network: bool,
+    /// The container image, when `execute = "docker"`.
+    pub image: String,
 }
 
 impl Default for Execution {
@@ -203,6 +208,8 @@ impl Default for Execution {
         Execution {
             execute: "none".into(),
             timeout_seconds: 600,
+            allow_network: false,
+            image: "docker.io/library/debian:stable-slim".into(),
         }
     }
 }
@@ -219,12 +226,16 @@ struct ExecutionFile {
 struct PermissionsSection {
     #[serde(default)]
     execute: Option<String>,
+    #[serde(default)]
+    allow_network: Option<bool>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
 struct ExecuteSection {
     #[serde(default)]
     timeout_seconds: Option<u64>,
+    #[serde(default)]
+    image: Option<String>,
 }
 
 /// Read `[permissions] execute` and `[execute] timeout_seconds`.
@@ -247,5 +258,10 @@ pub fn load_execution(policy_toml: &std::path::Path) -> Execution {
             _ => "none".into(),
         },
         timeout_seconds: f.execute.timeout_seconds.unwrap_or(600).clamp(1, 3600),
+        allow_network: f.permissions.allow_network.unwrap_or(false),
+        image: f
+            .execute
+            .image
+            .unwrap_or_else(|| Execution::default().image),
     }
 }
