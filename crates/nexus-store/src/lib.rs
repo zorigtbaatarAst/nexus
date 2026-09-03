@@ -316,6 +316,33 @@ pub struct FactRow {
     pub evidence_json: Option<String>,
 }
 
+/// A fact that is current: neither superseded nor invalidated.
+#[derive(Debug, Clone)]
+pub struct LiveFact {
+    pub id: i64,
+    pub evidence_json: Option<String>,
+}
+
+/// The symbol a fact's evidence line falls inside, and the hashes it had when the anchor
+/// was taken. Either hash moving means the code the fact describes is not the code it
+/// described.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnchorSymbol {
+    pub fqn: String,
+    pub sig_hash: String,
+    pub body_hash: String,
+}
+
+/// Where one piece of a fact's evidence points, resolved against the index *before* a scan
+/// rewrites it. `symbol` is `None` when no symbol spans the line — a config file, an import,
+/// a blank line — and the anchor is then the file alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FactAnchor {
+    pub fact_id: i64,
+    pub path: String,
+    pub symbol: Option<AnchorSymbol>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Baseline {
     pub scan_id: ScanId,
@@ -1788,6 +1815,107 @@ impl Store {
         Ok(rows)
     }
 
+    /// Every fact that would be retrieved right now, with its raw evidence. The engine turns
+    /// the evidence into `FactAnchor`s; the store does not know what evidence JSON means.
+    pub fn live_facts(&self, project_id: ProjectId) -> Result<Vec<LiveFact>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, evidence_json FROM facts
+             WHERE project_id = ?1 AND superseded_by IS NULL AND invalidated_at IS NULL",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id], |r| {
+                Ok(LiveFact {
+                    id: r.get(0)?,
+                    evidence_json: r.get(1)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// The innermost live symbol spanning `line` in `path`, with its current hashes.
+    /// A method inside a class wins over the class: the narrower span is the one the
+    /// evidence is about.
+    pub fn symbol_at(
+        &self,
+        project_id: ProjectId,
+        path: &str,
+        line: i64,
+    ) -> Result<Option<AnchorSymbol>> {
+        let hit = self
+            .conn
+            .query_row(
+                "SELECT s.fqn, s.sig_hash, s.body_hash
+                 FROM live_symbols s JOIN live_files f ON f.id = s.file_id
+                 WHERE f.project_id = ?1 AND f.path = ?2
+                   AND ?3 BETWEEN s.start_line AND s.end_line
+                 ORDER BY (s.end_line - s.start_line) ASC
+                 LIMIT 1",
+                params![project_id, path, line],
+                |r| {
+                    Ok(AnchorSymbol {
+                        fqn: r.get(0)?,
+                        sig_hash: r.get(1)?,
+                        body_hash: r.get(2)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(hit)
+    }
+
+    /// Invalidate every fact whose anchor no longer holds, and return their ids.
+    ///
+    /// An anchor holds when its file is live and, if it named a symbol, that symbol is live
+    /// in that file with the same `sig_hash` and `body_hash`. Anything else — file deleted or
+    /// renamed, symbol deleted or renamed, either hash moved — means the fact describes code
+    /// that is not there any more. The row is kept: what Nexus believed at a scan, and what
+    /// changed its mind, must stay answerable. A fact already invalidated is not counted
+    /// again, so the first timestamp stands.
+    pub fn invalidate_moved_facts(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        anchors: &[FactAnchor],
+        at: &str,
+    ) -> Result<Vec<i64>> {
+        let mut invalidated = std::collections::BTreeSet::new();
+        for anchor in anchors {
+            let intact: bool = match &anchor.symbol {
+                Some(symbol) => tx.query_row(
+                    "SELECT EXISTS (
+                       SELECT 1 FROM live_symbols s JOIN live_files f ON f.id = s.file_id
+                       WHERE f.project_id = ?1 AND f.path = ?2 AND s.fqn = ?3
+                         AND s.sig_hash = ?4 AND s.body_hash = ?5)",
+                    params![
+                        project_id,
+                        anchor.path,
+                        symbol.fqn,
+                        symbol.sig_hash,
+                        symbol.body_hash
+                    ],
+                    |r| r.get(0),
+                )?,
+                None => tx.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM live_files WHERE project_id = ?1 AND path = ?2)",
+                    params![project_id, anchor.path],
+                    |r| r.get(0),
+                )?,
+            };
+            if intact {
+                continue;
+            }
+            let changed = tx.execute(
+                "UPDATE facts SET invalidated_at = ?2
+                 WHERE id = ?1 AND invalidated_at IS NULL",
+                params![anchor.fact_id, at],
+            )?;
+            if changed == 1 {
+                invalidated.insert(anchor.fact_id);
+            }
+        }
+        Ok(invalidated.into_iter().collect())
+    }
+
     // ── aliases ──────────────────────────────────────────────
 
     /// Record that `old_fqn` now lives at `symbol_id`.
@@ -2315,6 +2443,182 @@ mod tests {
             )
             .expect("count");
         assert_eq!(total, 2, "the superseded belief is kept");
+    }
+
+    /// One file with one method spanning lines 3–5, so an anchor at line 4 resolves to it
+    /// and an anchor at line 1 resolves to the file alone.
+    fn index_pay(s: &mut Store, p: ProjectId, scan: ScanId, body_hash: &str) {
+        let tx = s.transaction().expect("tx");
+        let file = Store::upsert_file(
+            &tx,
+            p,
+            scan,
+            "a.java",
+            Some("java"),
+            "h1",
+            10,
+            Some(6),
+            None,
+            ParseStatus::Ok,
+            None,
+        )
+        .expect("upsert");
+        Store::replace_symbols(
+            &tx,
+            p,
+            file,
+            scan,
+            &[NewSymbol {
+                kind: SymbolKind::Method,
+                name: "pay".into(),
+                fqn: "mn.pay.PaymentService#pay".into(),
+                parent_fqn: None,
+                signature: None,
+                visibility: None,
+                start_line: 3,
+                end_line: 5,
+                sig_hash: "s1".into(),
+                body_hash: body_hash.into(),
+                annotations: vec![],
+            }],
+        )
+        .expect("symbols");
+        tx.commit().expect("commit");
+    }
+
+    fn fact_at(s: &mut Store, p: ProjectId, scan: ScanId, key: &str, line: u32) -> i64 {
+        s.record_fact(
+            p,
+            scan,
+            &NewFact {
+                key: key.into(),
+                scope: "symbol".into(),
+                subject: Some("mn.pay.PaymentService#pay".into()),
+                claim: "pay is idempotent".into(),
+                source: "ai".into(),
+                evidence_json: Some(format!(r#"[{{"file":"a.java","line":{line},"note":""}}]"#)),
+                confidence: 0.7,
+            },
+        )
+        .expect("fact")
+    }
+
+    #[test]
+    fn symbol_at_resolves_a_line_to_the_symbol_spanning_it() {
+        let mut s = Store::open_in_memory().expect("open");
+        let p = s
+            .ensure_project("/tmp/anchor", "a", "git")
+            .expect("project");
+        let (scan, _) = s
+            .begin_scan(p, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
+        index_pay(&mut s, p, scan, "b1");
+
+        let hit = s
+            .symbol_at(p, "a.java", 4)
+            .expect("query")
+            .expect("a symbol spans line 4");
+        assert_eq!(hit.fqn, "mn.pay.PaymentService#pay");
+        assert_eq!(
+            (hit.sig_hash.as_str(), hit.body_hash.as_str()),
+            ("s1", "b1")
+        );
+        assert!(
+            s.symbol_at(p, "a.java", 1).expect("query").is_none(),
+            "line 1 is outside every symbol"
+        );
+        assert!(
+            s.symbol_at(p, "missing.java", 4).expect("query").is_none(),
+            "a file not in the index has no symbols"
+        );
+    }
+
+    #[test]
+    fn a_fact_is_invalidated_when_its_symbol_changes_and_the_row_is_kept() {
+        let mut s = Store::open_in_memory().expect("open");
+        let p = s.ensure_project("/tmp/inv", "i", "git").expect("project");
+        let (scan, _) = s
+            .begin_scan(p, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
+        index_pay(&mut s, p, scan, "b1");
+        let id = fact_at(&mut s, p, scan, "invariant.pay.idempotent", 4);
+        let symbol = s.symbol_at(p, "a.java", 4).expect("query");
+        let anchors = vec![FactAnchor {
+            fact_id: id,
+            path: "a.java".into(),
+            symbol,
+        }];
+
+        // Nothing moved: nothing is invalidated.
+        let tx = s.transaction().expect("tx");
+        let touched =
+            Store::invalidate_moved_facts(&tx, p, &anchors, "2026-09-03T00:00:00Z").expect("check");
+        tx.commit().expect("commit");
+        assert!(
+            touched.is_empty(),
+            "an intact anchor must not invalidate: {touched:?}"
+        );
+        assert_eq!(s.facts(p, None).expect("facts").len(), 1);
+
+        // The body moved: the fact is invalidated, once, and stays on disk.
+        let (scan2, _) = s
+            .begin_scan(p, ScanKind::Incremental, None, None, "h2", false, "{}")
+            .expect("scan2");
+        index_pay(&mut s, p, scan2, "b2");
+        let tx = s.transaction().expect("tx");
+        let touched =
+            Store::invalidate_moved_facts(&tx, p, &anchors, "2026-09-03T00:00:01Z").expect("check");
+        let again =
+            Store::invalidate_moved_facts(&tx, p, &anchors, "2026-09-03T00:00:02Z").expect("check");
+        tx.commit().expect("commit");
+        assert_eq!(touched, vec![id]);
+        assert!(
+            again.is_empty(),
+            "already-invalidated rows are not counted twice"
+        );
+        assert!(
+            s.facts(p, None).expect("facts").is_empty(),
+            "an invalidated fact must not be retrieved"
+        );
+        let (count, at): (i64, Option<String>) = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*), MAX(invalidated_at) FROM facts WHERE project_id = ?1",
+                params![p],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("row");
+        assert_eq!(count, 1, "the row is kept — invalidation is not deletion");
+        assert_eq!(
+            at.as_deref(),
+            Some("2026-09-03T00:00:01Z"),
+            "the first timestamp stands"
+        );
+    }
+
+    #[test]
+    fn a_fact_anchored_in_a_deleted_file_is_invalidated() {
+        let mut s = Store::open_in_memory().expect("open");
+        let p = s.ensure_project("/tmp/del", "d", "git").expect("project");
+        let (scan, _) = s
+            .begin_scan(p, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
+        index_pay(&mut s, p, scan, "b1");
+        // Line 1 is inside no symbol: the anchor is the file alone.
+        let id = fact_at(&mut s, p, scan, "convention.header", 1);
+        let anchors = vec![FactAnchor {
+            fact_id: id,
+            path: "a.java".into(),
+            symbol: None,
+        }];
+
+        let tx = s.transaction().expect("tx");
+        Store::mark_file_deleted(&tx, p, "a.java", scan).expect("delete");
+        let touched =
+            Store::invalidate_moved_facts(&tx, p, &anchors, "2026-09-03T00:00:00Z").expect("check");
+        tx.commit().expect("commit");
+        assert_eq!(touched, vec![id]);
+        assert!(s.facts(p, None).expect("facts").is_empty());
     }
 
     #[test]
