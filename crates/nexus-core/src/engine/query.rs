@@ -9,6 +9,14 @@ use crate::context::{
     ItemKind, PackageBasis, ProjectSummary, Purpose, Seed, SeedResult, SignalIndex, TaskRequest,
 };
 
+/// How many symbols the memory query may name.
+///
+/// Expansion runs to `max_depth: 5` with no node cap — a four-symbol prompt on this
+/// repository already reaches 189 — and each seed becomes bound parameters. The cap is
+/// generous enough never to bite in practice and low enough that it cannot surprise SQLite.
+/// When it does bite the package says so, because a silently narrowed query is an error.
+const SEED_QUERY_CAP: usize = 256;
+
 impl Engine {
     pub fn status(&self) -> Result<StatusReport> {
         let (commit, dirty) = self.head();
@@ -419,15 +427,29 @@ impl Engine {
         // relevant as one about the method being changed — that is what expansion is for, and
         // matching on seeds alone dropped the idempotency fact from a package about the
         // controller that enforces it.
-        let relevant: Vec<String> = seeded
+        let mut relevant: Vec<String> = seeded
             .seeds
             .iter()
             .map(|s| s.symbol.fqn.clone())
             .chain(reached.items.iter().map(|i| i.fqn.clone()))
             .collect();
+        // Seeds and what they reach can name the same symbol twice; dedup with a seen-set
+        // (not a `BTreeSet`, which would reorder) so seeds stay ahead of expansion items —
+        // the cap below truncates the tail, so order decides what survives it.
+        let mut seen = std::collections::HashSet::with_capacity(relevant.len());
+        relevant.retain(|fqn| seen.insert(fqn.clone()));
+        if relevant.len() > SEED_QUERY_CAP {
+            notes.push(format!(
+                "{} symbols are relevant here; memory was queried for the first \
+                 {SEED_QUERY_CAP}, so a fact about the outer edge of the expansion may be \
+                 missing",
+                relevant.len()
+            ));
+            relevant.truncate(SEED_QUERY_CAP);
+        }
         let current_scan = self.current_scan_id()?;
         for row in crate::memory::rank(
-            self.store.facts(self.project_id, None)?,
+            self.store.facts_for_seeds(self.project_id, &relevant)?,
             &relevant,
             current_scan,
         ) {
