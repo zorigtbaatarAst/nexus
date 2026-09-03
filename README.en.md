@@ -8,7 +8,7 @@
 
 [![CI](https://github.com/zorigtbaatarAst/nexus/actions/workflows/ci.yml/badge.svg)](https://github.com/zorigtbaatarAst/nexus/actions/workflows/ci.yml)
 [![Rust 1.82+](https://img.shields.io/badge/rust-1.82%2B-b7410e?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-405%20passing-2ea043)](#nexus-on-itself)
+[![Tests](https://img.shields.io/badge/tests-412%20passing-2ea043)](#nexus-on-itself)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-20%20tools-6f42c1)](docs/mcp-api.md)
 
@@ -250,15 +250,17 @@ $ nexus impact 'mn.autoland.sales.vehicle.service.VehicleService#list' --paths
 ```
 
 One line in a Java method puts **six React components** at risk, each shown with the path
-that reaches it. Measured: 880 files, 5,665 symbols, **96%** of in-project dependencies
-resolved, 641 ms.
+that reaches it. Measured on a Java monorepo: 880 files, 5,665 symbols, **96%** of
+in-project dependencies resolved, 641 ms. The rate is language-dependent — Java call sites
+carry a qualified hint, Rust and JavaScript ones carry a bare method name, and this
+repository resolves 48%.
 
 ### 3 · Nexus indexes itself
 
 The most honest test of a tool is running it on itself:
 
 ```
-263 files · 1,849 symbols · 4,404 dependencies
+266 files · 1,905 symbols · 4,458 dependencies
 ```
 
 That number used to be **0 symbols, 0 dependencies**. Nexus could describe every project
@@ -288,10 +290,10 @@ except the one it is. The Rust analyzer closed that gap.
 
 ## Built with
 
-**Rust · one static binary · SQLite · tree-sitter · git2.** 18 crates, ~33,000 lines, 405
+**Rust · one static binary · SQLite · tree-sitter · git2.** 18 crates, ~33,000 lines, 412
 tests.
 
-Java · TypeScript · GraphQL · **Rust** · **Python** — five, working. Each sits behind the
+Java · TypeScript · **JavaScript** · GraphQL · **Rust** · **Python** — six, working. Each sits behind the
 `LanguageAnalyzer` interface and is **registered at the composition root**. Adding a language
 is a new crate and one line at the root; the core is never touched. Framework knowledge
 (Spring, Next.js, Django, FastAPI) is a separate axis — Spring is not Java.
@@ -312,7 +314,7 @@ violation.
 ### Nexus on itself
 
 ```bash
-make check        # what CI runs: fmt · clippy (warnings are errors) · 405 tests
+make check        # what CI runs: fmt · clippy (warnings are errors) · 412 tests
 make fixtures     # the benchmark corpus — from a spec, same sha every time
 /nexus-architect  # derive the current state from the code, plan the next task
 ```

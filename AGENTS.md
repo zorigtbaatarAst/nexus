@@ -153,6 +153,13 @@ that is hard to attribute.
   unrelated file moved, an `--explain` request was served a ledger-less hit, and a package
   outlived the upgrade that changed how packages are built.
 
+- **A call-site hint is a bare member name, and the index is keyed `Owner#member`.** An
+  analyzer sees one file, so `self.foo()` and `obj.foo()` yield `#foo` or `foo` — never the
+  owner. `Store::resolve_edges` has a `by_member` tier for exactly this; without it method
+  calls never resolved, and Rust sat at 23% while the README advertised a Java project's 96%.
+  The tier refuses a name shared by more than four symbols: five wrong edges are worse than
+  none.
+
 - **Cache invalidation must include tool versions.** `scans.tool_versions_json` holds grammar
   and analyzer versions. Upgrade `tree-sitter-java` without bumping it and the content hashes
   still match, nothing re-parses, and the index keeps the old wrong symbols forever, with no

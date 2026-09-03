@@ -43,7 +43,7 @@ impl<'a> Detector<'a> {
             let lang = match ext {
                 "java" => "java",
                 "ts" | "tsx" => "typescript",
-                "js" | "jsx" | "mjs" => "javascript",
+                "js" | "jsx" | "mjs" | "cjs" => "javascript",
                 "py" => "python",
                 "rs" => "rust",
                 "go" => "go",
