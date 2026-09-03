@@ -46,3 +46,156 @@ impl Engine {
         Ok(anchors)
     }
 }
+
+/// The last segment of a qualified name, whichever separator wrote it.
+fn last_segment(fqn: &str) -> &str {
+    let after_member = fqn.rsplit('#').next().unwrap_or(fqn);
+    let after_member = after_member.split('(').next().unwrap_or(after_member);
+    let after_colons = after_member.rsplit("::").next().unwrap_or(after_member);
+    after_colons.rsplit('.').next().unwrap_or(after_colons)
+}
+
+/// Whether a word from a claim is worth looking up at all.
+///
+/// A prompt is typed by someone who means the code, so "starts with a capital" is a fair
+/// guess there. A design document is English prose: `Integration`, `Agent` and `Hooks` are
+/// sentence words, and looking them up anchored design claims on whatever symbol happened to
+/// end with them. An identifier here means a separator or an internal capital.
+fn looks_like_an_identifier(w: &str) -> bool {
+    if w.len() < 4 {
+        return false;
+    }
+    if w.contains("::") || w.contains('#') || w.contains('_') || w.contains('/') || w.contains('.')
+    {
+        return true;
+    }
+    // `BugHunter`, not `Hunter`. One capital is a sentence; two is a name.
+    w.chars().filter(|c| c.is_uppercase()).count() >= 2
+}
+
+/// The confidence an imported claim carries.
+///
+/// A model wrote it, so §5's model ceiling of 0.75 applies, and it sits below that: nothing
+/// here was verified against the code, and a claim read out of a document is weaker evidence
+/// than one a session worked out while looking at the failure.
+const IMPORTED_CONFIDENCE: f64 = 0.5;
+
+/// `Hooks fail open` -> `hooks-fail-open`. Bounded, because a fact key is an identifier a
+/// person greps for, not a sentence.
+fn slug(label: &str) -> String {
+    let mut out = String::new();
+    for ch in label.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.extend(ch.to_lowercase());
+        } else if !out.ends_with('-') && !out.is_empty() {
+            out.push('-');
+        }
+        if out.len() >= 60 {
+            break;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+impl Engine {
+    /// Import an external graph's prose claims as facts (roadmap 2.12).
+    ///
+    /// graphify's structural pass is free and its edges already arrive through the scan. Its
+    /// *semantic* pass costs model calls and produces claims about the project — "Hooks fail
+    /// open", "No stage calls a model" — and those were being discarded. This is the door
+    /// they come through, and once through it they are ordinary facts: ranked against
+    /// everything else, capped by the same budget, invalidated by the same moved anchors.
+    ///
+    /// It costs an agent nothing per request. The budget is fixed, so more knowledge changes
+    /// *which* items a package carries, never how many tokens it is.
+    pub fn import_graphify(&mut self, path: &Path) -> Result<ImportReport> {
+        let graph = crate::graphify::read(path);
+        let mut report = ImportReport {
+            path: path.display().to_string(),
+            concepts_read: graph.concepts.len(),
+            facts_recorded: 0,
+            anchored_on_code: 0,
+            skipped: 0,
+            warnings: graph.note.into_iter().collect(),
+        };
+
+        for c in &graph.concepts {
+            let key = slug(&c.label);
+            if key.is_empty() {
+                report.skipped += 1;
+                continue;
+            }
+            // A rationale is a reason for a decision; a concept is a description of how
+            // something is put together. Both namespaces exist already and neither is new.
+            let namespace = if c.kind == "rationale" {
+                "decision"
+            } else {
+                "arch"
+            };
+
+            // Anchor on the code when the claim names exactly one indexed symbol, and on the
+            // document that states it otherwise. graphify's own prose-to-code edges cannot do
+            // this job: only 34 of 681 prose nodes here touch a code node at all, and those
+            // point at ids derived from the citing document rather than at the code.
+            let anchor = self.symbol_named_in(&c.label)?;
+            let (scope, subject, evidence) = match &anchor {
+                Some(sym) => (
+                    "symbol",
+                    Some(sym.fqn.clone()),
+                    CodeRef {
+                        file: sym.file_path.clone(),
+                        line: sym.start_line as u32,
+                        note: format!("stated in {}", c.source_file),
+                    },
+                ),
+                None => (
+                    "file",
+                    Some(c.source_file.clone()),
+                    CodeRef {
+                        file: c.source_file.clone(),
+                        line: c.line,
+                        note: String::new(),
+                    },
+                ),
+            };
+            if anchor.is_some() {
+                report.anchored_on_code += 1;
+            }
+
+            self.record_fact(FactInput {
+                key: format!("{namespace}.{key}"),
+                scope: scope.into(),
+                subject,
+                claim: c.label.clone(),
+                source: "ai".into(),
+                evidence: vec![evidence],
+                confidence: IMPORTED_CONFIDENCE,
+            })?;
+            report.facts_recorded += 1;
+        }
+        Ok(report)
+    }
+
+    /// The one indexed symbol a claim names, if it names exactly one.
+    ///
+    /// Reuses the seed stage's target extraction rather than growing a second matcher, so a
+    /// claim is read for symbol names exactly the way a prompt is. Ambiguity is an answer:
+    /// two candidates means the label did not identify anything, and guessing between them
+    /// would anchor a design claim on the wrong function.
+    fn symbol_named_in(&self, label: &str) -> Result<Option<nexus_store::SymbolRef>> {
+        for target in crate::context::seeds::targets(label) {
+            if !looks_like_an_identifier(&target) {
+                continue;
+            }
+            let hits = self.store.find_symbols(self.project_id, &target, 2)?;
+            let [only] = hits.as_slice() else { continue };
+            // `find_symbols` matches by suffix, which is right for a prompt and wrong here: a
+            // claim about integration is not a claim about `NoContinuousIntegration`. The
+            // symbol's own last segment has to *be* the word, or the anchor is invented.
+            if last_segment(&only.fqn) == target {
+                return Ok(Some(only.clone()));
+            }
+        }
+        Ok(None)
+    }
+}

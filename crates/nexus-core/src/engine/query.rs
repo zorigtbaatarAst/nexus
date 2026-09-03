@@ -454,7 +454,12 @@ impl Engine {
             };
             let (score, terms) = crate::context::rank::score(
                 &crate::context::rank::Inputs {
-                    seed_proximity: 0.0,
+                    // A fact about the very symbol the request names is as close to the seed
+                    // as anything gets, and `to_seeds` already measured it. Passing zero here
+                    // threw away the strongest signal a fact has: six facts about
+                    // `SafeWriter` scored 0.10 against a 0.15 floor while `SafeWriter` itself
+                    // scored 1.36, so nothing the project had learned ever surfaced.
+                    seed_proximity: to_seeds,
                     graph_score: 0.0,
                     signals: &signals,
                     token_cost_norm: estimate_tokens(&text) as f64 / budget,
@@ -469,7 +474,11 @@ impl Engine {
                 text,
                 score,
                 terms,
-                component: String::new(),
+                // The subject is the component, so §7's diversity guard applies to knowledge
+                // too. Without it a well-documented symbol pushed its own symbols out of the
+                // package: importing 678 claims put six about `SafeWriter` in and left two of
+                // `SafeWriter`'s own methods out.
+                component: subject.clone(),
             });
         }
 

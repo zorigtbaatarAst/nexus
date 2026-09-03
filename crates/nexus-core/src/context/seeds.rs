@@ -76,7 +76,7 @@ pub struct SeedResult {
 /// Filtering here rather than querying every word keeps the stage at a handful of indexed
 /// lookups instead of one per token, which is what ADR-024's 150 ms budget for a per-prompt
 /// hook can afford.
-fn targets(text: &str) -> Vec<String> {
+pub(crate) fn targets(text: &str) -> Vec<String> {
     let mut out: Vec<String> = text
         .split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '"' | '\'' | '(' | ')'))
         .map(|w| w.trim_end_matches(['.', '?', '!', ':']))

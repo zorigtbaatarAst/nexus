@@ -462,9 +462,14 @@ fn an_external_graph_is_ignored_unless_the_config_asks_and_is_labelled_when_it_d
     write(&root, "svc/handler.py", "def handle():\n    pass\n");
     write(&root, "svc/util.py", "def helper():\n    pass\n");
     fs::create_dir_all(root.join("graphify-out")).expect("mkdir");
+    // graphify's own node-link shape: nodes carry the file, links carry node ids. The
+    // importer once read `{"edges":[{"from","to"}]}`, which graphify has never written.
     fs::write(
         root.join("graphify-out/graph.json"),
-        r#"{"edges":[{"from":"svc/handler.py","to":"svc/util.py","kind":"imports","confidence":0.99}]}"#,
+        r#"{"nodes":[
+             {"id":"h","label":"handle","file_type":"code","source_file":"svc/handler.py"},
+             {"id":"u","label":"helper","file_type":"code","source_file":"svc/util.py"}],
+           "links":[{"source":"h","target":"u","relation":"imports","confidence_score":0.99}]}"#,
     )
     .expect("write");
 

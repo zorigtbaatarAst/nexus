@@ -35,7 +35,10 @@ impl Key<'_> {
         let mut seeds = self.seeds.clone();
         seeds.sort();
         let material = format!(
-            "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            // The build is part of the key. A cached package outliving the upgrade that
+            // changed how packages are built is a stale answer with no way to notice.
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            env!("CARGO_PKG_VERSION"),
             self.intent,
             seeds.join(","),
             self.commit.unwrap_or("-"),
