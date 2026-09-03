@@ -8,6 +8,7 @@ members = [
   "crates/nexus-lang-java",
   "crates/nexus-lang-ts",
   "crates/nexus-lang-graphql",
+  "crates/nexus-lang-rust",
   "crates/nexus-lang-pack",
   "crates/nexus-core",
   "crates/cap-bughunter",
@@ -34,6 +35,7 @@ nexus-lang      = { path = "crates/nexus-lang" }
 nexus-lang-java = { path = "crates/nexus-lang-java" }
 nexus-lang-ts   = { path = "crates/nexus-lang-ts" }
 nexus-lang-graphql = { path = "crates/nexus-lang-graphql" }
+nexus-lang-rust = { path = "crates/nexus-lang-rust" }
 nexus-lang-pack = { path = "crates/nexus-lang-pack" }
 nexus-core      = { path = "crates/nexus-core" }
 cap-bughunter   = { path = "crates/cap-bughunter" }

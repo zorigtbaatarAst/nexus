@@ -1,0 +1,14 @@
+[package]
+name = "nexus-lang-rust"
+description = "Rust analyzer: tree-sitter-rust symbol extraction, signature and body hashing. The language Nexus is written in, so it can finally index itself."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nexus-lang.workspace = true
+nexus-types.workspace = true
+blake3.workspace = true
+tree-sitter = "0.27"
+tree-sitter-rust = "0.24"

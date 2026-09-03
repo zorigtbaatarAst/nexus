@@ -1364,7 +1364,8 @@ impl Store {
             "SELECT s.id, s.fqn, s.kind, f.path, s.start_line
              FROM live_symbols s JOIN live_files f ON f.id = s.file_id
              WHERE s.project_id = ?1
-               AND (s.fqn LIKE ?2 || '#%' OR s.fqn LIKE ?2 || '.%')
+               AND (s.fqn LIKE ?2 || '#%' OR s.fqn LIKE ?2 || '.%'
+                    OR s.fqn LIKE ?2 || '::%')
              ORDER BY s.start_line LIMIT ?3",
         )?;
         let rows = stmt
