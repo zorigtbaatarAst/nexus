@@ -128,12 +128,12 @@ pub fn confidence(stated: Option<f64>) -> f64 {
 mod tests {
     use super::*;
 
-    fn project(config: Option<&str>) -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "nexus-graphify-{}-{}",
-            std::process::id(),
-            config.map_or(0, str::len)
-        ));
+    /// One directory per call site. Naming it after the config's *length* made two tests
+    /// that pass the same config share a directory, and they delete each other's files —
+    /// which passed locally and failed on a clean checkout, the worst way to find out.
+    fn project(name: &str, config: Option<&str>) -> std::path::PathBuf {
+        let root = std::env::temp_dir()
+            .join(format!("nexus-graphify-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join(crate::NEXUS_DIR)).expect("mkdir");
         if let Some(c) = config {
@@ -144,10 +144,10 @@ mod tests {
 
     #[test]
     fn the_importer_is_off_unless_the_config_asks_for_it() {
-        assert_eq!(mode(&project(None)), Mode::Off);
-        assert_eq!(mode(&project(Some("[scan]\nexclude = []\n"))), Mode::Off);
+        assert_eq!(mode(&project("none", None)), Mode::Off);
+        assert_eq!(mode(&project("noflag", Some("[scan]\nexclude = []\n"))), Mode::Off);
         assert_eq!(
-            mode(&project(Some("[scan]\nresolution = \"exact\"\n"))),
+            mode(&project("otherflag", Some("[scan]\nresolution = \"exact\"\n"))),
             Mode::Off,
             "a scan must not silently start trusting a file left in the tree"
         );
@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn the_flag_turns_it_on_with_a_default_path() {
-        let root = project(Some("[scan]\nresolution = \"external-graph\"\n"));
+        let root = project("on", Some("[scan]\nresolution = \"external-graph\"\n"));
         match mode(&root) {
             Mode::On(p) => assert!(p.ends_with("graphify-out/graph.json"), "{p:?}"),
             other => panic!("{other:?}"),
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn edges_are_read_from_the_documented_shape() {
-        let root = project(Some("[scan]\nresolution = \"external-graph\"\n"));
+        let root = project("edges", Some("[scan]\nresolution = \"external-graph\"\n"));
         let p = root.join("g.json");
         std::fs::write(
             &p,
