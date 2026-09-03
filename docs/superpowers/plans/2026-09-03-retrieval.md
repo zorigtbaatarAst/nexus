@@ -149,11 +149,14 @@ Add to the existing `mod tests` at the bottom of `crates/nexus-store/src/lib.rs`
 And the shared fixture helper, also inside `mod tests`:
 
 ```rust
-    /// A project with one completed scan, so `record_fact`'s foreign key to `scans` holds.
+    /// A project with one open scan, so `record_fact`'s foreign key to `scans` holds.
+    /// Shape copied verbatim from `live_views_hide_soft_deleted_rows` in this same module —
+    /// do not invent a different one.
     fn seeded_project(s: &mut Store) -> (ProjectId, ScanId) {
-        let pid = s.upsert_project("t", "/tmp/t").expect("project");
-        let scan = s.begin_scan(pid, "full", None, false).expect("scan");
-        s.finish_scan(scan, "ok").expect("finish");
+        let pid = s.ensure_project("/tmp/t", "t", "git").expect("project");
+        let (scan, _) = s
+            .begin_scan(pid, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
         (pid, scan)
     }
 ```
@@ -163,7 +166,7 @@ And the shared fixture helper, also inside `mod tests`:
 Run: `cargo test -p nexus-store subject_prefixes facts_for_seeds parameter_limit`
 Expected: FAIL — `cannot find function 'subject_prefixes'`, `no method named 'facts_for_seeds'`.
 
-If `seeded_project` fails to compile because `upsert_project`, `begin_scan` or `finish_scan` have different signatures, read the existing `mod tests` in that file and copy whatever shape the neighbouring tests already use to get a project and a scan. Do not invent a shape.
+`ScanKind` is already in scope inside `mod tests` via `use super::*`. If anything here still fails to compile, read `live_views_hide_soft_deleted_rows` in the same module and copy its shape exactly — do not invent one.
 
 - [ ] **Step 3: Write `subject_prefixes`**
 
@@ -934,13 +937,23 @@ fn git(root: &Path, args: &[&str]) {
 fn scanned(name: &str) -> (PathBuf, Engine) {
     let root = std::env::temp_dir().join(format!("nexus-symptom-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
+    // The `mod.rs` files are load-bearing, not decoration. The Rust analyzer derives a
+    // module's *scope* from the file path but only emits a module *symbol* from a `mod_item`
+    // declaration — so without `pub mod cache;` this fixture holds `context::cache::put` and
+    // no symbol named `cache` at all, and every test below would fail for a fixture reason
+    // rather than a code one.
     for (path, body) in [
+        ("src/lib.rs", "pub mod context;\npub mod store;\npub mod util;\npub mod a;\npub mod b;\n"),
+        ("src/context/mod.rs", "pub mod cache;\n"),
         ("src/context/cache.rs", "pub fn put() {}\npub fn get() {}\n"),
+        ("src/store/mod.rs", "pub mod ledger;\n"),
         ("src/store/ledger.rs", "pub fn append() {}\n"),
-        ("src/a/handler.rs", "pub fn handler() {}\n"),
-        ("src/b/handler.rs", "pub fn handler() {}\n"),
-        ("src/util/error.rs", "pub fn error() {}\n"),
-        ("src/lib.rs", "pub mod context;\npub mod store;\npub mod util;\n"),
+        ("src/a/mod.rs", "pub mod handler;\n"),
+        ("src/a/handler.rs", "pub fn handle_it() {}\n"),
+        ("src/b/mod.rs", "pub mod handler;\n"),
+        ("src/b/handler.rs", "pub fn handle_it() {}\n"),
+        ("src/util/mod.rs", "pub mod error;\n"),
+        ("src/util/error.rs", "pub fn report() {}\n"),
     ] {
         let p = root.join(path);
         fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
@@ -1242,7 +1255,7 @@ Claude-Session: https://claude.ai/code/session_014cmQc2a8FrfdFr7WzGM4iC"
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `crates/nexus-core/tests/graphify_import.rs`. Also replace the `GRAPH` constant at the top of that file with this longer one, and update `imported()`'s two assertions from `3` to `2` — the new fixture has one node that must now be filtered:
+Append to `crates/nexus-core/tests/graphify_import.rs`. Also replace the `GRAPH` constant at the top of that file with this longer one, and change `imported()`'s assertions to `concepts_read == 3` (unchanged — the `tests/fixtures` node is dropped inside `read`, so it is never read as a concept) and `facts_recorded == 2` (the heading is now filtered):
 
 ```rust
 const GRAPH: &str = r#"{
@@ -1291,8 +1304,12 @@ fn a_heading_is_not_knowledge() {
         "a dependency name out of a fixture's package.json is not project knowledge: {claims:?}"
     );
     assert_eq!(
-        r.skipped_not_a_claim, 2,
-        "the heading and the fixture node, counted where a person can see them"
+        r.concepts_read, 3,
+        "the node from tests/fixtures is dropped inside graphify::read, before anything counts it"
+    );
+    assert_eq!(
+        r.skipped_not_a_claim, 1,
+        "only the heading reaches the claim filter; the fixture node never got that far"
     );
 }
 ```
