@@ -53,11 +53,31 @@ a session package — and pays off the debt that would otherwise resist everythi
 
 **Dependencies:** none. Every task is inside the existing architecture.
 
-**Status (2026-09-03, `0d7b212`):** 1.1, 1.2, 1.4, 1.5 landed on 2026-09-02 (commits
-`c82bb52`, `eded128`, `ba915d3`, `ffef5ba`); 1.3 is void, see the row. 1.6 landed on 2026-09-03 (`crates/nexus-core/src/engine/memory.rs`,
-`Store::invalidate_moved_facts`, `tests/fact_invalidation.rs`). 1.7 and 1.8 are not
-started — no `ContextPackage` type exists under `crates/`, and the binary has no `context`
-command and no `--hooks` flag. Next in order: **1.7**.
+**Status (2026-09-03): complete.** 1.1, 1.2, 1.4, 1.5 landed on 2026-09-02 (`c82bb52`,
+`eded128`, `ba915d3`, `ffef5ba`); 1.6, 1.7 and 1.8 on 2026-09-03; 1.3 is void, see the row.
+
+Success criteria, each against the code:
+
+- `make check` green at **205 tests**; no behavioural surface moved by 1.1–1.5.
+- A fact whose evidence symbol is edited stops being retrieved and the row still exists —
+  `nexus-core/tests/fact_invalidation.rs`, plus `nexus-store`'s row-kept assertion.
+- `nexus context --session` returns profile, open findings and durable facts inside 800
+  estimated tokens — `nexus-core/tests/session_context.rs`.
+- The `SessionStart` hook fails open: with `nexus` absent from `PATH` the hook's own command
+  string exits 0 and prints nothing — `nexus-cli/tests/hooks.rs`.
+
+**Measured, not hoped:** `nexus context --session` p95 is **4 ms** on this repository
+(113 files) and 2 ms on a one-file fixture, against ADR-024's 400 ms budget. Twenty runs of
+the release binary.
+
+**Two gaps this phase leaves, both named rather than absorbed.** The `nexus fact` verb takes
+no evidence, so a fact recorded at a terminal is unanchored: it is never invalidated by 1.6
+and never included by 1.7, which excludes it with `no file:line anchor`. Fixing it belongs
+with **3.5**, the human entry point. And Phase 1 selection is a fixed query in store order,
+so on a project with many open findings the facts can be squeezed out entirely — visible in
+the ledger, and what **2.7**'s density sort exists to fix.
+
+Next: **Phase 2**, starting at 2.1.
 
 **Risks:** R7 (core god object — 1.1 is the mitigation, which is why it is first), R2 (hook
 latency, first exposure).

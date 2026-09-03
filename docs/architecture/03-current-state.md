@@ -252,17 +252,22 @@ it is.
 
 | Debt | Size | Interest | Pay off in |
 |---|---:|---|---|
-| `engine.rs` 2,069 lines; `rescan` 522, `analyze` 239 | large | **High.** It is what four new subsystems must be added to | Phase 1.1 |
-| **Fact invalidation unimplemented** (P10) | ~50 lines | **High, and compounding.** Every memory improvement built on rot | Phase 1.6 |
+| `engine.rs` 2,069 lines; `rescan` 522, `analyze` 239 | large | **Paid, 2026-09-02.** **High.** It is what four new subsystems must be added to | Phase 1.1 |
+| **Fact invalidation unimplemented** (P10) | ~50 lines | **Paid, 2026-09-03.** **High, and compounding.** Every memory improvement built on rot | Phase 1.6 |
 | 9 unwired tables (`commits`, `tests`, `test_coverage`, `test_runs`, `ui_strings`, `external_deps`, `audit_events`, `finding_verifications`, `finding_relations`) | — | **Medium.** Each is a designed capability with no code; they are the roadmap, not waste. None is obsolete | Phases 2, 4, 5 |
-| `Rule`/`Detector` triplicated across 3 capabilities | −150 lines | Medium. A fourth capability triplicates it again | Phase 1.2 |
-| Two graph implementations that can disagree (`cap-review::Graph` vs `impact.rs`, depth 4 vs 5) | ~100 lines | Medium. Silent disagreement about the same symbol | Phase 1.2 |
-| `ask.rs` orchestrating in the CLI, N+1 (80 engine calls / 40 symbols) | ~200 lines | Medium. Blocks exposing `what next` over MCP | Phase 1.4 |
+| `Rule`/`Detector` triplicated across 3 capabilities | −150 lines | **Paid, 2026-09-02.** Medium. A fourth capability triplicates it again | Phase 1.2 |
+| Two graph implementations that can disagree (`cap-review::Graph` vs `impact.rs`, depth 4 vs 5) | ~100 lines | **Paid, 2026-09-02.** Medium. Silent disagreement about the same symbol | Phase 1.2 |
+| `ask.rs` orchestrating in the CLI, N+1 (80 engine calls / 40 symbols) | ~200 lines | **Paid, 2026-09-02**, orchestration only — the N+1 was kept, with the reason in `ba915d3`. Medium. Blocked exposing `what next` over MCP | Phase 1.4 |
 | `nexus-core` hard-depends on 3 `nexus-lang-*` crates (P3) | ~200 lines | Medium. Every new language is a core edit | Phase 5.1 |
 | `ProjectContext` materialises everything, then narrows (P7) | ~350 lines | Low now, high at 500 KLOC | Phase 5.4 |
 | `impact::is_test` — a filename string match standing in for coverage | ~300 lines | Medium. Review's flagship rule rests on it | Phase 4.5 |
-| `nexus-vcs` has zero tests | ~150 lines | Medium. History work lands directly on it | Phase 1.5 |
-| `project.rs` doc comment describes detectors, not `ProjectContext` | 1 line | Trivial. Noted because it misleads a reader on first contact | Phase 1 |
+| `nexus-vcs` has zero tests | ~150 lines | **Paid, 2026-09-02.** Medium. History work lands directly on it | Phase 1.5 |
+| `project.rs` doc comment describes detectors, not `ProjectContext` | 1 line | **Paid, 2026-09-02.** Trivial. Noted because it misleads a reader on first contact | Phase 1 |
+
+> **Phase 1 closed this ledger's top rows** (2026-09-02 and 2026-09-03). What remains is
+> scheduled for the phase named in its own row; nothing above is unowned. This document is
+> otherwise still the 2026-09-02 snapshot at `ff91b2f` and is not rewritten here — a measured
+> assessment that quietly acquires later facts stops being a snapshot of anything.
 
 **Unnecessary complexity: almost none.** This is worth stating plainly, because it is unusual.
 There is no speculative abstraction here — no plugin loader, no event bus, no dependency-injection
