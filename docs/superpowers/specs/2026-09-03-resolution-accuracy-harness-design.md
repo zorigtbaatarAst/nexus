@@ -77,6 +77,18 @@ been tuned". `docs/architecture/11-risks.md` R8 names this exact failure — *"w
 once by feel, never revisited"* — and guards it for the Context Engine ranker while leaving
 the resolver unguarded.
 
+**The largest contributor is one day old and has never been checked.** Commit `f07e2b1`
+(2026-09-03, *"fix(resolve): let a call to a method find the method"*) added the `by_member`
+tier, taking Rust in-project resolution from 23 % to 48 % and method bindings from 29 to 973.
+It writes at `heuristic` 0.6 and includes a 2-to-4-candidate arm that inserts one row per
+candidate. It accounts for roughly 987 of this repository's heuristic edges — the difference
+between the pre- and post-`f07e2b1` breakdowns.
+
+So the 48 % now published in both READMEs is **majority-produced by a tier introduced
+yesterday, at a confidence nobody has validated, using the fan-out mechanism §1.2 shows
+inflates the metric.** That is the single strongest argument for building this harness before
+building anything else on top of the graph.
+
 ### 1.5 The repository already contradicts itself
 
 Three different values were published for Rust resolution:
@@ -389,9 +401,22 @@ So every `sibling` and `external-graph` edge surfaced through graph traversal is
 `Heuristic`**. `edge_counts` dodges it by reading the raw TEXT column, which is why it has
 gone unnoticed.
 
+**The direction of the error is the harmful one.** Both `sibling` and `external-graph` mean
+*"nobody resolved this against a symbol table"*, and both are reported as `heuristic`, which
+claims a tier that did. `external-graph` carries a documented confidence ceiling of 0.5
+(`nexus-core/src/graphify.rs:23`) specifically so an imported claim cannot outrank a parsed
+edge — and then the tier label says `heuristic` anyway, defeating the ceiling's purpose at
+the point where a reader decides how much to trust the edge.
+
 This is load-bearing here: §5.4 bins calibration **by tier**. A contaminated `heuristic`
 population yields a corrected constant computed over the wrong set of edges. It also means
 `min_confidence` on impact chains has been reporting the wrong tier to users.
+
+**Not visible in this repository.** Its own scan shows neither value — the defect surfaces on
+a Java monorepo with sibling modules, and on any project with `[scan] resolution =
+"external-graph"` enabled. Measurements taken with direct SQL against
+`symbol_edges.resolution` bypass `parse` and are unaffected; only readers going through the
+enum see the wrong tier.
 
 **Fix:** add `Sibling` and `ExternalGraph` variants; replace `unwrap_or` with an explicit
 error. A resolution string the enum does not know is a schema/code disagreement and must fail
