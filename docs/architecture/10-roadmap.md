@@ -122,18 +122,37 @@ a full account of why each thing is in it — one call, no model.
 
 **Dependencies:** Phase 1 (all of it — 1.1 for room, 1.4 for the query layer, 1.7 for the types).
 
-**Status (2026-09-03):** 2.1, 2.2 and 2.3 landed —
-`nexus-core/src/context/{intent,seeds,expand}.rs`, pinned by `tests/context_pipeline.rs` and
-the intent table's own unit tests. They are library stages, not yet wired into
-`Engine::context`: a `--task` package without stages 4–7 would be seeds with no selection
-behind them, and 2.10 is where the CLI surface belongs. Next: **2.4**.
+**Status (2026-09-03): complete.** All fourteen tasks landed. The pipeline is
+`nexus-core/src/context/{intent,seeds,expand,signals,rank,cache}.rs` plus `policy.rs`,
+`history.rs` and `graphify.rs`, reachable as `nexus context --task`, `nexus_get_context` and
+the `UserPromptSubmit` hook.
 
-Two limits recorded now, so that 2.13's harness does not have to rediscover them. Seed source
-5 (text match) is a no-op that reports itself, because `ui_strings` stays empty until 5.5. And
-stage 2 filters prompt words before querying — a token qualifies if it contains a dot, slash
-or hash, or starts with a capital — so a lowercase one-word symbol name in a prompt is not
-looked up. The alternative is one indexed lookup per token on a stage ADR-024 budgets at
-150 ms inside a per-prompt hook.
+Success criteria, each against the code:
+
+- **Golden packages** — five fixed tasks, contents and every exclusion reason committed under
+  `nexus-core/tests/golden/`. `NEXUS_REBASELINE=1` re-baselines; the diff is the review.
+- **Every excluded candidate carries a reason** — asserted on every golden task, not once.
+- **Latency** — `context --task` p95 is **10 ms** on this repository against the 150 ms
+  budget, cold cache and warm; `--session` is 4 ms against 400 ms. Twenty runs each, release
+  binary.
+- **`--stats`** prints `items_considered`, `items_included`, `tokens_estimated`.
+- **A dirty working tree produces a cache miss** — the key carries a dirty-path fingerprint.
+- **Tier 1 passes**: goldens exact, every candidate explained, dirty-tree miss asserted.
+
+**Two findings from building it, both fixed rather than filed.** The dependency graph is
+method-level, so a seed naming a *class* had no incoming edges and reached nothing — and
+"refactor PaymentService" is the commonest way anyone names code. Stage 2 now seeds a
+container's members. And the density budget would have silently reordered the Phase 1 session
+package by text length, so selection became an explicit mode rather than one behaviour for
+everything.
+
+**What is honest about its limits.** Churn needs a git history and says so when there is
+none. Coverage is still the filename match until 4.5, and reports `naming` as its source.
+`ui_strings` seeding cannot work until 5.5, and says that too. Weights are the shipped
+defaults, argued and not fitted — the roadmap forbids tuning them here, and 5.7 is where
+ledger evidence changes them.
+
+Next: **Phase 3**, starting at 3.1.
 
 **Risks:** **R1 (ranker confidently wrong — the defining risk of this phase)**, R2 (hook latency
 on the critical path), R8 (weights become folklore), R9 (stale cache).
