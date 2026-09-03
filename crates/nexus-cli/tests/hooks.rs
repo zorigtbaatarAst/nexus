@@ -142,3 +142,47 @@ fn the_hook_command_fails_open_when_nexus_is_not_on_path() {
         String::from_utf8_lossy(&out.stdout)
     );
 }
+
+#[test]
+fn the_prompt_hook_is_installed_alongside_the_session_hook() {
+    let root = fixture("prompt");
+    let out = run(&root, &["init", "--hooks"]);
+    assert!(out.status.success(), "{out:?}");
+    let v = settings(&root).expect("written");
+    let entries = v["hooks"]["UserPromptSubmit"]
+        .as_array()
+        .expect("a UserPromptSubmit array");
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    let cmd = entries[0]["hooks"][0]["command"].as_str().expect("command");
+    assert!(cmd.contains("context --task"), "{cmd}");
+    assert!(entries[0]["hooks"][0]["timeout"].is_number(), "{entries:?}");
+    // Both hooks, and installing again adds neither a second time.
+    assert_eq!(session_hooks(&v).len(), 1);
+    run(&root, &["init", "--hooks"]);
+    let again = settings(&root).expect("written");
+    assert_eq!(again, v, "a second install must change nothing");
+}
+
+#[test]
+fn the_prompt_hook_command_also_fails_open() {
+    let root = fixture("promptfailopen");
+    run(&root, &["init", "--hooks"]);
+    let v = settings(&root).expect("written");
+    let cmd = v["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+        .as_str()
+        .expect("command")
+        .to_string();
+    let out = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&cmd)
+        .env("PATH", "/nonexistent")
+        .current_dir(&root)
+        .output()
+        .expect("sh");
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        out.stdout.is_empty(),
+        "{:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
