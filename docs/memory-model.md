@@ -1,8 +1,9 @@
 # BugHunter — Project Memory Model
 
-> **Status: partly built.** The `facts` table, supersession and evidence-checked recording
-> work. §3's `ContextBuilder` in `nexus-core::context` does not exist: retrieval today is
-> `ORDER BY source, confidence` with no subject weighting, recency decay or token budget.
+> **Status: built.** The `facts` table, supersession, evidence-checked recording, the
+> candidate/validated/durable lifecycle and the full retrieval formula all work. §3's
+> retrieval lives in `nexus_core::memory::relevance`, called by both the ask path and the
+> Context Engine, under a token budget.
 > Invalidation-by-change (§2 rule 3) is implemented: `Engine::fact_anchors` resolves each
 > fact's evidence before a scan, and `Store::invalidate_moved_facts` sets `invalidated_at`
 > inside the scan's transaction when the file is gone or the symbol at the anchor is gone or

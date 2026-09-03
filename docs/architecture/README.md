@@ -4,8 +4,8 @@ The master plan for Nexus as an **engineering intelligence layer for AI coding a
 
 > Do not give AI more context. Give AI better context.
 
-**Status:** Phases 0, 1 and 2 complete (1.3 void). The Context Engine ships; Phase 3,
-persistent engineering memory, is next. See [10-roadmap.md](10-roadmap.md).
+**Status:** Phases 0 through 3 complete (1.3 void). The Context Engine and persistent
+memory ship; Phase 4, verification, is next. See [10-roadmap.md](10-roadmap.md).
 
 ## Read in this order
 

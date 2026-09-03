@@ -202,6 +202,43 @@ retrievable by humans as well as machines.
 **Dependencies:** Phase 1.6 (invalidation must already work — the lifecycle sits on top of it),
 Phase 2.6 (facts are ranked by the same function as everything else).
 
+**Status (2026-09-03): complete.** All six tasks landed —
+`nexus-core/src/{memory,portable}.rs`, migration `0007`, `nexus memory export --markdown`,
+`nexus share export|import`, and `nexus fact --evidence`.
+
+Success criteria, each against the code:
+
+- A fact validated across three scans is retrieved at durable weight —
+  `tests/fact_invalidation.rs::an_agent_fact_is_validated_by_a_scan_and_durable_after_three`.
+- A fact whose evidence moved is invalidated, kept on disk, and re-establishable under the
+  same key — pinned since 1.6, and a scan can no longer both move the evidence and credit the
+  fact with surviving it.
+- The Markdown export is byte-identical between runs, carries a generated header, drops
+  invalidated facts, and **Nexus never reads it back** — the last is checked structurally, by
+  a test that greps the workspace for any read of the directory.
+- "What did Nexus believe at scan 12, and what changed its mind?" is answerable: every row
+  carries `created_scan_id`, `validated_scan_id`, `validated_count`, `superseded_by` and
+  `invalidated_at`, and none of them is ever deleted.
+
+**One deviation, deliberate.** 3.5 is written as `nexus fact add`; the verb kept its existing
+spelling, `nexus fact KEY CLAIM`, because CLI verbs are interface and renaming buys nothing.
+What it gained is `--evidence`, whose absence had already cost twice: a terminal-recorded fact
+was invisible to 1.6's invalidation and excluded from 1.7's session package.
+
+**Three defects the tests found and this phase fixed.** The Context Engine kept a fact
+whenever the signal index said a fact existed about its subject — trivially true of a fact
+asked about itself — so every package carried facts about unrelated modules. Matching facts
+only against seeds dropped the idempotency fact from a package about the controller that
+enforces it, so facts now match what the seeds reach. And the golden harness caught both,
+which is what it is for.
+
+**One open question, recorded rather than patched.** A review package expands reverse, so a
+fact about a service the reviewed controller *calls* is not reached. Giving facts their own
+reachability would be the special case §6 warns against, so the golden records the current
+behaviour and 5.7's weight tuning is where ledger evidence can settle it.
+
+Next: **Phase 4**, starting at 4.1.
+
 **Risks:** R5 (residual rot in the validated/durable transitions), and memory that grows without
 bound — mitigated because facts are keyed and superseded rather than appended per observation.
 
