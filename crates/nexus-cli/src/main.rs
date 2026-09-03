@@ -150,12 +150,20 @@ enum Command {
     },
     /// Record something learned about this project, so the next session starts with it
     Fact {
-        /// e.g. arch.payment.idempotency
+        /// e.g. arch.payment.idempotency. The namespace is one of arch, constraint,
+        /// convention, decision, discovery, failure, incident, invariant, pattern, risk.
         key: String,
         /// One sentence
         claim: String,
         #[arg(long)]
         subject: Option<String>,
+        /// Where in the code this is true, as PATH:LINE. Repeatable.
+        ///
+        /// Without it the fact is remembered but unanchored: nothing can check it against a
+        /// later scan, so it is never invalidated when the code moves and never appears in a
+        /// context package, which requires a file:line on every item.
+        #[arg(long, value_name = "PATH:LINE")]
+        evidence: Vec<String>,
     },
     /// List findings
     #[command(alias = "bugs")]
@@ -663,7 +671,25 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             key,
             claim,
             subject,
+            evidence,
         } => {
+            let mut refs = Vec::new();
+            for e in evidence {
+                let Some((path, line)) = e.rsplit_once(':') else {
+                    eprintln!("nexus fact: --evidence wants PATH:LINE, got '{e}'");
+                    return Ok(exit::USAGE);
+                };
+                let Ok(line) = line.parse::<u32>() else {
+                    eprintln!("nexus fact: '{line}' in '{e}' is not a line number");
+                    return Ok(exit::USAGE);
+                };
+                refs.push(nexus_core::findings::CodeRef {
+                    file: path.to_string(),
+                    line,
+                    note: String::new(),
+                });
+            }
+            let anchored = !refs.is_empty();
             let mut engine = open(&root)?;
             engine.record_fact(nexus_core::FactInput {
                 key: key.clone(),
@@ -676,11 +702,23 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                 claim: claim.clone(),
                 // Entered by a person at a terminal, and ranked above an inferred fact.
                 source: "human".into(),
-                evidence: Vec::new(),
+                evidence: refs,
                 confidence: 1.0,
             })?;
             if !cli.quiet {
                 writeln!(out, "remembered: {key}")?;
+                if !anchored {
+                    // Said once, plainly, rather than left to be discovered when the fact
+                    // never turns up in a package.
+                    writeln!(
+                        out,
+                        "  {}",
+                        st.dim(
+                            "no --evidence, so nothing can check this against a later scan and \
+                             it will not appear in a context package"
+                        )
+                    )?;
+                }
             }
         }
 
