@@ -949,6 +949,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-verify"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -12,6 +12,7 @@ members = [
   "crates/cap-bughunter",
   "crates/cap-architect",
   "crates/cap-review",
+  "crates/nexus-verify",
   "crates/nexus-mcp",
   "crates/nexus-fixtures",
   "crates/nexus-cli",
@@ -36,6 +37,7 @@ nexus-core      = { path = "crates/nexus-core" }
 cap-bughunter   = { path = "crates/cap-bughunter" }
 cap-architect   = { path = "crates/cap-architect" }
 cap-review      = { path = "crates/cap-review" }
+nexus-verify    = { path = "crates/nexus-verify" }
 nexus-mcp       = { path = "crates/nexus-mcp" }
 nexus-fixtures  = { path = "crates/nexus-fixtures" }
 

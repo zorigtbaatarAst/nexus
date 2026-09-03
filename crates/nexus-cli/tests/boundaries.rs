@@ -75,6 +75,27 @@ fn mcp_handlers_cannot_reach_past_the_engine() {
     }
 }
 
+/// Verification executes processes; the store answers queries. Those are different risk
+/// surfaces, and ADR-025 keeps them in different crates for that reason rather than for
+/// tidiness. A `nexus-verify` that could reach the database could write its own verdicts.
+#[test]
+fn verification_cannot_reach_the_database() {
+    let g = dependency_graph();
+    assert_forbidden(
+        &g,
+        "nexus-verify",
+        "nexus-store",
+        "nexus-verify runs processes and returns a verdict; nexus-core writes what it decided.",
+    );
+    assert_forbidden(
+        &g,
+        "nexus-verify",
+        "nexus-core",
+        "It takes a plan and returns a result. Reaching back into the core would make the \
+         judgement depend on the index it is judging.",
+    );
+}
+
 #[test]
 fn ai_is_optional_as_a_build_fact() {
     let g = dependency_graph();
@@ -269,6 +290,7 @@ fn every_guarded_crate_is_actually_in_the_workspace() {
         "cap-bughunter",
         "cap-architect",
         "cap-review",
+        "nexus-verify",
     ] {
         assert!(
             g.contains_key(from),
