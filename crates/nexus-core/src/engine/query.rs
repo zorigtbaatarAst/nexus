@@ -5,8 +5,8 @@
 
 use super::*;
 use crate::context::{
-    self, estimate_tokens, Candidate, ContextPackage, InclusionLedger, ItemKind, PackageBasis,
-    ProjectSummary, Purpose, TaskRequest,
+    self, estimate_tokens, expand, seeds, Candidate, ContextPackage, InclusionLedger, Intent,
+    ItemKind, PackageBasis, ProjectSummary, Purpose, Seed, SeedResult, TaskRequest,
 };
 
 impl Engine {
@@ -219,6 +219,17 @@ impl Engine {
             tokens_estimated,
             items_considered: considered,
         })
+    }
+    /// Stage 2 of the context pipeline: what in the code this request is about.
+    ///
+    /// Public because the pipeline is assembled stage by stage across Phase 2 and each stage
+    /// is testable on its own. `Engine::context` will call it once stages 4 to 7 exist.
+    pub fn seeds(&self, req: &TaskRequest, intent: Intent) -> Result<SeedResult> {
+        Ok(seeds::resolve(&self.store, self.project_id, req, intent)?)
+    }
+    /// Stage 3 of the context pipeline: what else the seeds reach.
+    pub fn expand(&self, seeds: &[Seed], intent: Intent) -> Result<ImpactReport> {
+        Ok(expand::run(&self.store, self.project_id, seeds, intent)?)
     }
     /// The scan before the current baseline — what `--changed` is measured against.
     pub fn previous_scan_id(&self) -> Result<Option<i64>> {

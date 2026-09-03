@@ -291,9 +291,12 @@ pub(crate) fn fill(
     (items, used)
 }
 
+pub mod expand;
 pub mod intent;
+pub mod seeds;
 
 pub use intent::{classify, Intent, IntentMatch};
+pub use seeds::{Seed, SeedResult, SeedSource};
 
 #[cfg(test)]
 mod intent_tests {
