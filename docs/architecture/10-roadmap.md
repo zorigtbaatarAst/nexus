@@ -358,6 +358,35 @@ demonstrated value on a real project.
 **Dependencies:** all previous phases. 5.7 depends specifically on Phase 2.8 having accumulated
 real ledger data.
 
+**Status (2026-09-03): complete.** All seven tasks landed.
+
+Success criteria, each against the code:
+
+- **`nexus scan` on this repository reports non-zero symbols and edges.** It reports **1,831
+  symbols and 4,158 edges** across 261 files. The line this table used to carry — *"Today: 113
+  files, 0 symbols, 0 edges"* — was the acceptance test, and it is met.
+- A capability run under `--file` measurably loads less than a full run
+  (`tests/verification.rs::a_scoped_run_loads_less_than_a_full_one…`).
+- A Mongolian interface label reaches the code that renders it, with no model involved
+  (`tests/context_pipeline.rs`, asked in Cyrillic).
+- A weight change at 5.7 must cite ledger evidence — and none is changed, because none exists
+  yet. `nexus context --weights` reads what the packages say and refuses to recommend below
+  thirty of them.
+
+**What is honest about its limits.** Rust resolution is 547 of 4,158, far below Java's 96 %.
+The cause is measured: most of the remainder are bare method names, which need the receiver's
+type, and std or third-party paths that no owner-root inference can classify because Rust has
+no reverse-DNS convention. That is the LSP-sidecar trigger in the table below, and it now has
+a number rather than a guess. Reproduction scaffolds do not reproduce anything: they name the
+finding, quote its evidence and fail until somebody writes the assertion, because a generated
+test that passes because it asserts nothing looks like coverage.
+
+**Two defects this phase's own work surfaced.** The package cache could never hit — fields
+carrying `skip_serializing_if` had no `default`, and a skipped field is still required when
+reading, so every package was written and none was ever read back. The test meant to cover it
+compared two results, which a miss also satisfies. And the Rust analyzer's first signature
+hash collapsed whitespace rather than tokenizing, reporting an API break on every `cargo fmt`.
+
 **Risks:** R4 (scope — this phase is the most temptingly open-ended), R6 until 5.2 lands, and R3
 again at 5.6.
 
@@ -384,7 +413,7 @@ measurement.
 | Item | Trigger | Status |
 |---|---|---|
 | `nexusd` daemon + watcher | no-op `rescan` > 2 s, or `impact` p95 > 250 ms | **not fired** — 641 ms full scan, 880 files |
-| LSP sidecars | impact recall < 85 % for a language | **not fired** — 96 % resolved |
+| LSP sidecars | impact recall < 85 % for a language | **fired for Rust** — 13 % resolved (547/4,158); 96 % for Java. Bare method hints need a receiver type, which needs a type checker |
 | Vector search / embeddings | ledger misses clustering on semantic similarity | **not fired** — no evidence gathered |
 | Team-shared store (server) | >1 developer maintaining the same findings, *and* export/import proving insufficient | not fired |
 | Monorepo sharding | full scan > 30 min, or CI write contention | not fired |
