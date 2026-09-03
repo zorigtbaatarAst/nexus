@@ -40,7 +40,7 @@ fn project(name: &str) -> (PathBuf, Engine) {
     git(&root, &["init", "-q", "-b", "main"]);
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-qm", "x"]);
-    let (mut e, _) = Engine::init(&root).expect("init");
+    let (mut e, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     e.scan().expect("scan");
     (root, e)
 }

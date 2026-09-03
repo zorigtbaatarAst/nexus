@@ -66,7 +66,8 @@ fn a_sibling_module_is_reported_separately_from_a_library() {
     let root = fixture("sibling");
     service_module_only(&root);
 
-    let (mut engine, _) = Engine::open_or_init(&root).expect("init");
+    let (mut engine, _) =
+        Engine::open_or_init(&root, nexus_lang_pack::default_registry).expect("init");
     let report = engine.scan().expect("scan");
 
     assert!(
@@ -89,7 +90,8 @@ fn the_two_outcomes_are_stored_distinctly() {
     let root = fixture("stored");
     service_module_only(&root);
 
-    let (mut engine, _) = Engine::open_or_init(&root).expect("init");
+    let (mut engine, _) =
+        Engine::open_or_init(&root, nexus_lang_pack::default_registry).expect("init");
     engine.scan().expect("scan");
     let graph = engine.graph().expect("graph");
 
@@ -131,7 +133,8 @@ public class BaseEntity {
 "#,
     );
 
-    let (mut engine, _) = Engine::open_or_init(&root).expect("init");
+    let (mut engine, _) =
+        Engine::open_or_init(&root, nexus_lang_pack::default_registry).expect("init");
     let report = engine.scan().expect("scan");
 
     assert_eq!(
@@ -164,7 +167,8 @@ public class VehicleController {
 "#,
     );
 
-    let (mut engine, _) = Engine::open_or_init(&root).expect("init");
+    let (mut engine, _) =
+        Engine::open_or_init(&root, nexus_lang_pack::default_registry).expect("init");
     engine.scan().expect("scan");
 
     let q = nexus_core::impact::ImpactQuery {
@@ -228,7 +232,8 @@ public class IssueReader {
 "#,
     );
 
-    let (mut engine, _) = Engine::open_or_init(&root).expect("init");
+    let (mut engine, _) =
+        Engine::open_or_init(&root, nexus_lang_pack::default_registry).expect("init");
     engine.scan().expect("scan");
 
     // getId is declared on BaseEntity via @Data and called on Issue. The blast radius of
@@ -294,7 +299,8 @@ public class ThingService {
 "#,
     );
 
-    let (mut engine, _) = Engine::open_or_init(&root).expect("init");
+    let (mut engine, _) =
+        Engine::open_or_init(&root, nexus_lang_pack::default_registry).expect("init");
     engine.scan().expect("scan");
     let graph = engine.graph().expect("graph");
 

@@ -102,7 +102,7 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn engine(root: &Path) -> Engine {
-    let (mut e, _) = Engine::init(root).expect("init");
+    let (mut e, _) = Engine::init(root, nexus_lang_pack::default_registry()).expect("init");
     e.scan().expect("scan");
     e.record_fact(nexus_core::FactInput {
         key: "invariant.payment.idempotency".into(),

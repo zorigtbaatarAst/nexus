@@ -58,7 +58,7 @@ public class PaymentService {
 "#,
     );
     commit(&root);
-    let (mut engine, _) = Engine::init(&root).expect("init");
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     engine.scan().expect("scan");
 
     fs::create_dir_all(root.join("src/mn/payments")).expect("mkdir");
@@ -112,7 +112,7 @@ fn an_edited_body_is_not_a_rename() {
         "package a;\npublic class S { public void go() { one(); } }\n",
     );
     commit(&root);
-    let (mut engine, _) = Engine::init(&root).expect("init");
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     engine.scan().expect("scan");
 
     fs::remove_file(root.join("src/a/S.java")).expect("rm");
@@ -153,7 +153,7 @@ fn identical_boilerplate_is_left_alone_rather_than_matched_arbitrarily() {
         "package a;\npublic class B { public String id() { return null; } }\n",
     );
     commit(&root);
-    let (mut engine, _) = Engine::init(&root).expect("init");
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     engine.scan().expect("scan");
 
     fs::remove_file(root.join("src/a/A.java")).expect("rm");
@@ -204,7 +204,7 @@ fn a_pre_nexus_project_directory_is_migrated_in_place() {
     );
     commit(&root);
 
-    let (mut engine, _) = Engine::init(&root).expect("init");
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     engine.scan().expect("scan");
     let before = engine.status().expect("status");
     drop(engine);
@@ -224,7 +224,7 @@ fn a_pre_nexus_project_directory_is_migrated_in_place() {
         }
     }
 
-    let engine = Engine::open(&root).expect("open migrates");
+    let engine = Engine::open(&root, nexus_lang_pack::default_registry()).expect("open migrates");
     assert!(
         root.join(".nexus/nexus.db").exists(),
         "the directory and database move together"

@@ -75,6 +75,38 @@ fn mcp_handlers_cannot_reach_past_the_engine() {
     }
 }
 
+/// Language is an extension point, not a list compiled into the platform (roadmap 5.1).
+///
+/// `LanguageAnalyzer` was always the trait, but the *choice* of analyzers used to live in
+/// `nexus-core`, which made every new language a core edit — the same inversion the
+/// capability split already refused for rules. The composition roots choose now, through
+/// `nexus-lang-pack`, and this is what keeps it that way.
+#[test]
+fn the_core_does_not_know_its_languages() {
+    let g = dependency_graph();
+    for analyzer in g
+        .keys()
+        .filter(|k| k.starts_with("nexus-lang-") && k.as_str() != "nexus-lang-pack")
+        .cloned()
+        .collect::<Vec<_>>()
+    {
+        assert_forbidden(
+            &g,
+            "nexus-core",
+            &analyzer,
+            "An analyzer is registered into the engine by the composition root. Adding a \
+             language must be a new crate and one line at the root, never an edit to the core.",
+        );
+    }
+    assert_forbidden(
+        &g,
+        "nexus-core",
+        "nexus-lang-pack",
+        "The pack is the composition root's list. The core depending on it would name every \
+         language again, one indirection further away.",
+    );
+}
+
 /// Verification executes processes; the store answers queries. Those are different risk
 /// surfaces, and ADR-025 keeps them in different crates for that reason rather than for
 /// tidiness. A `nexus-verify` that could reach the database could write its own verdicts.

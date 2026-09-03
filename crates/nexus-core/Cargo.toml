@@ -12,9 +12,6 @@ nexus-store.workspace = true
 nexus-vcs.workspace = true
 nexus-verify.workspace = true
 nexus-lang.workspace = true
-nexus-lang-java.workspace = true
-nexus-lang-ts.workspace = true
-nexus-lang-graphql.workspace = true
 blake3.workspace = true
 ignore.workspace = true
 rayon.workspace = true
@@ -30,3 +27,8 @@ toml.workspace = true
 
 [dev-dependencies]
 nexus-verify.workspace = true
+# The core does not ship with analyzers, but its own tests need a project that indexes.
+# A dev-dependency, which `cargo metadata --no-deps` reports separately and the boundary
+# test therefore ignores — the rule is about what the platform *is*, not what it is tested
+# with.
+nexus-lang-pack.workspace = true

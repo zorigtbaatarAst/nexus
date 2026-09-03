@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 nexus-core.workspace = true
+nexus-lang-pack.workspace = true
 cap-bughunter.workspace = true
 cap-architect.workspace = true
 cap-review.workspace = true

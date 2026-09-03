@@ -50,7 +50,7 @@ fn scanned(name: &str) -> (PathBuf, Engine) {
     );
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-qm", "x"]);
-    let (mut engine, _) = Engine::init(&root).expect("init");
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     engine.scan().expect("scan");
     (root, engine)
 }

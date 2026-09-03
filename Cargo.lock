@@ -149,6 +149,7 @@ name = "cap-bughunter"
 version = "0.3.0"
 dependencies = [
  "nexus-core",
+ "nexus-lang-pack",
  "nexus-types",
 ]
 
@@ -824,6 +825,7 @@ dependencies = [
  "clap",
  "nexus-core",
  "nexus-fixtures",
+ "nexus-lang-pack",
  "nexus-mcp",
  "nexus-types",
  "serde",
@@ -838,9 +840,7 @@ dependencies = [
  "blake3",
  "ignore",
  "nexus-lang",
- "nexus-lang-graphql",
- "nexus-lang-java",
- "nexus-lang-ts",
+ "nexus-lang-pack",
  "nexus-store",
  "nexus-types",
  "nexus-vcs",
@@ -895,6 +895,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-lang-pack"
+version = "0.3.0"
+dependencies = [
+ "nexus-lang",
+ "nexus-lang-graphql",
+ "nexus-lang-java",
+ "nexus-lang-ts",
+]
+
+[[package]]
 name = "nexus-lang-ts"
 version = "0.3.0"
 dependencies = [
@@ -914,6 +924,7 @@ dependencies = [
  "cap-bughunter",
  "cap-review",
  "nexus-core",
+ "nexus-lang-pack",
  "rmcp",
  "schemars",
  "serde",

@@ -11,4 +11,5 @@ nexus-core.workspace = true
 nexus-types.workspace = true
 
 [dev-dependencies]
+nexus-lang-pack.workspace = true
 nexus-types.workspace = true

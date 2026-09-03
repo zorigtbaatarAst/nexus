@@ -18,10 +18,7 @@ use crate::impact::{self, ImpactQuery};
 use crate::project::{ChangedSymbol, EdgeFacts, FileFacts, ProjectContext, SymbolFacts};
 use crate::report::*;
 use crate::walk::{self, HashedFile};
-use nexus_lang::{ParsedFile, Registry, SourceFile};
-use nexus_lang_graphql::GraphQlSchemaAnalyzer;
-use nexus_lang_java::JavaAnalyzer;
-use nexus_lang_ts::TypeScriptAnalyzer;
+use nexus_lang::{LanguageAnalyzer, ParsedFile, Registry, SourceFile};
 use nexus_store::{ChangeRecord, NewEdge, NewSymbol, Store, SymbolRef};
 use nexus_types::*;
 use nexus_vcs::{Repo, VcsError};
@@ -96,7 +93,7 @@ pub struct Engine {
 
 impl Engine {
     /// Create `.nexus/`, migrate the database, and record what this project is.
-    pub fn init(root: &Path) -> Result<(Self, Profile)> {
+    pub fn init(root: &Path, registry: Registry) -> Result<(Self, Profile)> {
         let root = canonical(root);
         if Self::migrate_legacy_dir(&root)? {
             eprintln!("nexus: moved .bughunter/ to .nexus/ — scans, findings and history kept");
@@ -116,7 +113,7 @@ impl Engine {
         write_if_absent(&dir.join("config.toml"), DEFAULT_CONFIG)?;
         write_if_absent(&dir.join("policy.toml"), DEFAULT_POLICY)?;
 
-        let mut engine = Self::open_at(&root)?;
+        let mut engine = Self::open_at(&root)?.with_registry(registry);
         let profile = engine.detect()?;
         engine.save_profile(&profile)?;
         Ok((engine, profile))
@@ -150,7 +147,7 @@ impl Engine {
         Ok(true)
     }
 
-    pub fn open(root: &Path) -> Result<Self> {
+    pub fn open(root: &Path, registry: Registry) -> Result<Self> {
         let root = canonical(root);
         if Self::migrate_legacy_dir(&root)? {
             eprintln!("nexus: moved .bughunter/ to .nexus/ — scans, findings and history kept");
@@ -158,7 +155,7 @@ impl Engine {
         if !root.join(NEXUS_DIR).join(DB_FILE).exists() {
             return Err(EngineError::NotInitialized(root.display().to_string()));
         }
-        Self::open_at(&root)
+        Ok(Self::open_at(&root)?.with_registry(registry))
     }
 
     /// Open the project, initializing it first if it has never been set up.
@@ -166,11 +163,14 @@ impl Engine {
     /// `init` exists as its own command for people who want to inspect the detected
     /// profile before scanning, but requiring it is a step that only ever produces the
     /// error "you forgot to run init". Returns whether it initialized.
-    pub fn open_or_init(root: &Path) -> Result<(Self, bool)> {
-        match Self::open(root) {
+    pub fn open_or_init(root: &Path, registry: impl Fn() -> Registry) -> Result<(Self, bool)> {
+        // A factory rather than a value: a `Registry` holds trait objects and cannot be
+        // cloned, and this may need one twice — once to open, once to initialize when there
+        // was nothing to open.
+        match Self::open(root, registry()) {
             Ok(engine) => Ok((engine, false)),
             Err(EngineError::NotInitialized(_)) => {
-                let (engine, _) = Self::init(root)?;
+                let (engine, _) = Self::init(root, registry())?;
                 Ok((engine, true))
             }
             Err(e) => Err(e),
@@ -187,14 +187,10 @@ impl Engine {
         let vcs = if repo.is_some() { "git" } else { "none" };
         let project_id = store.ensure_project(&root.display().to_string(), &name, vcs)?;
 
-        let mut registry = Registry::new();
-        registry
-            .register(Box::new(JavaAnalyzer::new()))
-            .register(Box::new(TypeScriptAnalyzer::new()))
-            // The schema is indexed as the contract both sides are generated from, so
-            // "no resolver serves this" means the field is absent from the schema — not
-            // merely that no annotation shape this analyzer knows was found.
-            .register(Box::new(GraphQlSchemaAnalyzer::new()));
+        // Empty. The composition root registers what this build understands — the core does
+        // not name a language (roadmap 5.1). `doctor` reports an empty registry as an error,
+        // so a caller that forgets is told rather than quietly indexing nothing.
+        let registry = Registry::new();
 
         Ok(Engine {
             capabilities: Capabilities::new(),
@@ -211,6 +207,22 @@ impl Engine {
     /// Capabilities are registered by the composition root, never compiled into the core:
     /// `nexus-core` depending on `cap-bughunter` would invert the whole point of the split,
     /// and the boundary test forbids it.
+    /// Make a language analyzer available to this engine.
+    ///
+    /// The same rule as capabilities, for the same reason: the platform provides the trait
+    /// and the composition root chooses the implementations, so adding a language is a new
+    /// crate and one line at the root rather than an edit to the core.
+    pub fn register_analyzer(&mut self, a: Box<dyn LanguageAnalyzer>) -> &mut Self {
+        self.registry.register(a);
+        self
+    }
+
+    /// Register every analyzer in a prepared registry.
+    pub fn with_registry(mut self, registry: Registry) -> Self {
+        self.registry = registry;
+        self
+    }
+
     pub fn register_capability(&mut self, c: Box<dyn crate::capability::Capability>) -> &mut Self {
         self.capabilities.register(c);
         self

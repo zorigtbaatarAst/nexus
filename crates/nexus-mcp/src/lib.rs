@@ -179,7 +179,8 @@ impl Nexus {
             if guard.is_none() {
                 // `scan` on a fresh checkout should just work over MCP too, so the project
                 // is initialized on first use rather than erroring.
-                let (mut e, _) = Engine::open_or_init(&root).map_err(|e| e.to_string())?;
+                let (mut e, _) = Engine::open_or_init(&root, nexus_lang_pack::default_registry)
+                    .map_err(|e| e.to_string())?;
                 // The composition root: Nexus is handed its capabilities here rather than
                 // compiling them in, which is what lets BugHunter ship separately.
                 e.register_capability(Box::new(BugHunterCapability::new()));

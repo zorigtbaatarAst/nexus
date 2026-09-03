@@ -75,7 +75,7 @@ fn status_of(engine: &Engine, uid: &str) -> String {
 #[test]
 fn a_bug_is_found_fixed_and_then_regressed() {
     let root = fixture("cycle");
-    let (mut engine, _) = Engine::init(&root).expect("init");
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     engine.register_capability(Box::new(BugHunter::new()));
     engine.scan().expect("scan");
 
@@ -138,7 +138,7 @@ fn a_bug_is_found_fixed_and_then_regressed() {
 #[test]
 fn a_dismissed_bug_stays_dismissed() {
     let root = fixture("ignore");
-    let (mut engine, _) = Engine::init(&root).expect("init");
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     engine.register_capability(Box::new(BugHunter::new()));
     engine.scan().expect("scan");
     let uid = analyze(&mut engine).findings[0].uid.clone();
@@ -158,7 +158,7 @@ fn a_dismissed_bug_stays_dismissed() {
 fn identity_survives_a_package_move() {
     // The whole point of the fingerprint: moving the class must not invent a second bug.
     let root = fixture("move");
-    let (mut engine, _) = Engine::init(&root).expect("init");
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     engine.register_capability(Box::new(BugHunter::new()));
     engine.scan().expect("scan");
     let before = analyze(&mut engine);
@@ -199,7 +199,7 @@ fn ask_next_ranks_a_symbol_with_prior_findings_above_a_clean_one() {
     use nexus_core::report::{Answer, Question};
 
     let root = fixture("asknext");
-    let (mut engine, _) = Engine::init(&root).expect("init");
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     engine.register_capability(Box::new(BugHunter::new()));
     engine.scan().expect("scan");
     let found = analyze(&mut engine);

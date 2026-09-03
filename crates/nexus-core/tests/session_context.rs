@@ -49,7 +49,7 @@ fn fixture(name: &str) -> PathBuf {
 
 fn scanned(name: &str) -> Engine {
     let root = fixture(name);
-    let (mut engine, _) = Engine::init(&root).expect("init");
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     engine.scan().expect("scan");
     engine
 }
@@ -211,7 +211,7 @@ fn every_item_carries_an_anchor() {
 #[test]
 fn without_a_baseline_there_is_no_package() {
     let root = fixture("nobaseline");
-    let (engine, _) = Engine::init(&root).expect("init");
+    let (engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     match engine.context(&TaskRequest::session(SESSION_BUDGET_TOKENS)) {
         Err(EngineError::NoBaseline) => {}
         other => panic!("a package built from nothing is worse than none: {other:?}"),

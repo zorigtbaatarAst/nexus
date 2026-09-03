@@ -72,7 +72,7 @@ fn scanned_with_fact(name: &str, source: &str, evidence: Vec<CodeRef>) -> (PathB
     let root = fixture(name);
     write(&root, SERVICE, SOURCE);
     commit(&root);
-    let (mut engine, _) = Engine::init(&root).expect("init");
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     engine.scan().expect("scan");
     engine
         .record_fact(FactInput {

@@ -1,0 +1,13 @@
+[package]
+name = "nexus-lang-pack"
+description = "The set of language analyzers a build ships with. A composition artifact: it knows every analyzer and nothing else knows it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+nexus-lang.workspace = true
+nexus-lang-java.workspace = true
+nexus-lang-ts.workspace = true
+nexus-lang-graphql.workspace = true

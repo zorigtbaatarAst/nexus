@@ -90,7 +90,7 @@ fn fixture(name: &str) -> PathBuf {
 #[test]
 fn two_capabilities_coexist_and_number_their_findings_separately() {
     let root = fixture("two");
-    let (mut engine, _) = Engine::init(&root).expect("init");
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     engine
         .register_capability(Box::new(BugHunter::new()))
         .register_capability(Box::new(TodoHunter));
@@ -141,7 +141,7 @@ fn a_narrow_scope_costs_less_than_a_full_one() {
     // The platform's central claim is that it does not re-analyze what it already
     // understands. If a scope does not reduce the symbols examined, that claim is decoration.
     let root = fixture("scope");
-    let (mut engine, _) = Engine::init(&root).expect("init");
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
     engine.register_capability(Box::new(BugHunter::new()));
     engine.scan().expect("scan");
 

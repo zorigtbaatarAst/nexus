@@ -99,7 +99,7 @@ export const VehiclesPage = () => {
 }
 
 fn scan(root: &Path) -> Engine {
-    let (mut engine, _) = Engine::init(root).expect("init");
+    let (mut engine, _) = Engine::init(root, nexus_lang_pack::default_registry()).expect("init");
     let report = engine.scan().expect("scan");
     assert_eq!(
         report.files_failed, 0,

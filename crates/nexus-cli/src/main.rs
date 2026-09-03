@@ -323,7 +323,7 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
         }
 
         Command::Init { hooks } => {
-            let (_engine, profile) = Engine::init(&root)?;
+            let (_engine, profile) = Engine::init(&root, nexus_lang_pack::default_registry())?;
             let installed = if *hooks {
                 Some(hooks::install(&root)?)
             } else {
@@ -921,13 +921,13 @@ fn register_capabilities(engine: &mut Engine) {
 }
 
 fn open(root: &std::path::Path) -> Result<Engine, EngineError> {
-    let mut engine = Engine::open(root)?;
+    let mut engine = Engine::open(root, nexus_lang_pack::default_registry())?;
     register_capabilities(&mut engine);
     Ok(engine)
 }
 
 fn open_or_init(root: &std::path::Path) -> Result<(Engine, bool), EngineError> {
-    let (mut engine, fresh) = Engine::open_or_init(root)?;
+    let (mut engine, fresh) = Engine::open_or_init(root, nexus_lang_pack::default_registry)?;
     register_capabilities(&mut engine);
     Ok((engine, fresh))
 }
