@@ -2399,6 +2399,89 @@ impl Store {
         Ok(rows)
     }
 
+    /// The facts that could match any of these seeds, and only those.
+    ///
+    /// `facts(project_id, None)` loads every live fact and lets `nexus_core::memory` discard
+    /// the irrelevant ones in Rust — 14 ms at zero facts, 274 ms at 200,000, on a path
+    /// ADR-024 budgets 150 ms for. This asks the question in SQL instead, over
+    /// `idx_facts_subject`, which has existed since `0001_init.sql` and was never used
+    /// because the hot path passed `None`.
+    ///
+    /// Two arms, mirroring `memory::subject_match` exactly:
+    ///   * equality against every seed and every ancestor of it — a fact about the module a
+    ///     seed lives in is a fact about the seed;
+    ///   * a half-open range per seed — a fact about something *below* the seed. Written as a
+    ///     range rather than `LIKE seed || '%'` because a range on an indexed column is an
+    ///     index seek and `LIKE` with a bound parameter is not guaranteed to be.
+    ///
+    /// The Rust-side filter still runs. This narrows what it has to look at; it does not
+    /// replace the one definition of a match.
+    pub fn facts_for_seeds(&self, project_id: ProjectId, seeds: &[String]) -> Result<Vec<FactRow>> {
+        if seeds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let exact: std::collections::BTreeSet<String> =
+            seeds.iter().flat_map(|s| subject_prefixes(s)).collect();
+        let exact: Vec<String> = exact.into_iter().collect();
+
+        let mut sql = String::from(
+            "SELECT fact_key, scope, subject, claim, source, confidence, evidence_json,
+                    validated_count, durable, created_scan_id
+             FROM facts
+             WHERE project_id = ?1
+               AND superseded_by IS NULL AND invalidated_at IS NULL
+               AND (subject IN (",
+        );
+        sql.push_str(
+            &(0..exact.len())
+                .map(|i| format!("?{}", i + 2))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        sql.push(')');
+        let range_base = 2 + exact.len();
+        for i in 0..seeds.len() {
+            sql.push_str(&format!(
+                " OR (subject >= ?{} AND subject < ?{})",
+                range_base + i * 2,
+                range_base + i * 2 + 1
+            ));
+        }
+        sql.push_str(") ORDER BY fact_key");
+
+        let mut values: Vec<rusqlite::types::Value> =
+            Vec::with_capacity(1 + exact.len() + seeds.len() * 2);
+        values.push(rusqlite::types::Value::Integer(project_id));
+        for e in &exact {
+            values.push(rusqlite::types::Value::Text(e.clone()));
+        }
+        for s in seeds {
+            values.push(rusqlite::types::Value::Text(s.clone()));
+            // The largest code point, so the range covers every descendant and stops before
+            // the next distinct subject. SQLite compares TEXT byte-wise by default.
+            values.push(rusqlite::types::Value::Text(format!("{s}\u{10FFFF}")));
+        }
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(values), |r| {
+                Ok(FactRow {
+                    key: r.get(0)?,
+                    scope: r.get(1)?,
+                    subject: r.get(2)?,
+                    claim: r.get(3)?,
+                    source: r.get(4)?,
+                    confidence: r.get(5)?,
+                    evidence_json: r.get(6)?,
+                    validated_count: r.get(7)?,
+                    durable: r.get::<_, i64>(8)? == 1,
+                    created_scan_id: r.get(9)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Record that a scan found these facts' evidence intact.
     ///
     /// The mirror of [`Self::invalidate_moved_facts`], from the same anchors: one says the
@@ -2895,6 +2978,34 @@ fn simple_key(fqn: &str) -> String {
         Some(m) => format!("{simple_type}#{}", m.split('(').next().unwrap_or(m)),
         None => simple_type.to_string(),
     }
+}
+
+/// A subject and every ancestor of it: `a::b::C#m` yields `a::b::C#m`, `a`, `a::b`, `a::b::C`.
+///
+/// `memory::subject_match` scores 0.6 when either string is a prefix of the other. This is the
+/// half of that rule SQL can answer with an equality set; the other half is a range scan.
+/// Separators are ASCII, so every cut lands on a char boundary.
+pub(crate) fn subject_prefixes(fqn: &str) -> Vec<String> {
+    let mut out = vec![fqn.to_string()];
+    let bytes = fqn.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let sep = match bytes[i] {
+            b'#' | b'.' => Some(1),
+            b':' if bytes.get(i + 1) == Some(&b':') => Some(2),
+            _ => None,
+        };
+        match sep {
+            Some(len) => {
+                if i > 0 {
+                    out.push(fqn[..i].to_string());
+                }
+                i += len;
+            }
+            None => i += 1,
+        }
+    }
+    out
 }
 
 /// The last name in a qualified path, whichever separator the language writes it with.
@@ -3394,6 +3505,103 @@ mod tests {
         assert!(
             !is_sibling("mn.autoland.model", None),
             "without a majority owner nothing may be claimed as a sibling"
+        );
+    }
+
+    /// A project with one open scan, so `record_fact`'s foreign key to `scans` holds.
+    /// Shape copied verbatim from `live_views_hide_soft_deleted_rows` in this same module —
+    /// do not invent a different one.
+    fn seeded_project(s: &mut Store) -> (ProjectId, ScanId) {
+        let pid = s.ensure_project("/tmp/t", "t", "git").expect("project");
+        let (scan, _) = s
+            .begin_scan(pid, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
+        (pid, scan)
+    }
+
+    #[test]
+    fn a_subject_yields_itself_and_every_ancestor() {
+        assert_eq!(
+            subject_prefixes("nexus_core::context::cache"),
+            vec![
+                "nexus_core::context::cache".to_string(),
+                "nexus_core".to_string(),
+                "nexus_core::context".to_string(),
+            ]
+        );
+        assert_eq!(
+            subject_prefixes("mn.pay.PaymentService#pay"),
+            vec![
+                "mn.pay.PaymentService#pay".to_string(),
+                "mn".to_string(),
+                "mn.pay".to_string(),
+                "mn.pay.PaymentService".to_string(),
+            ]
+        );
+        assert_eq!(subject_prefixes("bare"), vec!["bare".to_string()]);
+    }
+
+    #[test]
+    fn facts_for_seeds_finds_ancestors_and_descendants_and_nothing_else() {
+        let mut s = Store::open_in_memory().expect("open");
+        let (pid, scan) = seeded_project(&mut s);
+        for (key, subject) in [
+            ("arch.exact", "a::b::C"),
+            ("arch.ancestor", "a::b"),
+            ("arch.descendant", "a::b::C#m"),
+            ("arch.sibling", "a::b::D"),
+            ("arch.unrelated", "z::q"),
+        ] {
+            s.record_fact(
+                pid,
+                scan,
+                &NewFact {
+                    key: key.into(),
+                    scope: "symbol".into(),
+                    subject: Some(subject.into()),
+                    claim: format!("about {subject}"),
+                    source: "human".into(),
+                    evidence_json: None,
+                    confidence: 1.0,
+                },
+            )
+            .expect("record");
+        }
+
+        let got: Vec<String> = s
+            .facts_for_seeds(pid, &["a::b::C".to_string()])
+            .expect("query")
+            .into_iter()
+            .map(|f| f.key)
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                "arch.ancestor".to_string(),
+                "arch.descendant".to_string(),
+                "arch.exact".to_string(),
+            ],
+            "the seed itself, the module above it, and the method below it — not the sibling"
+        );
+
+        assert!(
+            s.facts_for_seeds(pid, &[]).expect("empty").is_empty(),
+            "no seeds is no query, not every fact"
+        );
+    }
+
+    #[test]
+    fn a_large_seed_set_stays_inside_sqlites_parameter_limit() {
+        // The failure mode of exceeding it is a runtime error on a large project and never
+        // on a fixture, so the bound is asserted rather than assumed.
+        let mut s = Store::open_in_memory().expect("open");
+        let (pid, _) = seeded_project(&mut s);
+        let seeds: Vec<String> = (0..256)
+            .map(|i| format!("crate{i}::module{i}::Type{i}#method{i}"))
+            .collect();
+        assert!(
+            s.facts_for_seeds(pid, &seeds).is_ok(),
+            "256 seeds must not exceed SQLITE_MAX_VARIABLE_NUMBER"
         );
     }
 }
