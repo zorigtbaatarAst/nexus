@@ -163,7 +163,7 @@ And the shared fixture helper, also inside `mod tests`:
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cargo test -p nexus-store subject_prefixes facts_for_seeds parameter_limit`
+Run: `cargo test -p nexus-store -- a_subject_yields_itself a_large_seed_set facts_for_seeds_finds`
 Expected: FAIL — `cannot find function 'subject_prefixes'`, `no method named 'facts_for_seeds'`.
 
 `ScanKind` is already in scope inside `mod tests` via `use super::*`. If anything here still fails to compile, read `live_views_hide_soft_deleted_rows` in the same module and copy its shape exactly — do not invent one.
@@ -301,8 +301,8 @@ If `ProjectId` is not a plain `i64`, replace `Value::Integer(project_id)` with `
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `cargo test -p nexus-store subject_prefixes facts_for_seeds parameter_limit`
-Expected: PASS, 3 tests.
+Run: `cargo test -p nexus-store -- a_subject_yields_itself a_large_seed_set facts_for_seeds_finds`
+Expected: PASS, 3 tests. (`cargo test` takes one positional filter; further filters go after `--`, and each must be a substring of a *test name*, not of the function under test.)
 
 - [ ] **Step 6: `make check`**
 
