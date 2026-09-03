@@ -60,6 +60,9 @@ impl Engine {
     }
     /// Remember something about this project that is not a symbol, an edge or a finding.
     pub fn record_fact(&mut self, f: FactInput) -> Result<()> {
+        // §2's namespace list, enforced. A key outside it is refused rather than stored under
+        // a prefix nothing will ever look for.
+        crate::memory::check_key(&f.key).map_err(EngineError::Unsupported)?;
         let baseline = self
             .store
             .baseline(self.project_id)?
@@ -79,20 +82,37 @@ impl Engine {
         )?;
         Ok(())
     }
+    /// Facts, most relevant first by §4's formula.
+    ///
+    /// `subject` narrows; it does not rank. Ranking is `memory::rank`, the one function every
+    /// consumer calls — the Context Engine passes its seeds, this path passes none, and both
+    /// get the same order for the same inputs.
     pub fn facts(&self, subject: Option<&str>) -> Result<Vec<Fact>> {
+        let seeds: Vec<String> = subject.map(str::to_string).into_iter().collect();
+        let current = self.current_scan_id()?;
+        Ok(
+            crate::memory::rank(self.store.facts(self.project_id, subject)?, &seeds, current)
+                .into_iter()
+                .map(|r| Fact {
+                    key: r.key,
+                    scope: r.scope,
+                    subject: r.subject,
+                    claim: r.claim,
+                    source: r.source,
+                    confidence: r.confidence,
+                    durable: r.durable,
+                    validated_count: r.validated_count,
+                })
+                .collect(),
+        )
+    }
+
+    /// The baseline scan's id, or 0 before there is one. The clock §4's decay runs on.
+    fn current_scan_id(&self) -> Result<i64> {
         Ok(self
             .store
-            .facts(self.project_id, subject)?
-            .into_iter()
-            .map(|r| Fact {
-                key: r.key,
-                scope: r.scope,
-                subject: r.subject,
-                claim: r.claim,
-                source: r.source,
-                confidence: r.confidence,
-            })
-            .collect())
+            .baseline(self.project_id)?
+            .map_or(0, |b| b.scan_id))
     }
     /// The context package for a request.
     ///
@@ -395,7 +415,22 @@ impl Engine {
         // Facts about anything the request reached. Knowledge competes with code on the same
         // scale, which is the point of one formula: a fact that answers the question outranks
         // a symbol that merely mentions it.
-        for row in self.store.facts(self.project_id, None)? {
+        // Seeds *and* what they reach. A fact about a method the change calls is exactly as
+        // relevant as one about the method being changed — that is what expansion is for, and
+        // matching on seeds alone dropped the idempotency fact from a package about the
+        // controller that enforces it.
+        let relevant: Vec<String> = seeded
+            .seeds
+            .iter()
+            .map(|s| s.symbol.fqn.clone())
+            .chain(reached.items.iter().map(|i| i.fqn.clone()))
+            .collect();
+        let current_scan = self.current_scan_id()?;
+        for row in crate::memory::rank(
+            self.store.facts(self.project_id, None)?,
+            &relevant,
+            current_scan,
+        ) {
             let Some(subject) = row.subject.clone() else {
                 continue;
             };
@@ -404,12 +439,19 @@ impl Engine {
                 .as_deref()
                 .and_then(|j| serde_json::from_str::<Vec<CodeRef>>(j).ok())
                 .and_then(|refs| refs.into_iter().next());
-            let text = format!("{}  {}  [{}]", row.key, row.claim, row.source);
-            let signals =
-                index.for_candidate(&subject, anchor.as_ref().map_or("", |a| &a.file), false);
-            if signals.fact == 0.0 {
+            // Relevance to the *seeds*, not to itself. The signal index answers "is there a
+            // fact about this symbol", which is trivially true of a fact asked about its own
+            // subject — and that let a fact about an unrelated module into every package
+            // until a test asked whether it belonged there.
+            let to_seeds = crate::memory::subject_match(Some(&subject), &relevant);
+            if !relevant.is_empty() && to_seeds <= 0.3 {
                 continue;
             }
+            let text = format!("{}  {}  [{}]", row.key, row.claim, row.source);
+            let signals = crate::context::Signals {
+                fact: crate::memory::relevance(&row, &relevant, current_scan),
+                ..Default::default()
+            };
             let (score, terms) = crate::context::rank::score(
                 &crate::context::rank::Inputs {
                     seed_proximity: 0.0,

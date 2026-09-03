@@ -476,3 +476,74 @@ fn naming_a_class_seeds_its_methods_so_expansion_reaches_the_callers() {
         out.items.iter().map(|i| &i.fqn).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn both_retrieval_paths_agree_because_they_call_one_formula() {
+    // §4 is one formula. Two rankings over one table would disagree eventually, and the one
+    // further from the data is the one that would be wrong.
+    let (_root, mut engine) = scanned("oneformula");
+    for (key, subject, source) in [
+        (
+            "invariant.pay.settles-once",
+            "mn.pay.PaymentService#pay",
+            "human",
+        ),
+        ("arch.pay.layering", "mn.pay", "ai"),
+        ("risk.orders.locking", "mn.orders", "ai"),
+    ] {
+        engine
+            .record_fact(nexus_core::FactInput {
+                key: key.into(),
+                scope: "symbol".into(),
+                subject: Some(subject.into()),
+                claim: format!("claim for {key}"),
+                source: source.into(),
+                evidence: Vec::new(),
+                confidence: 0.9,
+            })
+            .expect("record");
+    }
+
+    // The ask path, with no seeds: provenance and state decide, so the human fact leads.
+    let ranked = engine.facts(None).expect("facts");
+    assert_eq!(ranked[0].key, "invariant.pay.settles-once", "{ranked:?}");
+    assert!(ranked[0].durable, "a human fact is durable on arrival");
+
+    // The Context Engine path, seeded on the payment method: the same fact still leads, and
+    // the unrelated module's fact is not in the package at all.
+    let pkg = engine
+        .context(&request("refactor mn.pay.PaymentService#pay"))
+        .expect("package");
+    let fact_labels: Vec<&str> = pkg
+        .ledger
+        .rows
+        .iter()
+        .filter(|r| r.kind == nexus_core::context::ItemKind::Fact)
+        .map(|r| r.label.as_str())
+        .collect();
+    assert!(
+        fact_labels.contains(&"invariant.pay.settles-once"),
+        "{fact_labels:?}"
+    );
+    assert!(
+        !fact_labels.contains(&"risk.orders.locking"),
+        "a fact about another module is not relevant here: {fact_labels:?}"
+    );
+}
+
+#[test]
+fn a_fact_key_outside_the_namespace_list_is_refused() {
+    let (_root, mut engine) = scanned("namespace");
+    let err = engine
+        .record_fact(nexus_core::FactInput {
+            key: "task.did-a-thing".into(),
+            scope: "project".into(),
+            subject: None,
+            claim: "x".into(),
+            source: "human".into(),
+            evidence: Vec::new(),
+            confidence: 1.0,
+        })
+        .expect_err("refused");
+    assert!(format!("{err}").contains("transcript"), "{err}");
+}

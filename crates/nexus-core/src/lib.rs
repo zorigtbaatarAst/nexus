@@ -24,6 +24,7 @@ pub mod findings;
 pub mod graphify;
 pub mod history;
 pub mod impact;
+pub mod memory;
 pub mod policy;
 pub mod project;
 pub mod report;

@@ -336,6 +336,10 @@ pub struct Fact {
     pub claim: String,
     pub source: String,
     pub confidence: f64,
+    /// Validated three times, or written by a person. §3's highest retrieval weight.
+    pub durable: bool,
+    /// Distinct scans whose evidence check this fact survived.
+    pub validated_count: i64,
 }
 
 // --- `ask`: the questions a person or an agent actually has -------------------------------
