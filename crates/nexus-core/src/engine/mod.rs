@@ -441,6 +441,31 @@ commands = [
   "cargo test {test}",
 ]
 
+[context.weights]
+# How the Context Engine ranks a candidate. One weighted sum, every term recorded —
+# see docs/architecture/05-context-engine.md §6. These are data on purpose: tuning is
+# an edit here and a re-run, never a release.
+#
+# The shipped values are argued, not fitted. Seeds dominate because an explicitly named
+# symbol is not a guess; history is next because a regression is the most useful thing to
+# know before editing; cost is real but never decisive alone, or the package fills with
+# cheap trivia. The first evidence-backed tuning is roadmap 5.7.
+seed     = 1.0
+graph    = 0.8
+churn    = 0.3
+recency  = 0.2
+history  = 0.6
+fact     = 0.5
+test     = 0.3
+arch     = 0.3
+cost     = 0.4
+# Below this a candidate is excluded even when budget remains. An unfilled budget is not
+# a problem to solve.
+min_score = 0.15
+# At most this many items from one file before another component gets a turn, so a hot
+# class cannot fill the package with its own methods.
+max_per_component = 3
+
 [ai]
 provider           = "none"
 max_context_tokens = 24000

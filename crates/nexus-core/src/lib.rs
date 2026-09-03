@@ -23,6 +23,7 @@ pub mod engine;
 pub mod findings;
 pub mod history;
 pub mod impact;
+pub mod policy;
 pub mod project;
 pub mod report;
 pub mod rules;

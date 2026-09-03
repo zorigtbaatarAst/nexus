@@ -293,6 +293,7 @@ pub(crate) fn fill(
 
 pub mod expand;
 pub mod intent;
+pub mod rank;
 pub mod seeds;
 pub mod signals;
 

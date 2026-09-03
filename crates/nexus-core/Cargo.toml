@@ -23,3 +23,6 @@ schemars = "1"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# Reads .nexus/policy.toml. Not an adapter and not a network stack, so the boundary
+# rules are untouched — tests/boundaries.rs checks for HTTP clients, not for parsers.
+toml.workspace = true
