@@ -244,7 +244,7 @@ impl Engine {
     pub fn detect(&self) -> Result<Profile> {
         let files = walk::walk(&self.root, &[]);
         let paths: Vec<String> = files.into_iter().map(|f| f.path).collect();
-        let analyzed: Vec<&str> = vec!["java", "typescript"];
+        let analyzed = self.registry.languages();
         Ok(Detector {
             root: &self.root,
             paths: &paths,

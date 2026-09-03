@@ -118,6 +118,22 @@ impl Registry {
         self.analyzers.is_empty()
     }
 
+    /// The languages this build actually analyzes.
+    ///
+    /// The profile's `analyzed` flag was a hardcoded `["java", "typescript"]`, so a Rust
+    /// project whose 1838 symbols were indexed was told Rust was "present but not analyzed
+    /// in this build" — and Architect then recommended adding an analyzer that ships.
+    pub fn languages(&self) -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = self
+            .analyzers
+            .iter()
+            .map(|a| a.language().as_str())
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// The version map recorded on every scan, keyed for cache invalidation.
     pub fn tool_versions(&self) -> BTreeMap<String, String> {
         self.analyzers

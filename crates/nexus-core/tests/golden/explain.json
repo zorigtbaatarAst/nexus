@@ -3,11 +3,11 @@
   "intent": "explain",
   "included": [
     "mn.pay.PaymentController",
-    "mn.pay.PaymentController#service",
     "mn.pay.PaymentService#pay(String)",
+    "mn.pay.PaymentController#service",
     "mn.pay.PaymentController#create(String)",
-    "mn.pay.PaymentRepository#save(String)",
-    "invariant.payment.idempotency"
+    "invariant.payment.idempotency",
+    "mn.pay.PaymentRepository#save(String)"
   ],
   "excluded": []
 }

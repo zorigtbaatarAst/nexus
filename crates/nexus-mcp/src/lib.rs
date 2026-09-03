@@ -131,6 +131,13 @@ pub struct FactArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ImportArgs {
+    /// The graph to read, relative to the project root. Defaults to where graphify writes.
+    #[serde(default)]
+    pub from: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ChangesArgs {
     /// file | symbol | dependency | config | test
     #[serde(default)]
@@ -564,6 +571,9 @@ impl Nexus {
             symbols: a.symbols,
             budget_tokens: a.budget.unwrap_or(nexus_core::context::TASK_BUDGET_TOKENS),
             purpose: nexus_core::Purpose::Task,
+            // An agent pays for every token of this. The reasoning is available on request
+            // through the CLI's --explain; it is not shipped by default.
+            explain: false,
             carry_seeds: a.carry_seeds,
             recent: a.recent,
         };
@@ -626,6 +636,32 @@ impl Nexus {
                 "nothing to narrow",
             ))),
             Err(m) => Ok(failure("no_project", m, &["nexus_scan"])),
+        }
+    }
+
+    #[tool(
+        description = "Read an external knowledge graph's claims into project memory. Point \
+                       it at a graphify graph and the design claims its semantic pass \
+                       produced — the ones that cost model calls — become facts, anchored on \
+                       the symbols they name and ranked with everything else. Run it once \
+                       after graphify; it updates rather than duplicates on a second run."
+    )]
+    async fn nexus_import_knowledge(
+        &self,
+        Parameters(a): Parameters<ImportArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let from = a
+            .from
+            .unwrap_or_else(|| "graphify-out/graph.json".to_string());
+        match self
+            .with_engine(move |e| {
+                let path = e.root().join(&from);
+                e.import_graphify(&path).map_err(|e| e.to_string())
+            })
+            .await
+        {
+            Ok(r) => Ok(ok(json!(r))),
+            Err(m) => Ok(failure("no_baseline", m, &["nexus_scan"])),
         }
     }
 

@@ -94,11 +94,30 @@ Two rules, and both are enforced rather than advisory:
 finding — an invariant, a convention, a decision and its reason. Expensive conclusions should
 be reached once.
 
+## Knowledge someone already extracted
+
+If the project has a `graphify-out/graph.json`, call `nexus_import_knowledge` once. graphify's
+semantic pass already read the design documents and produced claims about this project;
+importing them turns each into a fact anchored on the symbol it names, so it surfaces while
+that symbol is being edited instead of sitting in a document nobody opens.
+
+It costs nothing per request afterwards. The budget is a ceiling, so more knowledge changes
+*which* items a package carries, never how many tokens it is: on the Nexus repository, going
+from 0 to 2,171 facts moved a package from 468 to 712 tokens and no further, while the 19
+documents those claims came from are about 79,900 tokens to read.
+
+Imported claims are `ai` facts at confidence 0.5. Nothing has checked them against the code,
+so treat one as a lead worth confirming, not as a settled fact.
+
 ## What it does not do
 
-It does not run tests, so no finding is verified by reproduction. It does not analyze Python
-or Rust yet. And it does not reason: the index, the graph and the history are evidence, and
-what they mean is your job.
+It runs nothing unless the project's committed `.nexus/policy.toml` allows it: `nexus verify`
+defaults to `execute = "none"` and returns a result rather than an execution. Even where it
+does run, it runs the project's own build, test and lint — no finding is proven by a generated
+reproduction yet, which is why model confidence stays capped at 0.75.
+
+And it does not reason: the index, the graph and the history are evidence, and what they mean
+is your job.
 
 Review in particular has no opinion about how code is written. It will not comment on naming,
 formatting or structure, and it is not trying to — those are taste, and taste is what the tool

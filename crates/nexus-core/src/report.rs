@@ -326,6 +326,22 @@ pub struct RecordedFinding {
     pub status: String,
 }
 
+/// What one import of an external graph did.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportReport {
+    pub path: String,
+    /// Claims graphify's semantic pass produced.
+    pub concepts_read: usize,
+    pub facts_recorded: usize,
+    /// Claims whose label resolved to exactly one indexed symbol, so the fact is anchored on
+    /// the code rather than on the document that discusses it. The difference decides whether
+    /// it ever surfaces while someone is editing.
+    pub anchored_on_code: usize,
+    pub skipped: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct FactInput {
     pub key: String,

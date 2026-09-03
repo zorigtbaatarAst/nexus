@@ -21,6 +21,13 @@ pub struct Key<'a> {
     pub dirty_hash: &'a str,
     pub budget_tokens: usize,
     pub weights_hash: &'a str,
+    /// A package with its reasoning is a different package. Without this the first plain
+    /// request poisoned every later `--explain` with a ledger-less hit.
+    pub explain: bool,
+    /// What the project remembers. §11 lists the index and the tree; it does not list
+    /// memory, and the omission meant recording a fact changed nothing until something else
+    /// moved — the opposite of "an expensive conclusion should be reached once".
+    pub memory: &'a str,
 }
 
 impl Key<'_> {
@@ -28,13 +35,18 @@ impl Key<'_> {
         let mut seeds = self.seeds.clone();
         seeds.sort();
         let material = format!(
-            "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            // The build is part of the key. A cached package outliving the upgrade that
+            // changed how packages are built is a stale answer with no way to notice.
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            env!("CARGO_PKG_VERSION"),
             self.intent,
             seeds.join(","),
             self.commit.unwrap_or("-"),
             self.dirty_hash,
             self.budget_tokens,
-            self.weights_hash
+            self.weights_hash,
+            self.explain,
+            self.memory
         );
         blake3::hash(material.as_bytes()).to_hex()[..32].to_string()
     }
@@ -75,6 +87,8 @@ mod tests {
             dirty_hash: dirty,
             budget_tokens: budget,
             weights_hash: "w1",
+            explain: false,
+            memory: "m1",
         }
     }
 
@@ -98,6 +112,12 @@ mod tests {
         let mut k = key(Some("abc"), "clean", 4000);
         k.weights_hash = "w2";
         assert_ne!(base, k.digest(), "weights");
+        let mut k = key(Some("abc"), "clean", 4000);
+        k.explain = true;
+        assert_ne!(base, k.digest(), "explain");
+        let mut k = key(Some("abc"), "clean", 4000);
+        k.memory = "m2";
+        assert_ne!(base, k.digest(), "memory");
         let mut k = key(Some("abc"), "clean", 4000);
         k.seeds.push("mn.pay.C".into());
         assert_ne!(base, k.digest(), "seeds");

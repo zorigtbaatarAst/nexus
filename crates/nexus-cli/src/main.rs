@@ -61,6 +61,16 @@ enum MemoryCommand {
         #[arg(long, default_value = "docs/knowledge")]
         markdown: PathBuf,
     },
+    /// Read an external knowledge graph's claims into project memory
+    ///
+    /// graphify's structural pass already reaches Nexus as edges. Its semantic pass costs
+    /// model calls and produces claims about the project; this is how they arrive, as
+    /// ordinary facts ranked and budgeted with everything else.
+    Import {
+        /// The graph to read.
+        #[arg(long, default_value = "graphify-out/graph.json")]
+        from: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -745,6 +755,37 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
         },
 
         Command::Memory {
+            cmd: MemoryCommand::Import { from },
+        } => {
+            let mut engine = open(&root)?;
+            let path = if from.is_absolute() {
+                from.clone()
+            } else {
+                root.join(from)
+            };
+            let r = engine.import_graphify(&path)?;
+            emit!(&r, {
+                writeln!(out, "{}", st.head("Imported"))?;
+                writeln!(
+                    out,
+                    "  {} claim(s) read, {} recorded, {} anchored on code, {} skipped",
+                    r.concepts_read, r.facts_recorded, r.anchored_on_code, r.skipped
+                )?;
+                for w in &r.warnings {
+                    writeln!(out, "  {}", st.dim(w))?;
+                }
+                writeln!(
+                    out,
+                    "\n{}",
+                    st.dim(
+                        "Recorded as `ai` facts at confidence 0.5 — a model wrote them and \
+                         nothing has verified them against the code."
+                    )
+                )?;
+            });
+        }
+
+        Command::Memory {
             cmd: MemoryCommand::Export { markdown },
         } => {
             let engine = open(&root)?;
@@ -820,15 +861,20 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                     eprintln!("nexus context: one of --session or --task is required");
                     return Ok(exit::USAGE);
                 }
-                (true, None) => nexus_core::TaskRequest::session(
-                    budget.unwrap_or(nexus_core::context::SESSION_BUDGET_TOKENS),
-                ),
+                (true, None) => {
+                    let mut r = nexus_core::TaskRequest::session(
+                        budget.unwrap_or(nexus_core::context::SESSION_BUDGET_TOKENS),
+                    );
+                    r.explain = *explain;
+                    r
+                }
                 (false, Some(text)) => nexus_core::TaskRequest {
                     text: text.clone(),
                     files: file.clone(),
                     symbols: symbol.clone(),
                     budget_tokens: budget.unwrap_or(nexus_core::context::TASK_BUDGET_TOKENS),
                     purpose: nexus_core::Purpose::Task,
+                    explain: *explain,
                     carry_seeds: carry_seeds.clone(),
                     recent: recent.clone(),
                 },

@@ -97,13 +97,13 @@ impl Engine {
         // An external graph, if the project asked for one. After every parsed file has a
         // row, so an unanalysed file can be given a module node without racing the walk.
         if let crate::graphify::Mode::On(path) = crate::graphify::mode(&self.root) {
-            let (edges, note) = crate::graphify::read(&path);
-            if let Some(note) = note {
+            let graph = crate::graphify::read(&path);
+            if let Some(note) = graph.note {
                 warnings.push(note);
             }
             let mut imported = 0usize;
             let mut nodes: BTreeMap<String, i64> = BTreeMap::new();
-            for edge in &edges {
+            for edge in &graph.edges {
                 let mut resolve = |p: &str| -> Result<Option<i64>> {
                     if let Some(id) = nodes.get(p) {
                         return Ok(Some(*id));

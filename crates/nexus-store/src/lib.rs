@@ -975,7 +975,10 @@ impl Store {
             std::collections::HashSet::new();
         for fqn in by_fqn.keys() {
             let type_part = fqn.split('#').next().unwrap_or(fqn);
-            if let Some((pkg, _)) = type_part.rsplit_once('.') {
+            if let Some((pkg, _)) = type_part
+                .rsplit_once("::")
+                .or_else(|| type_part.rsplit_once('.'))
+            {
                 project_packages.insert(pkg.to_string());
             }
         }
@@ -1148,7 +1151,11 @@ impl Store {
                         continue;
                     }
                     let type_part = hint.split('#').next().unwrap_or(&hint);
-                    let pkg = type_part.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
+                    let pkg = type_part
+                        .rsplit_once("::")
+                        .or_else(|| type_part.rsplit_once('.'))
+                        .map(|(p, _)| p)
+                        .unwrap_or("");
                     if !pkg.is_empty() && !project_packages.contains(pkg) {
                         // Outside the index either way — but a library and an unscanned
                         // module of this same project are different facts, and only one of
@@ -2192,6 +2199,25 @@ impl Store {
         )?)
     }
 
+    /// How much this project remembers: (facts, findings), each as `count*1000 + newest id`.
+    ///
+    /// A single number per table that moves on an insert, an invalidation or a status change,
+    /// so a context cache keyed on it cannot serve an answer from before the memory existed.
+    pub fn memory_counters(&self, project_id: ProjectId) -> Result<(i64, i64)> {
+        let facts: i64 = self.conn.query_row(
+            "SELECT COUNT(*) * 1000 + COALESCE(MAX(id), 0) FROM facts
+              WHERE project_id = ?1 AND superseded_by IS NULL AND invalidated_at IS NULL",
+            params![project_id],
+            |r| r.get(0),
+        )?;
+        let findings: i64 = self.conn.query_row(
+            "SELECT COUNT(*) * 1000 + COALESCE(MAX(id), 0) FROM findings WHERE project_id = ?1",
+            params![project_id],
+            |r| r.get(0),
+        )?;
+        Ok((facts, findings))
+    }
+
     // ── commits: the history ledger ──────────────────────────
 
     /// Record a commit. Append-only: an sha already present is left exactly as it is.
@@ -2807,11 +2833,21 @@ fn simple_key(fqn: &str) -> String {
         Some((t, m)) => (t, Some(m)),
         None => (fqn, None),
     };
-    let simple_type = type_part.rsplit('.').next().unwrap_or(type_part);
+    let simple_type = last_segment(type_part);
     match member {
         Some(m) => format!("{simple_type}#{}", m.split('(').next().unwrap_or(m)),
         None => simple_type.to_string(),
     }
+}
+
+/// The last name in a qualified path, whichever separator the language writes it with.
+///
+/// This split on `.` alone, which is a Java rule. A Rust hint `fill` never matched
+/// `nexus_core::context::fill`, so once Rust FQNs carried their crate the last-resort tier
+/// stopped firing entirely and resolved call edges on this repository fell from 551 to 104.
+fn last_segment(path: &str) -> &str {
+    let after_colons = path.rsplit("::").next().unwrap_or(path);
+    after_colons.rsplit('.').next().unwrap_or(after_colons)
 }
 
 /// `?2, ?3, ...` for an `IN` list. Bound parameters rather than interpolation: a path from a

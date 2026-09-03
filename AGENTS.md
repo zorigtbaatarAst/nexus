@@ -132,7 +132,26 @@ that is hard to attribute.
   counted and reported, because a silently discarded finding is indistinguishable from a
   model that found nothing.
 
+- **An imported claim is anchored on a symbol only when it names one exactly.** graphify's
+  semantic pass produces claims about the project, and `nexus memory import` records them as
+  facts. Subject resolution requires the matched symbol's own last segment to *be* the word:
+  `find_symbols` matches by suffix, which is right for a prompt someone typed and wrong for
+  English prose, where "integration" anchored a design claim on `NoContinuousIntegration`.
+  A claim that names nothing anchors on the document that states it.
+
 ## Traps
+
+- **The context budget is measured, never estimated.** `tokens_estimated` is the serialized
+  package; a candidate's cost is the serialized `ContextItem`, keys included. Every earlier
+  shortcut here under-reported by more than an order of magnitude — the package that claimed
+  253 tokens shipped 11,113 — because the estimate counted item text and the payload is
+  mostly everything else.
+
+- **The context cache key must include everything that changes an answer.** Intent, seeds,
+  commit, dirty hash, budget, weights, `explain`, the memory fingerprint, and the build
+  version. It has been wrong in three separate ways: a recorded fact was invisible until an
+  unrelated file moved, an `--explain` request was served a ledger-less hit, and a package
+  outlived the upgrade that changed how packages are built.
 
 - **Cache invalidation must include tool versions.** `scans.tool_versions_json` holds grammar
   and analyzer versions. Upgrade `tree-sitter-java` without bumping it and the content hashes

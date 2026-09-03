@@ -222,26 +222,12 @@ impl Engine {
         let considered = candidates.len();
         // The summary is not a candidate — it is what the package is *about*, and a package
         // that dropped it under budget pressure would describe findings in an unnamed project.
-        let spent = estimate_tokens(&project.name)
-            + project
-                .scope_warning
-                .as_deref()
-                .map(estimate_tokens)
-                .unwrap_or(0);
-        let (items, tokens_estimated) = context::fill(
-            candidates,
-            req.budget_tokens,
-            spent,
-            context::Selection::Ordered,
-            &mut ledger,
-        );
-
-        Ok(ContextPackage {
+        let mut package = ContextPackage {
             purpose: req.purpose,
             project,
-            items_included: items.len(),
-            items,
-            ledger,
+            items_included: 0,
+            items: Vec::new(),
+            ledger: InclusionLedger::default(),
             basis: PackageBasis {
                 scan_uid: baseline.scan_uid,
                 commit: status.current.commit.clone(),
@@ -250,11 +236,23 @@ impl Engine {
                     .into(),
             },
             budget_tokens: req.budget_tokens,
-            tokens_estimated,
+            tokens_estimated: 0,
             items_considered: considered,
             intent: None,
             notes: Vec::new(),
-        })
+        };
+        let (items, tokens_estimated) = context::fill(
+            candidates,
+            req.budget_tokens,
+            envelope_cost(&package),
+            context::Selection::Ordered,
+            &mut ledger,
+        );
+        package.items_included = items.len();
+        package.items = items;
+        package.ledger = ledger;
+        package.tokens_estimated = tokens_estimated;
+        Ok(finish(package, req))
     }
     /// Stage 2 of the context pipeline: what in the code this request is about.
     ///
@@ -335,6 +333,8 @@ impl Engine {
             dirty_hash: &dirty_hash,
             budget_tokens: req.budget_tokens,
             weights_hash: &w.hash(),
+            explain: req.explain,
+            memory: &self.memory_fingerprint()?,
         };
         if let Some(hit) = crate::context::cache::get(&cache_dir, &key) {
             return Ok(hit);
@@ -454,7 +454,12 @@ impl Engine {
             };
             let (score, terms) = crate::context::rank::score(
                 &crate::context::rank::Inputs {
-                    seed_proximity: 0.0,
+                    // A fact about the very symbol the request names is as close to the seed
+                    // as anything gets, and `to_seeds` already measured it. Passing zero here
+                    // threw away the strongest signal a fact has: six facts about
+                    // `SafeWriter` scored 0.10 against a 0.15 floor while `SafeWriter` itself
+                    // scored 1.36, so nothing the project had learned ever surfaced.
+                    seed_proximity: to_seeds,
                     graph_score: 0.0,
                     signals: &signals,
                     token_cost_norm: estimate_tokens(&text) as f64 / budget,
@@ -469,26 +474,22 @@ impl Engine {
                 text,
                 score,
                 terms,
-                component: String::new(),
+                // The subject is the component, so §7's diversity guard applies to knowledge
+                // too. Without it a well-documented symbol pushed its own symbols out of the
+                // package: importing 678 claims put six about `SafeWriter` in and left two of
+                // `SafeWriter`'s own methods out.
+                component: subject.clone(),
             });
         }
 
         // 6 — budget.
         let mut ledger = InclusionLedger::default();
         let considered = candidates.len();
-        let (items, tokens_estimated) = context::fill(
-            candidates,
-            req.budget_tokens,
-            0,
-            context::Selection::Ranked {
-                min_score_x1000: (w.min_score * 1000.0) as i64,
-                max_per_component: w.max_per_component,
-            },
-            &mut ledger,
-        );
 
-        // 7 — package.
-        let package = ContextPackage {
+        // 7 — package. Built empty first, so the budget is charged for the envelope it is
+        // about to be spent inside. The profile, the notes and the basis are not free, and a
+        // budget that only counts items is a budget that misses most of the payload.
+        let mut package = ContextPackage {
             purpose: req.purpose,
             project: ProjectSummary {
                 name: status.project.clone(),
@@ -497,9 +498,9 @@ impl Engine {
                 symbols: status.symbols,
                 scope_warning: None,
             },
-            items_included: items.len(),
-            items,
-            ledger,
+            items_included: 0,
+            items: Vec::new(),
+            ledger: InclusionLedger::default(),
             basis: PackageBasis {
                 scan_uid: baseline.scan_uid,
                 commit: status.current.commit.clone(),
@@ -508,13 +509,39 @@ impl Engine {
                     .into(),
             },
             budget_tokens: req.budget_tokens,
-            tokens_estimated,
+            tokens_estimated: 0,
             items_considered: considered,
             intent: Some(intent),
             notes,
         };
+        let (items, tokens_estimated) = context::fill(
+            candidates,
+            req.budget_tokens,
+            envelope_cost(&package),
+            context::Selection::Ranked {
+                min_score_x1000: (w.min_score * 1000.0) as i64,
+                max_per_component: w.max_per_component,
+            },
+            &mut ledger,
+        );
+        package.items_included = items.len();
+        package.items = items;
+        package.ledger = ledger;
+        package.tokens_estimated = tokens_estimated;
+        let package = finish(package, req);
         crate::context::cache::put(&cache_dir, &key, &package);
         Ok(package)
+    }
+
+    /// A fingerprint of what this project remembers, for the cache key.
+    ///
+    /// Counts, not contents: recording a fact or a finding must invalidate the cache, and a
+    /// count plus the newest row id changes whenever either does. Cheap enough to run on
+    /// every request, which is the point — the alternative is a cache that serves an answer
+    /// from before the thing it should have known.
+    fn memory_fingerprint(&self) -> Result<String> {
+        let (facts, findings) = self.store.memory_counters(self.project_id)?;
+        Ok(format!("{facts}:{findings}"))
     }
 
     /// A fingerprint of the uncommitted state, for the cache key.
@@ -1225,4 +1252,36 @@ fn profile_anchors(status: &StatusReport) -> Vec<String> {
         out.clear();
     }
     out
+}
+
+/// Drop the explanation unless it was asked for, then price what will actually be sent.
+///
+/// `tokens_estimated` used to count the text of the included items and nothing else, while
+/// the package on the wire carried the ledger, the score terms, the profile and the JSON
+/// itself. It reported 253 tokens and shipped 11,113 — a budget that measures a twentieth of
+/// the payload is not a budget. This measures the serialized form, which is what the agent
+/// pays for.
+/// What the package costs before a single item goes in it: the profile, the basis, the notes,
+/// the braces. Measured by serialising the empty shell, because guessing at it is how the
+/// number drifts away from what the agent is actually billed.
+fn envelope_cost(package: &ContextPackage) -> usize {
+    serde_json::to_string(package)
+        .map(|s| estimate_tokens(&s))
+        .unwrap_or(0)
+}
+
+fn finish(mut package: ContextPackage, req: &TaskRequest) -> ContextPackage {
+    if !req.explain {
+        package.ledger.rows.clear();
+        for item in &mut package.items {
+            item.terms = Default::default();
+        }
+    }
+    // Serialize once with the field zeroed, so the number does not have to predict its own
+    // width. An estimate, and the package says so by carrying the same estimator everywhere.
+    package.tokens_estimated = 0;
+    package.tokens_estimated = serde_json::to_string(&package)
+        .map(|s| estimate_tokens(&s))
+        .unwrap_or(0);
+    package
 }

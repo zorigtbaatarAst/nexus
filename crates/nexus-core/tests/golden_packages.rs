@@ -143,6 +143,8 @@ fn capture(e: &Engine, task: &str) -> Golden {
         symbols: Vec::new(),
         budget_tokens: 4000,
         purpose: Purpose::Task,
+        // A golden asserts every exclusion carries a reason, so it must ask for the reasons.
+        explain: true,
         carry_seeds: Vec::new(),
         recent: None,
     };

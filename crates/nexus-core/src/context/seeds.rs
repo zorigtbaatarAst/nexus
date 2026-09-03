@@ -64,12 +64,19 @@ pub struct SeedResult {
     pub notes: Vec<String>,
 }
 
-/// Candidate words from the prompt that could name a symbol: anything containing a dot, slash
-/// or hash (an FQN or a path), or starting with a capital (a type name by every convention the
-/// indexed languages use). Filtering here rather than querying every word keeps the stage at a
-/// handful of indexed lookups instead of one per token, which is what ADR-024's 150 ms budget
-/// for a per-prompt hook can afford.
-fn targets(text: &str) -> Vec<String> {
+/// Candidate words from the prompt that could name a symbol: anything containing a dot,
+/// slash, hash or `::` (an FQN or a path), an underscore (a `snake_case` identifier), or
+/// starting with a capital (a type name).
+///
+/// The capital rule alone was a Java rule wearing "every convention the indexed languages
+/// use". On a Rust or Python project it seeded nothing: `normalize_body`, `record_fact` and
+/// `fill` are all lowercase, so `nexus context --task "refactor normalize_body"` returned an
+/// empty package on the repository Nexus itself lives in.
+///
+/// Filtering here rather than querying every word keeps the stage at a handful of indexed
+/// lookups instead of one per token, which is what ADR-024's 150 ms budget for a per-prompt
+/// hook can afford.
+pub(crate) fn targets(text: &str) -> Vec<String> {
     let mut out: Vec<String> = text
         .split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '"' | '\'' | '(' | ')'))
         .map(|w| w.trim_end_matches(['.', '?', '!', ':']))
@@ -78,10 +85,23 @@ fn targets(text: &str) -> Vec<String> {
             w.contains('.')
                 || w.contains('/')
                 || w.contains('#')
+                || w.contains("::")
+                // An underscore inside a word is an identifier, not English prose. Leading
+                // and trailing ones are stripped first so `_private` and a markdown `_word_`
+                // do not both arrive as targets.
+                || w.trim_matches('_').contains('_')
                 || w.chars().next().is_some_and(char::is_uppercase)
         })
         .map(str::to_string)
         .collect();
+    // A member is stored as `Owner#name` in every language, because the platform needs one
+    // separator. A Rust or C++ developer writes `Engine::context`, so the last `::` is also
+    // offered as a `#` — otherwise the most natural way to name a method finds nothing.
+    let aliases: Vec<String> = out
+        .iter()
+        .filter_map(|w| w.rsplit_once("::").map(|(o, n)| format!("{o}#{n}")))
+        .collect();
+    out.extend(aliases);
     out.sort();
     out.dedup();
     out
