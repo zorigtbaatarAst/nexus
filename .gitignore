@@ -16,3 +16,9 @@
 .idea/
 .vscode/
 .DS_Store
+
+# graphify's knowledge graph — derived, 11 MB, and regenerable in one command.
+# docs/architecture/03-current-state.md already states the practice: the output is
+# not committed. Committing it would also freeze a snapshot that goes stale the
+# moment anyone edits a file, which is the failure mode Nexus itself exists to fix.
+graphify-out/
