@@ -478,7 +478,7 @@ git commit -m "fix(cli): one denominator, and it is called coverage"
 - Modify: `docs/data-model.md:236-244`
 - Modify: `commands/nexus-status.md:7`, `commands/nexus-scan.md:9`
 - Modify: `integrations/README.md:47`
-- Create: `docs/architecture/decisions/ADR-025-coverage-is-not-accuracy.md`
+- Create: `docs/architecture/decisions/ADR-026-coverage-is-not-accuracy.md`
 
 **Interfaces:**
 - Consumes: the behaviour shipped in Tasks 1–3.
@@ -542,12 +542,12 @@ clone at `46e2fff`, they reported 45 % and 48 % for the same database.
 
 Apply the same correction of "edges" to "call sites" at `commands/nexus-scan.md:9` and `integrations/README.md:47`.
 
-- [ ] **Step 5: Write ADR-025**
+- [ ] **Step 5: Write ADR-026**
 
-Create `docs/architecture/decisions/ADR-025-coverage-is-not-accuracy.md`, following the format of the existing files in that directory:
+Create `docs/architecture/decisions/ADR-026-coverage-is-not-accuracy.md`, following the format of the existing files in that directory:
 
 ```markdown
-# ADR-025 — Coverage is not accuracy, and the product only measures one of them
+# ADR-026 — Coverage is not accuracy, and the product measures only one of them
 
 ## Status
 Accepted — 2026-09-03

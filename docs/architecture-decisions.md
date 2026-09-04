@@ -116,10 +116,23 @@ Four tiers, with every edge recording which tier produced it and how confident i
 
 | Tier | Mechanism | `resolution` | Confidence |
 |---|---|---|---|
-| 0 | tree-sitter, same file | `exact` | 1.00 |
-| 1 | import table + FQN match across the index | `heuristic` | 0.70–0.95 |
-| 2 | framework pack (bean wiring, routes, ORM) | `framework` | 0.80–0.95 |
-| 3 | LSP sidecar — `jdtls`, `tsserver`, `pyright`, `rust-analyzer` (V2, optional) | `exact` | 1.00 |
+| exact FQN | import table + FQN match across the index | `exact` | 1.00 |
+| GraphQL join | both sides name one schema coordinate | `contract` | 0.95 |
+| unique prefix | `Owner#member`, exactly one candidate | `heuristic` | 0.90 |
+| overload fan-out | 2–4 candidates, one edge each | `heuristic` | 0.9 / n |
+| inherited member | reached through a declared supertype | `heuristic` | 0.85 |
+| unique simple name | last segment, unique across the project | `heuristic` | 0.70 |
+| bare member name | `x.foo()`, owner unknown to the analyzer | `heuristic` | 0.60 |
+| framework pack | bean wiring, route tables, ORM | `framework` | 0.80–0.95 |
+| outside the index | third-party library | `external` | n/a |
+| owned, unscanned | sibling module of the same monorepo | `sibling` | n/a |
+| imported claim | external knowledge graph | `external-graph` | ≤ 0.50 |
+| nothing matched | `dst_fqn_hint` retained for later | `unresolved` | 0.00 |
+| LSP sidecar | `jdtls`, `rust-analyzer` — designed, not built | `exact` | 1.00 |
+
+**None of these confidences has been measured.** They were chosen, and the tier that
+produces most of them is the newest. See
+[the resolution-accuracy harness spec](superpowers/specs/2026-09-03-resolution-accuracy-harness-design.md).
 
 ### Alternatives considered
 
@@ -836,6 +849,32 @@ declines entirely — inventing one would relabel every library as a sibling, un
 what is genuinely outside, which is worse than the original conflation. It also disappears
 on its own when the whole repository is scanned: **1** sibling edge, against 6,247 from
 inside a single module.
+
+### Revision — 2026-09-03: the unit was edges, and an edge is not a question
+
+The argument above is unchanged and correct: the denominator must exclude what was never in
+scope. What was wrong is the **unit**.
+
+The overload, GraphQL-coordinate and bare-member tiers each write one row per candidate for a
+single call site. Counting rows therefore meant the metric *rose* as the resolver grew less
+certain — four candidates for `x.save()` scored four times what one confident binding scored.
+Both numerator and denominator now count distinct call sites, keyed
+`(src_symbol_id, site_line, dst_fqn_hint)`. One site asks one question and has one right
+answer.
+
+This also removed a disagreement nobody had noticed. `scan` read `ResolveStats`, which
+already counted sites; `graph` read `edge_counts`, which counted rows. Measured on one clone
+at `46e2fff`, they reported **45 %** and **48 %** for the same database. Both now read
+`edge_counts`, and `nexus-cli/tests/metric_agreement.rs` fails if they ever diverge again.
+
+Measured effect on this repository: 4,603 rows became 4,387 sites, and the published figure
+moved from 48 % to 46 %. The difference is fan-out that was being counted three and four
+times.
+
+**And the figure is coverage, not accuracy.** It says how much of the graph exists, never how
+much of it is correct — nothing compares a bound destination against a ground truth. ADR-025
+records that split; the measurement is designed in
+[the resolution-accuracy harness spec](superpowers/specs/2026-09-03-resolution-accuracy-harness-design.md).
 
 ### Advantages
 The metric means something, so it can be used as a regression signal. Diagnosing resolution

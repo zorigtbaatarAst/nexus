@@ -84,10 +84,17 @@ It writes at `heuristic` 0.6 and includes a 2-to-4-candidate arm that inserts on
 candidate. It accounts for roughly 987 of this repository's heuristic edges — the difference
 between the pre- and post-`f07e2b1` breakdowns.
 
-So the 48 % now published in both READMEs is **majority-produced by a tier introduced
-yesterday, at a confidence nobody has validated, using the fan-out mechanism §1.2 shows
-inflates the metric.** That is the single strongest argument for building this harness before
-building anything else on top of the graph.
+So the figure published in both READMEs is **majority-produced by a tier introduced yesterday,
+at a confidence nobody has validated, using the fan-out mechanism §1.2 shows inflates the
+metric.** That is the single strongest argument for building this harness before building
+anything else on top of the graph.
+
+**And "23 % → 48 %" mixes units, so it must not be quoted as an improvement.** Both ends were
+row-counted; under the call-site unit of §6.2 the post-`f07e2b1` figure is **46 %**. The
+pre-`f07e2b1` baseline has never been measured in call sites at all, so the size of the gain
+is currently unknown — the tier plainly helped, but by how much is not a number anyone holds.
+Measuring both ends in one unit is the first thing the harness should be pointed at, and until
+then the honest statement is "23 % row-counted, 46 % site-counted, not comparable".
 
 ### 1.5 The repository already contradicts itself
 

@@ -204,7 +204,7 @@ root — `nexus-cli::main` or `nexus-mcp::serve`. The `ai` argument is
 | `detect` | language / framework / build system / package manager / DB / container detection |
 | `walk` | ignore-aware filesystem traversal, parallel `blake3` hashing |
 | `index` | file + symbol upsert, soft-delete, rename carry-over |
-| `resolve` | edge resolution: exact → framework → heuristic → unresolved |
+| `resolve` | edge resolution: exact → contract → framework → heuristic → sibling → external → unresolved |
 | `diff` | the tiered change-detection cascade |
 | `impact` | weighted bidirectional BFS + test selection |
 | `capability` | the `Capability` trait, `Scope`, and the registry |
@@ -248,13 +248,25 @@ DI reasoning recurs in NestJS and in Python DI containers.
 
 Resolution runs in tiers and every edge records which tier produced it:
 
-| Tier | Mechanism | `symbol_edges.resolution` | Typical confidence |
+| Tier | Mechanism | `symbol_edges.resolution` | Confidence |
 |---|---|---|---|
-| 0 | tree-sitter syntax, same file | `exact` | 1.00 |
-| 1 | import table + FQN match across the index | `heuristic` | 0.70–0.95 |
-| 2 | framework pack (Spring bean wiring, route tables, ORM) | `framework` | 0.80–0.95 |
-| 3 | optional LSP sidecar (`jdtls`, `tsserver`, `pyright`, `rust-analyzer`) — V2 | `exact` | 1.00 |
-| — | nothing matched; `dst_fqn_hint` retained for later | `unresolved` | 0.00 |
+| exact FQN | import table + FQN match across the index | `exact` | 1.00 |
+| GraphQL join | both sides name one schema coordinate | `contract` | 0.95 |
+| unique prefix | `Owner#member`, exactly one candidate | `heuristic` | 0.90 |
+| overload fan-out | 2–4 candidates, one edge each | `heuristic` | 0.9 / n |
+| inherited member | reached through a declared supertype | `heuristic` | 0.85 |
+| unique simple name | last segment, unique across the project | `heuristic` | 0.70 |
+| bare member name | `x.foo()`, owner unknown to the analyzer | `heuristic` | 0.60 |
+| framework pack | bean wiring, route tables, ORM | `framework` | 0.80–0.95 |
+| outside the index | third-party library | `external` | n/a |
+| owned, unscanned | sibling module of the same monorepo | `sibling` | n/a |
+| imported claim | external knowledge graph | `external-graph` | ≤ 0.50 |
+| nothing matched | `dst_fqn_hint` retained for later | `unresolved` | 0.00 |
+| LSP sidecar | `jdtls`, `rust-analyzer` — designed, not built | `exact` | 1.00 |
+
+**None of these confidences has been measured.** They were chosen, and the tier that
+produces most of them is the newest. See
+[the resolution-accuracy harness spec](superpowers/specs/2026-09-03-resolution-accuracy-harness-design.md).
 
 Tier 3 is optional by design: it is expensive and needs a full project import, so BugHunter
 must be fully useful without it. See
