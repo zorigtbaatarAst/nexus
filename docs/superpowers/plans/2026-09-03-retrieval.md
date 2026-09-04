@@ -1575,9 +1575,11 @@ Under `## Traps`, above the cache-key entry:
 
 ```markdown
 - **Memory is queried by subject, never scanned.** `Store::facts(project_id, None)` loads
-  every live fact; only `memory_export` may, because its job is everything. Every request
-  path calls `facts_for_seeds` or `durable_facts`. The unscoped form cost 274 ms at 200,000
-  facts on a path ADR-024 budgets 150 ms for, and memory is append-only by design.
+  every live fact. Four callers may: `fact_states`, `memory_export`, `export_portable`, and
+  the portable importer — all batch commands whose job genuinely is everything. **No request
+  path may.** `task_package` calls `facts_for_seeds`, `session_package` calls
+  `durable_facts`. The unscoped form cost 274 ms at 200,000 facts on a path ADR-024 budgets
+  150 ms for, and memory is append-only by design, so that number only grows.
 ```
 
 - [ ] **Step 3: Correct the seed rule in the spec of record**
