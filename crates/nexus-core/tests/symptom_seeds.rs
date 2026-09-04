@@ -124,3 +124,36 @@ fn a_short_word_seeds_nothing() {
         "three-letter words are not evidence, however many symbols they match: {files:?}"
     );
 }
+
+/// A fixture built for one collision: `resolved` the function, three lines under `Resolved`
+/// the enum. `find_symbols` matches case-insensitively, so a word that counts arity before
+/// filtering by exact `last_segment` sees two hits for `resolved` and refuses both — even
+/// though only one of them actually spells it that way.
+fn scanned_case_variant() -> (PathBuf, Engine) {
+    let root = std::env::temp_dir().join(format!("nexus-symptom-case-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let p = root.join("src/lib.rs");
+    fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+    fs::write(
+        &p,
+        "pub enum Resolved { Yes, No }\npub fn resolved() -> Resolved { Resolved::Yes }\n",
+    )
+    .expect("write");
+    git(&root, &["init", "-q", "-b", "main"]);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "x"]);
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
+    engine.scan().expect("scan");
+    (root, engine)
+}
+
+#[test]
+fn a_case_variant_elsewhere_does_not_hide_a_real_unique_match() {
+    let (_root, engine) = scanned_case_variant();
+    let files = files_in(&engine, "the request is resolved before the retry finishes");
+    assert!(
+        files.iter().any(|f| f.contains("src/lib.rs")),
+        "`resolved` uniquely names the function even though `Resolved` also matches it \
+         case-insensitively: {files:?}"
+    );
+}

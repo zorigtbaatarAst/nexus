@@ -117,7 +117,7 @@ pub(crate) fn targets(text: &str) -> Vec<String> {
                 // do not both arrive as targets.
                 || w.trim_matches('_').contains('_')
                 || w.chars().next().is_some_and(char::is_uppercase)
-                || is_plain_candidate(w)
+                || is_plain_word(w)
         })
         .map(str::to_string)
         .collect();
@@ -134,10 +134,26 @@ pub(crate) fn targets(text: &str) -> Vec<String> {
     out
 }
 
-/// A lowercase word worth one indexed lookup: long enough to be distinctive, and not a word
-/// every sentence about a defect contains.
-fn is_plain_candidate(w: &str) -> bool {
-    w.len() >= 4 && !STOPWORDS.contains(&w.to_ascii_lowercase().as_str())
+/// A word with no shape a caller already qualified: no dot, slash, hash or `::` (an FQN or a
+/// path), no interior underscore (a `snake_case` identifier), no leading capital (a type
+/// name) — and, since none of those give it away, it only earns a lookup if it is long enough
+/// to be distinctive and is not a word every sentence about a defect contains.
+///
+/// One definition, called from both `targets` (is this word worth an indexed lookup at all?)
+/// and `resolve` (does this target need to prove uniqueness before it can seed?). The two
+/// questions must agree on what "plain" means, or they drift the way `subject_match` and
+/// `subject_prefixes` drifted on the module-boundary rule before `is_anchored_prefix` unified
+/// them — and a function that only answered *half* the question under a name that promised
+/// the whole thing is exactly how that kind of drift starts unnoticed.
+fn is_plain_word(w: &str) -> bool {
+    !w.contains('.')
+        && !w.contains('/')
+        && !w.contains('#')
+        && !w.contains("::")
+        && !w.trim_matches('_').contains('_')
+        && !w.chars().next().is_some_and(char::is_uppercase)
+        && w.len() >= 4
+        && !STOPWORDS.contains(&w.to_ascii_lowercase().as_str())
 }
 
 /// The last name in a qualified path, whichever separator wrote it.
@@ -162,15 +178,21 @@ pub(crate) fn uniquely_named_symbol(
     project_id: i64,
     word: &str,
 ) -> Result<Option<SymbolRef>, StoreError> {
-    let hits = store.find_symbols(project_id, word, 2)?;
-    let [only] = hits.as_slice() else {
+    let hits = store.find_symbols(project_id, word, 8)?;
+    // Filter before counting, not after. `find_symbols` matches through SQL `LIKE`, which
+    // SQLite treats case-insensitively for ASCII by default, so a word like "resolved" comes
+    // back with both `ResolveStats#resolved` and `report::Resolved` — two hits, neither of
+    // them wrong to return. Counting arity first would see 2 and refuse both, discarding the
+    // one piece of information, exact-case `last_segment`, that actually tells them apart. A
+    // real, unique match must not be hidden behind a mere case-variant elsewhere in the index.
+    let matches: Vec<&SymbolRef> = hits
+        .iter()
+        .filter(|s| last_segment(&s.fqn) == word)
+        .collect();
+    let [only] = matches.as_slice() else {
         return Ok(None);
     };
-    if last_segment(&only.fqn) == word {
-        Ok(Some(only.clone()))
-    } else {
-        Ok(None)
-    }
+    Ok(Some((*only).clone()))
 }
 
 /// Resolve the request to seeds. Sources run in priority order and a symbol keeps the best
@@ -240,12 +262,10 @@ pub fn resolve(
         // A plain lowercase word is weaker evidence than a name someone qualified, so it is
         // accepted only when it identifies one symbol outright. Without that rule the word
         // "integration" reaches `NoContinuousIntegration`, and a symptom seeds the wrong file
-        // with confidence.
-        let plain = !exact_shape
-            && !target.contains("::")
-            && !target.trim_matches('_').contains('_')
-            && !target.chars().next().is_some_and(char::is_uppercase);
-        if plain {
+        // with confidence. `is_plain_word` is the same predicate `targets` used to let this
+        // word through in the first place — re-deriving "what counts as plain" here would be
+        // a second copy of that rule, and the two would drift the moment either one changed.
+        if is_plain_word(&target) {
             if let Some(s) = uniquely_named_symbol(store, project_id, &target)? {
                 offer(
                     &mut found,
