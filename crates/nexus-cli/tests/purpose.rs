@@ -136,3 +136,29 @@ fn an_unrecognised_purpose_is_a_usage_error_not_a_silent_fallback() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn review_is_declarable_too_and_it_changes_what_is_seeded() {
+    // `Purpose::Review` is not new. `seeds.rs` read it before this change and
+    // `memory_scale.rs` constructs it, so it was the one purpose already doing this job —
+    // for one purpose, in one place. The ticket asked for it to be deleted on the premise
+    // that nothing constructed it; that premise was wrong, and the rule it embodied is now
+    // stated once for every purpose instead of twice for one.
+    //
+    // Declared review seeds from the changed set rather than the prompt's words, so the
+    // interesting assertion is that a prompt naming nothing still classifies review.
+    let root = project("review");
+    let declared = context(
+        &root,
+        &[
+            "--task",
+            "have a look at this",
+            "--purpose",
+            "review",
+            "--json",
+        ],
+    );
+    assert_eq!(intent_of(&declared), "review");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
