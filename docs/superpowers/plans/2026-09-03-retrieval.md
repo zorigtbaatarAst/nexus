@@ -1587,6 +1587,130 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
+## Task 9: The cache key that scans what it is trying to avoid
+
+**Added after Task 8.** `Store::memory_counters` runs `COUNT(*)` over every live fact and every
+finding, on **every** `--task` request, because the context cache key must change when memory
+changes. It already uses the best index available, so this is a design problem rather than a
+planning one: the query that decides whether the cache is valid costs what the cache exists to
+save. It is now the dominant remaining term — 200,000 facts sit at 1.4× baseline and the
+`#[ignore]`d scaling gate lands at 3.0–3.6× against its own `< 3.0` assertion.
+
+**Files:**
+- Create: `crates/nexus-store/migrations/0008_memory_version.sql`
+- Modify: `crates/nexus-store/src/lib.rs` — `memory_counters`, and every statement that writes a fact or a finding
+- Test: `crates/nexus-store/src/lib.rs`'s `mod tests`
+
+- [ ] **Step 1: A version column, bumped on write**
+
+```sql
+-- Every fact or finding write bumps this. The context cache key reads it to decide whether
+-- what the project remembers has changed since the package it cached.
+--
+-- It replaces `COUNT(*) + MAX(id)` over every live fact, which ran on every request: the
+-- query deciding whether the cache was still valid cost what the cache existed to save.
+ALTER TABLE projects ADD COLUMN memory_version INTEGER NOT NULL DEFAULT 0;
+```
+
+Bump `SCHEMA_VERSION` to 8. **This adds a column, not a table** — `all_twenty_one_tables_exist`
+must still pass unchanged; if it fails you have added a table.
+
+- [ ] **Step 2: Bump it wherever memory changes**
+
+Find every statement that inserts or updates a row in `facts` or `findings` — at the time of
+writing there are four on `facts` (the insert in `record_fact`, its supersede `UPDATE`, the
+promotion in `validate_facts`, and the invalidation) plus the finding writes. **Grep for them
+rather than trusting that list**; a missed one is a cache that goes stale silently, which is
+the exact defect this plan already fixed once.
+
+After each, in the same transaction:
+
+```sql
+UPDATE projects SET memory_version = memory_version + 1 WHERE id = ?1
+```
+
+Consider a small private helper so each call site is one line and none can drift.
+
+- [ ] **Step 3: Read it in O(1)**
+
+```rust
+    /// What this project remembers, as one number that changes whenever memory does.
+    ///
+    /// Was `COUNT(*) * 1000 + MAX(id)` over every live fact and every finding, on every
+    /// request — the cache-validity check cost what the cache existed to save. A counter
+    /// bumped by the writers is a single indexed row read instead.
+    pub fn memory_version(&self, project_id: ProjectId) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT memory_version FROM projects WHERE id = ?1",
+                params![project_id],
+                |r| r.get(0),
+            )?)
+    }
+```
+
+Replace `memory_counters` with it and update the one caller in
+`crates/nexus-core/src/engine/query.rs` (`memory_fingerprint`). Delete `memory_counters`; two
+ways to ask the same question is what this plan spent three fix rounds on in Task 1.
+
+- [ ] **Step 4: Test that it actually invalidates**
+
+```rust
+    #[test]
+    fn memory_version_moves_on_every_kind_of_memory_write() {
+        let mut s = Store::open_in_memory().expect("open");
+        let (pid, scan) = seeded_project(&mut s);
+        let v0 = s.memory_version(pid).expect("v0");
+
+        s.record_fact(pid, scan, &NewFact {
+            key: "arch.a".into(), scope: "symbol".into(),
+            subject: Some("a::B".into()), claim: "x".into(), source: "human".into(),
+            evidence_json: None, confidence: 1.0,
+        }).expect("record");
+        let v1 = s.memory_version(pid).expect("v1");
+        assert!(v1 > v0, "recording a fact must move the version: {v0} -> {v1}");
+
+        s.record_fact(pid, scan, &NewFact {
+            key: "arch.a".into(), scope: "symbol".into(),
+            subject: Some("a::B".into()), claim: "y".into(), source: "human".into(),
+            evidence_json: None, confidence: 1.0,
+        }).expect("supersede");
+        assert!(s.memory_version(pid).expect("v2") > v1, "superseding one must move it too");
+    }
+```
+
+- [ ] **Step 5: Re-measure, then commit**
+
+Re-run the 0 / 10,000 / 200,000 timing and the `#[ignore]`d gate:
+
+```
+cargo test -p nexus-core --test memory_scale -- --ignored --nocapture
+```
+
+**Report all numbers whatever they are.** If the gate still exceeds its `< 3.0` assertion,
+report the residual and where it is — do not change the threshold; that is my call, not yours.
+
+```bash
+make check
+git add crates/nexus-store/migrations/0008_memory_version.sql crates/nexus-store/src/lib.rs crates/nexus-core/src/engine/query.rs
+git commit -m "perf(store): the cache key stops scanning what the cache exists to avoid
+
+memory_counters ran COUNT(*) over every live fact and every finding on every
+--task request, because the context cache key must change when memory changes.
+It used the right index; the query itself was the problem. After Task 8 removed
+the other unscoped loads it became the dominant term.
+
+A counter on projects, bumped by every fact and finding write, answers the same
+question in one indexed row read.
+
+Measured 0 / 10,000 / 200,000 facts: <fill in from Step 5>.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ## Task 7: Record what changed, and measure that it worked
 
 **Files:**
