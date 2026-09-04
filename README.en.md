@@ -8,7 +8,7 @@
 
 [![CI](https://github.com/zorigtbaatarAst/nexus/actions/workflows/ci.yml/badge.svg)](https://github.com/zorigtbaatarAst/nexus/actions/workflows/ci.yml)
 [![Rust 1.82+](https://img.shields.io/badge/rust-1.82%2B-b7410e?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-412%20passing-2ea043)](#nexus-on-itself)
+[![Tests](https://img.shields.io/badge/tests-478%20passing-2ea043)](#nexus-on-itself)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-20%20tools-6f42c1)](docs/mcp-api.md)
 
@@ -253,19 +253,25 @@ One line in a Java method puts **six React components** at risk, each shown with
 that reaches it. Measured on a Java monorepo: 880 files, 5,665 symbols, **96%** of
 in-project dependencies resolved, 641 ms. The rate is language-dependent — Java call sites
 carry a qualified hint, Rust and JavaScript ones carry a bare method name, and this
-repository resolves 46% (1,659 of 3,632 call sites, at `2a86560`).
+repository resolves 45% (1,778 of 3,925 call sites, at `26b121d`).
 
-That figure is *coverage* — the share of call sites that found a destination — not accuracy.
-Nothing yet checks whether a destination is the right one. It counts call sites rather than
-edges because the ambiguous tiers write one edge per candidate, which made the number rise as
-the resolver grew less certain.
+That figure is *coverage* — the share of call sites that found a destination. It counts call
+sites rather than edges because the ambiguous tiers write one edge per candidate, which made
+the number rise as the resolver grew less certain.
+
+Coverage is not accuracy, and the two are now measured separately. Against a
+`rust-analyzer` SCIP oracle — a real compiler frontend, matched by position and never by
+name — the destinations are right **72.3%** of the time per edge ([0.700–0.745], 1,528 edges
+judged), and **71.5%** of call sites resolve to exactly one candidate and that candidate is
+correct. Rust only, this repository only, 1,368 of 4,232 sites comparable: `make eval` and
+[`docs/eval/`](docs/eval/README.md) carry the method and the caveats.
 
 ### 3 · Nexus indexes itself
 
 The most honest test of a tool is running it on itself:
 
 ```
-266 files · 1,905 symbols · 4,458 dependencies
+289 files · 2,074 symbols · 4,879 dependencies
 ```
 
 That number used to be **0 symbols, 0 dependencies**. Nexus could describe every project
@@ -295,7 +301,7 @@ except the one it is. The Rust analyzer closed that gap.
 
 ## Built with
 
-**Rust · one static binary · SQLite · tree-sitter · git2.** 18 crates, ~33,000 lines, 412
+**Rust · one static binary · SQLite · tree-sitter · git2.** 19 crates, ~37,000 lines, 478
 tests.
 
 Java · TypeScript · **JavaScript** · GraphQL · **Rust** · **Python** — six, working. Each sits behind the
@@ -319,7 +325,8 @@ violation.
 ### Nexus on itself
 
 ```bash
-make check        # what CI runs: fmt · clippy (warnings are errors) · 412 tests
+make check        # what CI runs: fmt · clippy (warnings are errors) · 478 tests
+make eval         # is a resolved edge the *right* edge — against a SCIP oracle
 make fixtures     # the benchmark corpus — from a spec, same sha every time
 /nexus-architect  # derive the current state from the code, plan the next task
 ```
@@ -335,7 +342,7 @@ traps that cost real debugging time are all there.
 |---|---|
 | [AGENTS.md](AGENTS.md) | **read this first** — the briefing for agents |
 | [docs/architecture/](docs/architecture/README.md) | 15 documents: vision, Context Engine, memory, verification, evaluation, phases 0–5 |
-| [architecture.md](docs/architecture.md) · [architecture-decisions.md](docs/architecture-decisions.md) | layers, crates, boundaries · 25 ADRs |
+| [architecture.md](docs/architecture.md) · [architecture-decisions.md](docs/architecture-decisions.md) | layers, crates, boundaries · 26 ADRs |
 | [data-model.md](docs/data-model.md) · [change-analysis.md](docs/change-analysis.md) | SQLite schema · change, impact, fingerprints |
 | [memory-model.md](docs/memory-model.md) · [investigation.md](docs/investigation.md) | fact lifecycle · screenshot to suspect |
 | [capabilities.md](docs/capabilities.md) · [mcp-api.md](docs/mcp-api.md) | the capability contract · MCP tools and permissions |

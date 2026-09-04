@@ -60,7 +60,7 @@ which.
 - **One repository, one language.** Java resolves at 96 % coverage here and was not measured
   at all; `scip-java` needs a full project compile, which `make eval LANG_KIND=java` supports
   and nothing has yet run.
-- **Coverage is not accuracy.** The 46 % figure quoted for Rust elsewhere is the share of
+- **Coverage is not accuracy.** The 45 % figure quoted for Rust elsewhere is the share of
   call sites that resolved to *something*. This page is about whether that something was
   right, over the 1,368 sites where both tools had an opinion.
 - **32 % of sites are outside the comparable set**, mostly edge types no compiler frontend
