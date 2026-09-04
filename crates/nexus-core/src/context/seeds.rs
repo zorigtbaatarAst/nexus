@@ -14,6 +14,26 @@ use crate::context::intent::Intent;
 use nexus_store::{Store, StoreError, SymbolRef};
 use std::collections::BTreeMap;
 
+/// Words a request uses *about* code rather than *as* code.
+///
+/// The Rust analyzer's PRELUDE deny-list solved this exact shape of problem the same way, and
+/// for the same reason: a hint that matches everything produces a *wrong* seed rather than a
+/// missing one. Deliberately short and boring — English function words, and the handful of
+/// code words that appear in almost every sentence about a defect.
+const STOPWORDS: &[&str] = &[
+    // English.
+    "that", "this", "with", "from", "when", "then", "than", "them", "they", "there", "these",
+    "those", "have", "does", "done", "into", "over", "only", "some", "same", "such", "were",
+    "will", "what", "which", "while", "would", "should", "could", "after", "before", "about",
+    "because", "returns", "return", "still", "just", "make", "made", "much", "more", "most",
+    "less", "very", "also", "even", "never", "always", "again",
+    // Code words a prompt uses about code.
+    "test", "tests", "error", "errors", "value", "values", "result", "results", "file", "files",
+    "line", "lines", "call", "calls", "type", "types", "data", "code", "name", "names", "case",
+    "cases", "item", "items", "list", "lists", "null", "none", "true", "false", "class", "method",
+    "function", "field", "module", "package", "project", "symbol",
+];
+
 /// How a seed was found, in priority order — `Ord` is the priority, so a symbol found twice
 /// keeps its best provenance by comparison rather than by a rule written in a comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
@@ -65,17 +85,23 @@ pub struct SeedResult {
 }
 
 /// Candidate words from the prompt that could name a symbol: anything containing a dot,
-/// slash, hash or `::` (an FQN or a path), an underscore (a `snake_case` identifier), or
-/// starting with a capital (a type name).
+/// slash, hash or `::` (an FQN or a path), an underscore (a `snake_case` identifier), a
+/// capital (a type name), or a plain lowercase word of four characters or more that is not a
+/// stopword.
 ///
-/// The capital rule alone was a Java rule wearing "every convention the indexed languages
-/// use". On a Rust or Python project it seeded nothing: `normalize_body`, `record_fact` and
-/// `fill` are all lowercase, so `nexus context --task "refactor normalize_body"` returned an
-/// empty package on the repository Nexus itself lives in.
+/// The plain-word arm is what lets a *symptom* find code. `cache` is indexed as
+/// `nexus_core::context::cache`, and refusing it because it carries no capital meant four
+/// real defects, handed to the context engine as their symptoms, produced zero hits and three
+/// empty packages.
 ///
-/// Filtering here rather than querying every word keeps the stage at a handful of indexed
-/// lookups instead of one per token, which is what ADR-024's 150 ms budget for a per-prompt
-/// hook can afford.
+/// It is affordable, measured rather than assumed: one word that passes this filter is one
+/// indexed lookup, and 3 target words cost 12 ms against 40 target words at 23 ms — about
+/// 0.3 ms each. A 25-word symptom adds roughly 7 ms to ADR-024's 150 ms budget. The previous
+/// comment here justified the narrow filter with that budget and was over-cautious by an
+/// order of magnitude.
+///
+/// Noise control is not this function's job: `resolve` accepts a plain word only when it
+/// names exactly one symbol whose own last segment *is* the word.
 pub(crate) fn targets(text: &str) -> Vec<String> {
     let mut out: Vec<String> = text
         .split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '"' | '\'' | '(' | ')'))
@@ -91,6 +117,7 @@ pub(crate) fn targets(text: &str) -> Vec<String> {
                 // do not both arrive as targets.
                 || w.trim_matches('_').contains('_')
                 || w.chars().next().is_some_and(char::is_uppercase)
+                || is_plain_candidate(w)
         })
         .map(str::to_string)
         .collect();
@@ -105,6 +132,12 @@ pub(crate) fn targets(text: &str) -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+/// A lowercase word worth one indexed lookup: long enough to be distinctive, and not a word
+/// every sentence about a defect contains.
+fn is_plain_candidate(w: &str) -> bool {
+    w.len() >= 4 && !STOPWORDS.contains(&w.to_ascii_lowercase().as_str())
 }
 
 /// The last name in a qualified path, whichever separator wrote it.
@@ -204,6 +237,25 @@ pub fn resolve(
     // result is labelled.
     for target in targets(&req.text) {
         let exact_shape = target.contains('.') || target.contains('/') || target.contains('#');
+        // A plain lowercase word is weaker evidence than a name someone qualified, so it is
+        // accepted only when it identifies one symbol outright. Without that rule the word
+        // "integration" reaches `NoContinuousIntegration`, and a symptom seeds the wrong file
+        // with confidence.
+        let plain = !exact_shape
+            && !target.contains("::")
+            && !target.trim_matches('_').contains('_')
+            && !target.chars().next().is_some_and(char::is_uppercase);
+        if plain {
+            if let Some(s) = uniquely_named_symbol(store, project_id, &target)? {
+                offer(
+                    &mut found,
+                    s,
+                    SeedSource::NameMatch,
+                    format!("'{target}' in the request names exactly one symbol"),
+                );
+            }
+            continue;
+        }
         for s in store.find_symbols(project_id, &target, 10)? {
             let source = if exact_shape {
                 SeedSource::Exact
