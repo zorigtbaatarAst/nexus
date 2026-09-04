@@ -16,6 +16,7 @@ help:
 	@echo "demo     scan a repository and prove the incremental cascade (REPO=path)"
 	@echo "fixtures         build the benchmark corpus -> target/fixtures"
 	@echo "fixtures-verify  prove the corpus is reproducible (CI gate)"
+	@echo "eval             measure resolution accuracy against a SCIP oracle (needs an indexer)"
 
 build:
 	cargo build
@@ -74,6 +75,13 @@ demo: release
 	  echo && echo "--- rescan after reformatting every Java file ---" && \
 	  find . -name '*.java' -exec sed -i 's/^\(\s*\)/\1\1/' {} + && \
 	  $(CURDIR)/$(BIN) rescan && rm -rf $$tmp
+
+# Measure resolution accuracy against a SCIP oracle. Needs an external indexer, so it is
+# never part of `make check`:  make eval [REPO=/path] [LANG_KIND=rust|java]
+eval:
+	@cargo build --release --bin nexus --bin nexus-eval
+	@PATH="$(CURDIR)/target/release:$$PATH" ./scripts/eval.sh $(REPO)
+.PHONY: eval
 
 # What CI runs: index a real repository, then assert a no-op rescan reports nothing.
 smoke: release
