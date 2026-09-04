@@ -839,6 +839,7 @@ version = "0.3.0"
 dependencies = [
  "blake3",
  "ignore",
+ "nexus-fixtures",
  "nexus-lang",
  "nexus-lang-pack",
  "nexus-store",

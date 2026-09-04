@@ -32,7 +32,7 @@ once.
 |---|---|---|---|
 | `architect` | `ARC` | the first scan | what the project is built from and what working in it lacks |
 | `review` | `REV` | after an edit | what a change reaches and what covers it |
-| `bughunter` | `BUG` | a suspected defect | Spring proxy mistakes, orphan GraphQL fields, committed credentials |
+| `bughunter` | `BUG` | a suspected defect | Spring proxy mistakes, orphan GraphQL fields |
 
 Architect returns nothing under a narrowed scope — "this project has no CI" is not a statement
 about three edited files. Review returns nothing when nothing changed. Neither is a special

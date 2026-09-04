@@ -1,6 +1,6 @@
 ---
 name: nexus
-description: "Use when working in a codebase Nexus has indexed (a .nexus/ directory exists), at three moments: starting in an unfamiliar project, to learn what it is built from and what tooling working in it needs; after finishing an edit and before saying it is done, to see what the change reaches and whether anything tests it; and when a bug is suspected. It answers what changed since the last scan, what a change touches across the frontend/backend seam, what is already known about a file or symbol, and which Spring proxy mistakes, orphaned GraphQL fields or committed credentials exist. NOT for writing code, running tests, general Java/TypeScript questions, or opinions about style."
+description: "Use when working in a codebase Nexus has indexed (a .nexus/ directory exists), at three moments: starting in an unfamiliar project, to learn what it is built from and what tooling working in it needs; after finishing an edit and before saying it is done, to see what the change reaches and whether anything tests it; and when a bug is suspected. It answers what changed since the last scan, what a change touches across the frontend/backend seam, what is already known about a file or symbol, and which Spring proxy mistakes or orphaned GraphQL fields exist. NOT for writing code, running tests, general Java/TypeScript questions, or opinions about style."
 metadata:
   version: "0.3.0"
   user-invocable: "true"
@@ -50,7 +50,7 @@ code nobody touched, and a signature whose callers did not move with it — none
 diff shows, because none of them are in the files you edited.
 
 **BugHunter** is for a suspected defect, not for a routine check. Its rules are deterministic:
-Spring proxy mistakes, GraphQL fields no resolver serves, credentials in source.
+Spring proxy mistakes, and GraphQL fields no resolver serves.
 
 ## A normal sequence
 

@@ -313,7 +313,7 @@ impl Engine {
             .iter()
             .any(|s| s.source != crate::context::SeedSource::Carried);
         let intent = match declared {
-            Some(_) => provisional.clone(),
+            Some(_) => provisional,
             None => crate::context::intent::classify_turn(
                 &for_intent,
                 anchored,

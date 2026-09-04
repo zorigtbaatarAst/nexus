@@ -1,7 +1,7 @@
 {
   "name": "nexus",
   "version": "0.3.0",
-  "description": "Persistent code intelligence with three capabilities over one index. Architect says what a project is built from and what working in it lacks; Review says what a change reaches and whether anything tests it; BugHunter finds Spring proxy mistakes, GraphQL fields no resolver serves, and credentials in source. Nexus indexes a project once and remembers its structure, its history and what has gone wrong in it \u2014 then answers what changed, what that touches across the frontend/backend seam, and what is already known about the code you are about to edit.",
+  "description": "Persistent code intelligence with three capabilities over one index. Architect says what a project is built from and what working in it lacks; Review says what a change reaches and whether anything tests it; BugHunter finds Spring proxy mistakes and GraphQL fields no resolver serves. Nexus indexes a project once and remembers its structure, its history and what has gone wrong in it — then answers what changed, what that touches across the frontend/backend seam, and what is already known about the code you are about to edit.",
   "author": {
     "name": "Zorigtbaatar"
   },

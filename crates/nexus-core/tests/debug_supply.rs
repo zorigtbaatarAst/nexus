@@ -77,8 +77,8 @@ struct BugSupply {
     planted_at: String,
     bug: String,
     request: String,
-    /// `fix-diff` where the corpus records a fixing commit, `anchor` where it does not.
-    ground_truth: &'static str,
+    /// `fix-commit` where the corpus records a fixing commit, `anchor` where it does not.
+    ground_truth: String,
     /// The files ground truth asks for, sorted.
     wanted: Vec<String>,
     /// Those the package actually anchored on, with the rank at which each appeared.
@@ -102,20 +102,62 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).to_string()
 }
 
-/// The files a fix has to touch, or — where the corpus never fixed it — the file the anchor
-/// names.
+/// The files a fix has to touch, named as they are called *at the moment the bug exists*.
+///
+/// Three corrections live in this function, and the first version of it had none of them.
+///
+/// It asked `git diff <plant>..<fixed>`, which is the cumulative diff over every commit
+/// between the two. `spring-payments` renames the whole `mn.pay` package to `mn.payments` in
+/// between, so that range named fourteen files, eleven of which do not exist at the commit
+/// the harness checks out. A denominator full of paths no package could ever contain is not
+/// a measurement.
+///
+/// So: the *fixing commit's own* files, then translated back through renames to the names
+/// they had at the planting commit, then filtered to those that actually existed then. What
+/// is left is what an agent would have to open, called what it is called when the bug is
+/// reported.
 fn ground_truth(
     repo: &Path,
     planted_sha: &str,
     fixed_sha: Option<&str>,
     anchor: Option<&str>,
-) -> (&'static str, Vec<String>) {
+) -> (String, Vec<String>) {
     match fixed_sha {
         Some(fixed) => {
-            let out = git(repo, &["diff", "--name-only", planted_sha, fixed]);
-            let mut files: Vec<String> = out.lines().map(str::to_string).collect();
+            let touched = git(repo, &["show", "--name-only", "--format=", fixed]);
+
+            // `R100\told\tnew` for every rename between the two commits.
+            let renames = git(repo, &["diff", "-M", "--name-status", planted_sha, fixed]);
+            let mut was_called: BTreeMap<&str, &str> = BTreeMap::new();
+            for line in renames.lines() {
+                let mut parts = line.split('\t');
+                let status = parts.next().unwrap_or("");
+                if !status.starts_with('R') {
+                    continue;
+                }
+                if let (Some(old), Some(new)) = (parts.next(), parts.next()) {
+                    was_called.insert(new, old);
+                }
+            }
+
+            let mut files: Vec<String> = touched
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|f| was_called.get(f).copied().unwrap_or(f).to_string())
+                // A file the fix creates did not exist when the bug was reported, so no
+                // package could have offered it and asking for it measures nothing.
+                .filter(|f| {
+                    Command::new("git")
+                        .args(["cat-file", "-e", &format!("{planted_sha}:{f}")])
+                        .current_dir(repo)
+                        .output()
+                        .map(|o| o.status.success())
+                        .unwrap_or(false)
+                })
+                .collect();
             files.sort();
-            ("fix-diff", files)
+            files.dedup();
+            ("fix-commit".to_string(), files)
         }
         None => {
             // `path:line`; the line is where the defect is, and the file is what a package
@@ -123,7 +165,7 @@ fn ground_truth(
             let file = anchor
                 .and_then(|a| a.rsplit_once(':').map(|(p, _)| p.to_string()))
                 .expect("a bug with no fixing commit must at least name an anchor");
-            ("anchor", vec![file])
+            ("anchor".to_string(), vec![file])
         }
     }
 }
@@ -266,8 +308,7 @@ fn the_debug_package_reaches_what_a_fix_would_touch() {
              --test debug_supply"
         )
     });
-    let want: Vec<BugSupply> =
-        serde_json::from_str(Box::leak(raw.into_boxed_str())).expect("golden is valid JSON");
+    let want: Vec<BugSupply> = serde_json::from_str(&raw).expect("golden is valid JSON");
     let _ = std::fs::remove_dir_all(&out_root);
 
     assert_eq!(
@@ -320,8 +361,13 @@ fn the_harness_finds_a_file_when_the_request_names_its_symbol() {
 
     assert_eq!(intent, "debug");
     assert!(included > 0, "naming a symbol must select something");
+    // Looked up exactly as the golden looks its files up, on a repository-relative path taken
+    // from the fixture rather than from the package. A `contains("PaymentService")` here would
+    // pass even if every path in the package were formatted differently from ground truth —
+    // and that mismatch would empty every `found` next door while this still went green.
     assert!(
-        ranks.keys().any(|f| f.contains("PaymentService")),
-        "the named symbol's own file must be in the package: {ranks:?}"
+        ranks.contains_key("src/main/java/mn/pay/PaymentService.java"),
+        "the named symbol's file must be present under the same path shape ground truth \
+         uses, or the golden's zeroes are an artefact of formatting: {ranks:?}"
     );
 }

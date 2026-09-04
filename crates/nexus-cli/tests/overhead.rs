@@ -26,15 +26,21 @@ use std::process::Command;
 
 /// Prompts that name no code, taken from a real session.
 ///
-/// `"the cache key is wrong"` earns its place: `cache` is ordinary English *and* names a
-/// module here, so it pins the seeder's conservatism rather than leaving it observed. If a
-/// change starts seeding on plain words, this row moves first.
+/// The last row is the one doing work. `amount` occurs 37 times in this fixture's Java
+/// source, so it is ordinary English that the index has genuinely seen — which is the case
+/// where accidental seeding would show up. An earlier draft used `"the cache key is wrong"`
+/// and a review caught it: `cache` occurs **zero** times in `spring-payments`, so that row
+/// pinned nothing at all while reading as though it pinned something. A prompt naming a word
+/// the corpus does not contain is not a test of restraint.
+///
+/// Whatever this row costs is recorded rather than asserted. If it is zero, the seeder
+/// declined a word it had seen; if it is not, the golden says what that costs.
 const QUIET_PROMPTS: &[&str] = &[
     "yes",
     "park it, decision kept",
     "ask questions one by one",
     "thanks, that works",
-    "the cache key is wrong",
+    "the amount looks wrong on the receipt",
 ];
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]

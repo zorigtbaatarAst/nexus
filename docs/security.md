@@ -134,10 +134,20 @@ but it is opt-in, recorded in `test_runs.sandbox`, and written to the audit log 
 
 ## 5. Secret detection and redaction
 
+> **Status, 2026-09-04: one of these three layers exists.** Exclusion is built and is the one
+> that matters most, because a file never read cannot leak. Detection was built, measured at
+> **0 % precision** — eleven findings on this repository, all false, ten of them the
+> detector's own pattern table — and deleted; see [`09-tooling.md`](architecture/09-tooling.md)
+> §12. Redaction was never implemented: it appears in the original architecture design and in
+> no commit since, and there is no AI provider in this build for it to redact *for*. The rest
+> of this section describes the design, not the code. **Nexus does not detect committed
+> credentials. Use `gitleaks` or `trufflehog`.**
+
 Three layers, in order, so a secret has to get past all of them:
 
 1. **Exclusion.** `deny_paths` files are never read into the index at all. `.env`, `*.pem`,
-   `*.key`, `secrets/**` and `credentials*` are excluded by default, before parsing.
+   `*.key`, `secrets/**` and `credentials*` are excluded by default, before parsing. *This
+   layer is built.*
 2. **Detection.** Every indexed file is scanned for credential shapes: cloud key prefixes,
    GitHub/Slack/Stripe token formats, JWTs, PEM blocks, connection strings with embedded
    credentials, assignments to `password`/`secret`/`token`/`api_key`, and string literals
@@ -146,8 +156,8 @@ Three layers, in order, so a secret has to get past all of them:
    with `«REDACTED:aws_key»`. Redaction runs on the serialized bundle, after assembly, so it
    cannot be bypassed by a new context source forgetting to call it.
 
-Detections are also **findings**: a hardcoded credential becomes a `security` bug with the
-value redacted in the report. Protecting the secret and reporting it are the same pass.
+Detections were also **findings**: a hardcoded credential became a `security` bug with the
+value redacted in the report. That detector is gone, so nothing produces such a finding now.
 
 `redact = false` requires the `--i-understand` flag on the command line as well as the config
 change. Two deliberate acts, because the failure mode is unrecoverable.

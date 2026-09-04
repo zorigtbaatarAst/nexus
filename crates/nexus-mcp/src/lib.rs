@@ -788,7 +788,7 @@ impl ServerHandler for Nexus {
              treat a low min_confidence as a lead, not a fact.\n\
              \n\
              bughunter_analyze runs deterministic rules only: Spring proxy mistakes, GraphQL \
-             fields no resolver serves, credentials in source. Their confidences are not \
+             fields no resolver serves. Their confidences are not \
              model estimates, so do not discount them as such.\n\
              \n\
              What the rules cannot do is reason about business logic, races or data \
