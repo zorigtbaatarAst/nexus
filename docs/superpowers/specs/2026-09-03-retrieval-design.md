@@ -1,6 +1,6 @@
 # Retrieval — Design
 
-**Status:** approved, not yet implemented
+**Status:** implemented
 **Date:** 2026-09-03
 **Absorbs** [`2026-09-03-knowledge-selectivity-design.md`](2026-09-03-knowledge-selectivity-design.md),
 whose durable-facts change is a prerequisite here. That document stays as the record of what
@@ -168,6 +168,17 @@ As specified in the absorbed document, unchanged:
 **Golden packages will move.** The widening applies to every request, so a golden task whose
 text contains a plain lowercase word naming exactly one symbol gains a seed. That is the
 change working. Rebaseline with `NEXUS_REBASELINE=1` and read the diff before accepting it.
+
+**3 of 3 symptoms return non-empty packages.** Of the four symptoms in the "Why" section
+table, three returned **0 items** for the reason this design fixes — the seed filter skipped
+their plain word — and this design was measured against exactly those three (the fourth,
+`normalize_body`, is a different failure named in "Out of scope, and named" and is not
+claimed here). Two of the three now seed directly on the symptom's own term: `cache` →
+`context/cache.rs`, `resolved` → `ResolveStats#resolved`. The third seeds indirectly, through
+an unrelated same-named method (`tokens` → `Candidate::tokens`) whose caller chain happens to
+include the file the defect lived in — the term that actually names that defect,
+`tokens_estimated`, still resolves to nothing, because Rust struct fields remain largely
+unindexed (trap recorded in `AGENTS.md`).
 
 ## Acceptance criteria
 

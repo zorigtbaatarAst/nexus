@@ -147,6 +147,13 @@ that is hard to attribute.
   253 tokens shipped 11,113 — because the estimate counted item text and the payload is
   mostly everything else.
 
+- **Memory is queried by subject, never scanned.** `Store::facts(project_id, None)` loads
+  every live fact. Four callers may: `fact_states`, `memory_export`, `export_portable`, and
+  the portable importer — all batch commands whose job genuinely is everything. **No request
+  path may.** `task_package` calls `facts_for_seeds`, `session_package` calls
+  `durable_facts`. The unscoped form cost 274 ms at 200,000 facts on a path ADR-024 budgets
+  150 ms for, and memory is append-only by design, so that number only grows.
+
 - **The context cache key must include everything that changes an answer.** Intent, seeds,
   commit, dirty hash, budget, weights, `explain`, the memory fingerprint, and the build
   version. It has been wrong in three separate ways: a recorded fact was invisible until an
@@ -255,6 +262,14 @@ that is hard to attribute.
   `orderStatus()`. Without emitting those accessors, every `dto.orderStatus()` in the
   codebase is an unresolvable call — this alone was most of the gap between 68 % and 96 %
   resolution on a real project.
+
+- **A Rust struct field is not indexed, and a symptom routinely names one.** Java record
+  components become accessor methods and get indexed for free (above); a plain Rust field
+  never becomes a symbol at all. `ContextPackage::tokens_estimated` cannot be a seed target no
+  matter how a symptom is worded — nothing in the index is named that — while the unrelated
+  method `Candidate::tokens` is, so a symptom that says "tokens_estimated" seeds on `tokens`
+  by accident instead. This caps how often the widened seed rule in
+  `docs/superpowers/specs/2026-09-03-retrieval-design.md` can fire at all.
 
 - **Codegen output must not be indexed.** `graphql-generated.ts` is thousands of symbols
   nobody wrote and nobody can change. `walk::is_excluded` drops it, along with
