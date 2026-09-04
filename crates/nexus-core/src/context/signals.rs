@@ -102,10 +102,16 @@ impl SignalIndex {
     /// `churn` is supplied by the caller because it comes from git rather than from the
     /// store, and `nexus-core` holds the repository handle. Passing it in keeps this function
     /// a pure fold over storage and keeps the git traversal to one per request.
+    ///
+    /// `candidates` is every FQN [`Self::for_candidate`] will be asked about below — the
+    /// resolved seeds plus whatever expansion reached from them. The caller already has both
+    /// lists in hand by the time it calls this; passing their FQNs is what lets the fact read
+    /// go through `facts_for_seeds` instead of loading every live fact in the project.
     pub fn build(
         store: &Store,
         project_id: i64,
         findings: &[FindingSummary],
+        candidates: &[String],
         churn: HashMap<String, f64>,
         profile_anchors: Vec<String>,
     ) -> Result<Self, StoreError> {
@@ -126,7 +132,7 @@ impl SignalIndex {
         }
 
         let facts: Vec<(String, f64, bool)> = store
-            .facts(project_id, None)?
+            .facts_for_seeds(project_id, candidates)?
             .into_iter()
             .filter_map(|f| {
                 let subject = f.subject?;
@@ -225,7 +231,7 @@ mod tests {
         let p = store
             .ensure_project("/tmp/sig", "sig", "git")
             .expect("project");
-        SignalIndex::build(&store, p, &findings, churn, vec!["pom.xml".into()]).expect("build")
+        SignalIndex::build(&store, p, &findings, &[], churn, vec!["pom.xml".into()]).expect("build")
     }
 
     fn finding(status: &str, file: &str, component: &str) -> FindingSummary {

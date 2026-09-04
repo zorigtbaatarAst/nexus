@@ -2474,13 +2474,34 @@ impl Store {
     /// `idx_facts_subject`, which has existed since `0001_init.sql` and was never used
     /// because the hot path passed `None`.
     ///
-    /// Two arms:
+    /// Two arms, written as a `UNION` rather than one `WHERE ... OR ...`:
     ///   * equality against every seed and every ancestor of it — a fact about the module a
     ///     seed lives in is a fact about the seed. This one mirrors `memory::subject_match`
     ///     exactly, via [`subject_prefixes`].
     ///   * a half-open range per seed — a fact about something *below* the seed. Written as a
     ///     range rather than `LIKE seed || '%'` because a range on an indexed column is an
     ///     index seek and `LIKE` with a bound parameter is not guaranteed to be.
+    ///
+    /// A single `WHERE` with `OR` between the `IN` arm and the range arms measured as a plan
+    /// over `idx_facts_key` instead — SQLite will not drive one index scan from a disjunction
+    /// of a set-membership test and N ranges, so every query walked the project's whole key
+    /// range regardless of how few seeds it carried. `UNION`, not `UNION ALL`, also removes
+    /// the duplicate a fact matching both arms would otherwise produce, which the `OR` form
+    /// left to the database to collapse for free.
+    ///
+    /// The `UNION` alone was not enough, confirmed with `EXPLAIN QUERY PLAN`: SQLite planned
+    /// both range arms over `idx_facts_subject` on their own, but kept the equality (`IN`)
+    /// arm on `idx_facts_key` — the same bias as the `OR` form, just narrowed to one arm.
+    /// `idx_facts_key` already yields `fact_key` order for free, and without table statistics
+    /// (`ANALYZE` has never run against this database, and running it did not change the
+    /// choice either — see Task 7's report) the planner weighs that saved sort above how
+    /// selective `subject IN (...)` actually is, even though every row it walks past is one a
+    /// seek would not touch at all. Measured on a 20,000-row table: 2.5 ms for the plain
+    /// `UNION` against 0.08 ms with the hint below — the difference is that one arm.
+    /// Every arm therefore carries `INDEXED BY idx_facts_subject` explicitly, per the brief's
+    /// documented fallback: a hint the planner disagrees with is a future regression waiting
+    /// for a schema change, but the measured alternative is worse, and it is the one already
+    /// running.
     ///
     /// The range arm is deliberately *wider* than `subject_match`, not anchored the same way:
     /// it is a raw byte range, so a seed of `a::b` also pulls in a fact subject `a::bc`, which
@@ -2498,13 +2519,17 @@ impl Store {
             seeds.iter().flat_map(|s| subject_prefixes(s)).collect();
         let exact: Vec<String> = exact.into_iter().collect();
 
-        let mut sql = String::from(
-            "SELECT fact_key, scope, subject, claim, source, confidence, evidence_json,
-                    validated_count, durable, created_scan_id
-             FROM facts
-             WHERE project_id = ?1
-               AND superseded_by IS NULL AND invalidated_at IS NULL
-               AND (subject IN (",
+        // Every arm repeats both predicates: `project_id = ?1` (so `idx_facts_subject`'s
+        // leading column is bound in each independently-planned SELECT) and
+        // `invalidated_at IS NULL`, because the index is partial on exactly that condition —
+        // an arm missing it is an arm SQLite refuses to serve from the index at all.
+        const COLS: &str = "fact_key, scope, subject, claim, source, confidence, evidence_json,
+                    validated_count, durable, created_scan_id";
+        const PREDICATE: &str =
+            "project_id = ?1 AND superseded_by IS NULL AND invalidated_at IS NULL";
+
+        let mut sql = format!(
+            "SELECT {COLS} FROM facts INDEXED BY idx_facts_subject WHERE {PREDICATE} AND subject IN ("
         );
         sql.push_str(
             &(0..exact.len())
@@ -2516,12 +2541,13 @@ impl Store {
         let range_base = 2 + exact.len();
         for i in 0..seeds.len() {
             sql.push_str(&format!(
-                " OR (subject >= ?{} AND subject < ?{})",
+                " UNION SELECT {COLS} FROM facts INDEXED BY idx_facts_subject WHERE {PREDICATE} \
+                 AND subject >= ?{} AND subject < ?{}",
                 range_base + i * 2,
                 range_base + i * 2 + 1
             ));
         }
-        sql.push_str(") ORDER BY fact_key");
+        sql.push_str(" ORDER BY fact_key");
 
         let mut values: Vec<rusqlite::types::Value> =
             Vec::with_capacity(1 + exact.len() + seeds.len() * 2);

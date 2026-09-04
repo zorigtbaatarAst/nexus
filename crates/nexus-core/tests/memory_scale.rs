@@ -142,3 +142,42 @@ fn a_request_that_anchors_to_nothing_carries_no_facts() {
         pkg.items
     );
 }
+
+/// Run with: `cargo test -p nexus-core --test memory_scale -- --ignored --nocapture`
+///
+/// Ignored because a timing assertion in CI is flaky. It exists anyway because nothing else
+/// in the suite fails if retrieval goes back to loading every live fact: the candidate set is
+/// identical either way, so only the clock can tell the difference. Ratio, not absolute time,
+/// so it means the same thing on a slow machine.
+#[test]
+#[ignore]
+fn retrieval_does_not_slow_down_as_memory_grows() {
+    use std::time::Instant;
+    let (_root, mut engine) = scanned("scaling");
+    let ask = |e: &Engine| {
+        let t = Instant::now();
+        for _ in 0..20 {
+            e.context(&task("refactor mn.pay.PaymentService#pay"))
+                .expect("context");
+        }
+        t.elapsed()
+    };
+
+    let small = ask(&engine);
+    for i in 0..20_000 {
+        record(
+            &mut engine,
+            &format!("arch.bulk-{i:06}"),
+            &format!("unrelated.Mod{i}"),
+        );
+    }
+    let large = ask(&engine);
+
+    let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-9);
+    assert!(
+        ratio < 3.0,
+        "retrieval scaled with total memory rather than with the request: \
+         {small:?} at 0 facts, {large:?} at 20,000 — {ratio:.1}x. \
+         That is the O(all facts) path returning."
+    );
+}

@@ -309,12 +309,22 @@ impl Engine {
         );
         // 3 — expand.
         let reached = expand::run(&self.store, self.project_id, &seeded.seeds, intent.intent)?;
-        // 4 — signals, once.
+        // 4 — signals, once. `candidate_fqns` is every seed plus everything expansion
+        // reached — the same universe stage 5 below calls `index.for_candidate` on — so the
+        // signal index's own fact read can go through `facts_for_seeds` instead of loading
+        // every live fact in the project.
         let findings = self.findings(None, None, None)?;
+        let candidate_fqns: Vec<String> = seeded
+            .seeds
+            .iter()
+            .map(|s| s.symbol.fqn.clone())
+            .chain(reached.items.iter().map(|i| i.fqn.clone()))
+            .collect();
         let index = SignalIndex::build(
             &self.store,
             self.project_id,
             &findings,
+            &candidate_fqns,
             self.churn(),
             profile_anchors(&status),
         )?;

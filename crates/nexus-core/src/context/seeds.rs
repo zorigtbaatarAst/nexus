@@ -330,23 +330,24 @@ pub fn resolve(
         }
     }
 
-    // 6 — a fact's subject named in the text. The cheapest way to reach a module the project
-    // already recorded knowledge about.
+    // 6 — a fact's subject named in the text. Inverted from a scan of every fact: a subject
+    // the text names is, by construction, a target of that text, so the words `targets`
+    // already yields (the same list sources 2 and 4 above seed from) are asked of
+    // `facts_for_seeds` as seeds, rather than testing every live fact's subject against the
+    // text by hand. This narrows what source 6 matches to the same rule the rest of stage 2
+    // already applies — see the doc comment on `targets` for what that excludes.
     if !req.text.is_empty() {
-        let lower = req.text.to_lowercase();
-        for fact in store.facts(project_id, None)? {
+        for fact in store.facts_for_seeds(project_id, &targets(&req.text))? {
             let Some(subject) = fact.subject.as_deref() else {
                 continue;
             };
-            if subject.len() > 2 && lower.contains(&subject.to_lowercase()) {
-                for s in store.find_symbols(project_id, subject, 10)? {
-                    offer(
-                        &mut found,
-                        s,
-                        SeedSource::FactSubject,
-                        format!("subject of fact {}", fact.key),
-                    );
-                }
+            for s in store.find_symbols(project_id, subject, 10)? {
+                offer(
+                    &mut found,
+                    s,
+                    SeedSource::FactSubject,
+                    format!("subject of fact {}", fact.key),
+                );
             }
         }
     }
