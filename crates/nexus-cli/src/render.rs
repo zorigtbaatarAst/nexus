@@ -52,10 +52,6 @@ impl Style {
 
 const RULE: &str = "────────────────────────────────────────";
 
-/// The product name this invocation is wearing.
-///
-/// One binary under two names: which one the user typed is the only thing that should
-/// differ, so it is read from argv[0] rather than compiled in twice.
 /// The command the user actually typed, for messages that tell them what to run next.
 /// Derived from the product name so the two names cannot drift apart.
 pub fn binary_name() -> &'static str {
@@ -66,6 +62,10 @@ pub fn binary_name() -> &'static str {
     }
 }
 
+/// The product name this invocation is wearing.
+///
+/// One binary under two names: which one the user typed is the only thing that should
+/// differ, so it is read from argv[0] rather than compiled in twice.
 pub fn product_name() -> &'static str {
     static NAME: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
     NAME.get_or_init(|| {
@@ -80,6 +80,17 @@ pub fn product_name() -> &'static str {
             "Nexus"
         }
     })
+}
+
+/// Fill the `{bin}` hole in a string that came from `nexus-core`.
+///
+/// The core produces advice — remedies, the "no project here" error — and must not know what
+/// the binary is called: one file answers to two names and only `argv[0]` decides which. So it
+/// writes a hole, and this is the one place that fills it. The alternative, which is what was
+/// here before, is `nexus doctor` telling the reader to run `bughunter rescan`: advice that
+/// works, is wrong, and teaches the reader to stop reading it.
+pub fn with_binary(text: &str) -> String {
+    text.replace("{bin}", binary_name())
 }
 
 pub fn banner(w: &mut impl Write, st: &Style) -> std::io::Result<()> {
@@ -369,7 +380,7 @@ pub fn status(w: &mut impl Write, st: &Style, s: &StatusReport) -> std::io::Resu
     match &s.baseline {
         None => {
             writeln!(w, "{}", st.warn("No baseline."))?;
-            writeln!(w, "  run: bughunter scan")?;
+            writeln!(w, "  run: {} scan", binary_name())?;
         }
         Some(b) => {
             let c = b.commit.as_deref().unwrap_or("-");
@@ -400,7 +411,7 @@ pub fn status(w: &mut impl Write, st: &Style, s: &StatusReport) -> std::io::Resu
                     "working tree has uncommitted changes".into()
                 };
                 writeln!(w, "{} {}", st.warn("Drifted:"), detail)?;
-                writeln!(w, "  run: bughunter rescan")?;
+                writeln!(w, "  run: {} rescan", binary_name())?;
             } else {
                 writeln!(w, "{}", st.good("Up to date."))?;
             }
@@ -426,7 +437,7 @@ pub fn doctor(w: &mut impl Write, st: &Style, checks: &[Check]) -> std::io::Resu
         };
         writeln!(w, "  {mark} {name:<16} {}", c.detail)?;
         if let Some(r) = &c.remedy {
-            writeln!(w, "    {}", st.dim(&format!("run: {r}")))?;
+            writeln!(w, "    {}", st.dim(&format!("run: {}", with_binary(r))))?;
         }
     }
     writeln!(w)?;
@@ -612,7 +623,10 @@ pub fn ambiguous(
     writeln!(
         w,
         "{}",
-        st.dim("  Pick one — BugHunter will not guess which you meant.")
+        st.dim(&format!(
+            "  Pick one — {} will not guess which you meant.",
+            product_name()
+        ))
     )?;
     writeln!(w)?;
     for c in cands.iter().take(15) {

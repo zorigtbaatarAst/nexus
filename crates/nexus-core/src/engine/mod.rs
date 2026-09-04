@@ -41,7 +41,7 @@ pub enum EngineError {
     },
     #[error("serialization error: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("not a BugHunter project: {0}\n  run `bughunter init` first")]
+    #[error("no project database here: {0}\n  run `{{bin}} init` first")]
     NotInitialized(String),
     #[error("no baseline for this project\n  run `nexus scan` first")]
     NoBaseline,
@@ -417,7 +417,7 @@ fn human_bytes(b: u64) -> String {
     }
 }
 
-const DEFAULT_CONFIG: &str = r#"# BugHunter project configuration — committed, shared team intent.
+const DEFAULT_CONFIG: &str = r#"# Project configuration — committed, shared team intent.
 
 [scan]
 # Extra path prefixes to exclude, on top of .gitignore and .bughunterignore.
@@ -427,7 +427,7 @@ exclude = []
 # Override auto-detection when a directory needs pinning to one language.
 "#;
 
-const DEFAULT_POLICY: &str = r#"# BugHunter permissions — committed, so they are reviewed in a pull request
+const DEFAULT_POLICY: &str = r#"# Permissions — committed, so they are reviewed in a pull request
 # rather than depending on whoever happens to run the tool.
 #
 # Defaults are the safe end of every axis: a freshly initialized project can index,

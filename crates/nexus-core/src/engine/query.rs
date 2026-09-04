@@ -1187,7 +1187,7 @@ impl Engine {
                 "{NEXUS_DIR}/{DB_FILE}, schema {v} (binary supports {})",
                 nexus_store::SCHEMA_VERSION
             ),
-            remedy: (v != nexus_store::SCHEMA_VERSION).then(|| "upgrade bughunter".into()),
+            remedy: (v != nexus_store::SCHEMA_VERSION).then(|| "upgrade {bin}".into()),
         });
 
         checks.push(Check {
@@ -1259,7 +1259,7 @@ impl Engine {
                 name: "baseline",
                 level: "warn",
                 detail: "no baseline yet".into(),
-                remedy: Some("bughunter scan".into()),
+                remedy: Some("{bin} scan".into()),
             }),
             Some(b) => {
                 let behind = self
@@ -1276,7 +1276,7 @@ impl Engine {
                     } else {
                         format!("{} is current", b.scan_uid)
                     },
-                    remedy: (behind > 0).then(|| "bughunter rescan".into()),
+                    remedy: (behind > 0).then(|| "{bin} rescan".into()),
                 });
             }
         }

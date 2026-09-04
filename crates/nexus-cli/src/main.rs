@@ -10,6 +10,7 @@
 mod ask;
 mod fixture;
 mod hooks;
+mod plugin;
 mod render;
 
 use cap_architect::Architect;
@@ -321,7 +322,11 @@ fn main() -> ExitCode {
                 return ExitCode::from(exit::OK);
             }
             // Diagnostics on stderr, always, so `--json | jq` never sees them.
-            eprintln!("bughunter: {e}");
+            eprintln!(
+                "{}: {}",
+                render::binary_name(),
+                render::with_binary(&e.to_string())
+            );
             let mut src = std::error::Error::source(&*e);
             while let Some(s) = src {
                 eprintln!("  caused by: {s}");
@@ -1008,9 +1013,14 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             // agent's format, and the core must not learn it. ADR-024 names `doctor` as the
             // compensating control for fail-open hiding hook failures by construction.
             checks.push(hooks::health(&root));
+            checks.push(plugin::health());
             let worst = checks.iter().any(|c| c.level == "error");
             emit!(&checks, {
-                writeln!(out, "{}", st.head("BugHunter doctor"))?;
+                writeln!(
+                    out,
+                    "{}",
+                    st.head(&format!("{} doctor", render::product_name()))
+                )?;
                 writeln!(
                     out,
                     "{}",
