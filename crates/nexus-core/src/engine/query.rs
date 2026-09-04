@@ -296,17 +296,30 @@ impl Engine {
         // 2 — seeds. Resolved before the intent is final, because whether a turn is
         // referential depends on whether anything in it anchored — which only the index can
         // say, and which a verb table must not guess at.
-        let provisional = crate::context::classify(&for_intent);
+        // A caller that declares its purpose has better evidence than the verb table, which
+        // can only read words. Declaring beats deriving; declaring nothing changes nothing.
+        let declared = req.purpose.declared_intent();
+        let provisional = match declared {
+            Some(intent) => crate::context::IntentMatch {
+                intent,
+                signal: Some("declared by the caller".into()),
+                confident: true,
+            },
+            None => crate::context::classify(&for_intent),
+        };
         let seeded = seeds::resolve(&self.store, self.project_id, req, provisional.intent)?;
         let anchored = seeded
             .seeds
             .iter()
             .any(|s| s.source != crate::context::SeedSource::Carried);
-        let intent = crate::context::intent::classify_turn(
-            &for_intent,
-            anchored,
-            !req.carry_seeds.is_empty(),
-        );
+        let intent = match declared {
+            Some(_) => provisional.clone(),
+            None => crate::context::intent::classify_turn(
+                &for_intent,
+                anchored,
+                !req.carry_seeds.is_empty(),
+            ),
+        };
         // 3 — expand.
         let reached = expand::run(&self.store, self.project_id, &seeded.seeds, intent.intent)?;
         // 4 — signals, once. `candidate_fqns` is every seed plus everything expansion

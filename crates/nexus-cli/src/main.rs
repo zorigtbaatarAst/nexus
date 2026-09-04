@@ -205,6 +205,12 @@ enum Command {
         file: Vec<String>,
         #[arg(long, value_name = "FQN")]
         symbol: Vec<String>,
+        /// What kind of work this is: `task`, `debug` or `review`.
+        ///
+        /// Declaring beats deriving. Intent is otherwise read from the words of `--task`,
+        /// which is right for a person typing and wrong for a caller that already knows.
+        #[arg(long, value_name = "KIND")]
+        purpose: Option<String>,
         /// Why every candidate is in or out, with the score terms that decided it
         #[arg(long)]
         explain: bool,
@@ -882,12 +888,29 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             budget,
             file,
             symbol,
+            purpose,
             explain,
             stats,
             carry_seeds,
             recent,
             weights,
         } => {
+            // A typo must not quietly become the default. `policy.rs` makes the same call in
+            // the other direction — an unrecognised `execute` value is `none`, never a grant
+            // — and the shared rule is that an unreadable instruction is refused, not guessed.
+            let declared_purpose = match purpose.as_deref() {
+                None => nexus_core::Purpose::Task,
+                Some(value) => match nexus_core::Purpose::parse(value) {
+                    Some(p) => p,
+                    None => {
+                        eprintln!(
+                            "{}: unknown --purpose `{value}`; expected task, debug or review",
+                            render::binary_name()
+                        );
+                        return Ok(exit::USAGE);
+                    }
+                },
+            };
             if *weights {
                 let report =
                     nexus_core::tuning::report(&root.join(nexus_core::NEXUS_DIR).join("cache"));
@@ -919,7 +942,7 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                     files: file.clone(),
                     symbols: symbol.clone(),
                     budget_tokens: budget.unwrap_or(nexus_core::context::TASK_BUDGET_TOKENS),
-                    purpose: nexus_core::Purpose::Task,
+                    purpose: declared_purpose,
                     explain: *explain,
                     carry_seeds: carry_seeds.clone(),
                     recent: recent.clone(),

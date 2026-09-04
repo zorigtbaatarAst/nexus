@@ -9,7 +9,7 @@
 //! this to the code" lets the agent ask a better question, where a package built from nothing
 //! sends it confidently into the wrong module.
 
-use super::{Purpose, TaskRequest};
+use super::TaskRequest;
 use crate::context::intent::Intent;
 use nexus_store::{Store, StoreError, SymbolRef};
 use std::collections::BTreeMap;
@@ -287,7 +287,10 @@ pub fn resolve(
     }
 
     // 3 — the changed set. Free for a review: the rescan already computed it.
-    if matches!(intent, Intent::Review) || req.purpose == Purpose::Review {
+    // `req.purpose == Purpose::Review` used to be tested here too. It is redundant now:
+    // a declared purpose sets the intent before seeds are resolved, so this sees `Review`
+    // either way, and the rule is stated in one place instead of two that could disagree.
+    if matches!(intent, Intent::Review) {
         match store.baseline(project_id)? {
             Some(b) => {
                 for (_, _, target, _) in store.changes_for_scan(b.scan_id, Some("symbol"))? {

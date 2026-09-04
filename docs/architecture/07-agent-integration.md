@@ -243,9 +243,6 @@ nexus context --task "<symptom>" --purpose debug
   → prior findings on the reached set, weighted by status
   → facts about the modules involved
 
-bughunter analyze --scope <reached set>
-  → deterministic rules only: Spring proxy mistakes, orphaned GraphQL fields, committed secrets
-
 agent reasons over the package
   → nexus record finding    (evidence required; model confidence clamped at 0.75)
 ```
@@ -253,6 +250,28 @@ agent reasons over the package
 The seam matters most here. A symptom visible in the UI reaches the backend method that serves
 it, because the `.graphqls` schema is indexed as the contract. Nothing in the source text
 connects `fetch('/api/x')` to `@QueryMapping`; Nexus connects them.
+
+**What is built, as of 2026-09-04.** Intent classification already does the work this moment
+needs: `"fix the payment idempotency bug"`, `"the checkout page is broken"`, a bare stack
+trace — all classify `Debug` from the deterministic verb table, and the `UserPromptSubmit`
+hook already feeds every prompt through it. `--purpose debug` now exists as well, and it
+*overrides* the derived intent rather than duplicating it: the table can only read words, and
+a caller that already knows the kind of work it is doing has better evidence than its own
+phrasing. `"have a look at this"` classifies `Unknown` and should; declaring `debug` alongside
+it does not.
+
+**`bughunter analyze --scope <reached set>` is deliberately not wired, and this line used to
+say it would be.** Two reasons, both measured. BugHunter's rules are two Spring proxy checks
+and one GraphQL orphan check — the corpus's own headline planted bug is a concurrency race,
+and `spring-payments`'s specification says of it *"which is why no linter and no type checker
+sees it."* BugHunter does not see it either, so running it on every debug prompt buys latency
+and noise for a class of defect it structurally cannot find. And chaining capabilities into a
+fix loop puts a reasoning sequence inside the platform, which inverts the split
+[`AGENTS.md`](../../AGENTS.md) exists to protect. An agent that wants BugHunter here calls it;
+nothing stops that, and nothing does it automatically.
+
+The committed-secrets rule named above was deleted on the same date — see
+[`09-tooling.md`](09-tooling.md) §12.
 
 **Capability at this moment:** BugHunter — *where is it, and what proves it?*
 

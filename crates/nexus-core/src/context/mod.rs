@@ -39,6 +39,11 @@ pub fn estimate_tokens(s: &str) -> usize {
 }
 
 /// Why a package was asked for. Phase 1 serves `Session`; the rest are the Phase 2 surface.
+///
+/// `Session` selects a different builder. The others select the same one and differ only in
+/// what they *declare*: a caller that already knows the kind of work it is doing says so, and
+/// that beats deriving it from the caller's wording. `Verify` was here too and was
+/// constructed nowhere and read nowhere, so it is gone until something needs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Purpose {
@@ -46,7 +51,6 @@ pub enum Purpose {
     Task,
     Review,
     Debug,
-    Verify,
 }
 
 impl Purpose {
@@ -56,7 +60,34 @@ impl Purpose {
             Purpose::Task => "task",
             Purpose::Review => "review",
             Purpose::Debug => "debug",
-            Purpose::Verify => "verify",
+        }
+    }
+
+    /// The intent this purpose asserts, when it asserts one.
+    ///
+    /// The verb table reads words; this reads the caller's own knowledge, which is better
+    /// evidence when it exists. `"have a look at this"` classifies `Unknown` and should — it
+    /// names no verb — but an agent that has just been handed a failing test knows it is
+    /// debugging whatever it happens to type.
+    ///
+    /// `Task` declares nothing on purpose: it is the default, and a default that overrode
+    /// classification would silence the verb table everywhere.
+    pub fn declared_intent(self) -> Option<Intent> {
+        match self {
+            Purpose::Debug => Some(Intent::Debug),
+            Purpose::Review => Some(Intent::Review),
+            Purpose::Session | Purpose::Task => None,
+        }
+    }
+
+    /// Parse a caller-supplied value. `Session` is not offered: it selects a different
+    /// builder and has its own flag.
+    pub fn parse(value: &str) -> Option<Purpose> {
+        match value {
+            "task" => Some(Purpose::Task),
+            "review" => Some(Purpose::Review),
+            "debug" => Some(Purpose::Debug),
+            _ => None,
         }
     }
 }

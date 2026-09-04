@@ -113,6 +113,10 @@ pub struct ContextArgs {
     /// The previous user message, for reading intent from a prompt like "now do the same for
     /// orders". Never stored and never indexed.
     pub recent: Option<String>,
+    /// What kind of work this is: "task", "debug" or "review". Say it when you know it — the
+    /// verb table can only read the words of `task`, and you know why you are asking.
+    /// Unrecognised values are refused rather than defaulted.
+    pub purpose: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -573,7 +577,26 @@ impl Nexus {
             files: a.files,
             symbols: a.symbols,
             budget_tokens: a.budget.unwrap_or(nexus_core::context::TASK_BUDGET_TOKENS),
-            purpose: nexus_core::Purpose::Task,
+            purpose: match a.purpose.as_deref() {
+                None => nexus_core::Purpose::Task,
+                Some(value) => match nexus_core::Purpose::parse(value) {
+                    Some(p) => p,
+                    // Refused, not defaulted: a caller that meant `debug` and typed `debgu`
+                    // would otherwise be handed a package it did not ask for and told nothing.
+                    None => {
+                        return Ok(failure(
+                            "usage",
+                            format!("unknown purpose `{value}`"),
+                            &[
+                                "omit purpose",
+                                "purpose: task",
+                                "purpose: debug",
+                                "purpose: review",
+                            ],
+                        ))
+                    }
+                },
+            },
             // An agent pays for every token of this. The reasoning is available on request
             // through the CLI's --explain; it is not shipped by default.
             explain: false,
