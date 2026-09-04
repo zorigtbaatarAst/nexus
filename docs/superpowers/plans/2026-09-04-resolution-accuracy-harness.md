@@ -12,6 +12,59 @@
 
 **Prerequisite:** [Plan A](2026-09-03-resolution-metric-fixes.md), complete as of `bc7c3cf`. Tier labels are trustworthy only after `65d4acc`; per-tier calibration on the old labels would bin `sibling` and `external-graph` edges into `heuristic`.
 
+**Status: complete, 2026-09-04.** Landed as `4d5582d`, `1453d0a`, `d16f5d5`, `0a703fe`,
+`3e4930d`, `28c802c`, `1a23cc2`, `7c7c9f7`, `0ded6b3`, `d778e37`. `make check` green at 478
+tests, up from 427 at Plan A's close. The first measurement is
+[`docs/eval/README.md`](../../eval/README.md): precision **0.723** [0.700–0.745] per edge,
+recall 0.803, strict 0.715, over 1,528 judged edges against a `rust-analyzer 1.98.0` oracle.
+
+### Where execution departed from this plan
+
+Recorded because a plan that silently disagrees with what shipped is worse than no plan.
+
+1. **The plan's Wilson arithmetic was wrong.** Task 5 Step 1 gives [0.704011, 0.855057] for
+   k=80, n=100; its working divides z²/2 by 2n and writes 0.0384 for z². The published
+   interval is [0.711169, 0.866634], which is what the plan's own Step 3 *code* produces. The
+   test carries the corrected derivation.
+
+2. **`a_well_calibrated_tier_is_left_alone` asserted a case that is not.** Task 6 Step 1 used
+   199 of 200 edges claiming 1.00 and expected `Ok`. Confidence 1.00 asserts "never wrong",
+   and one counter-example ends that claim: the interval is [0.9722, 0.9991] and excludes
+   1.0. Replaced with 180 of 200 at 0.90, and the two boundary cases are now pinned by name —
+   a perfect record *may* claim certainty, because Wilson's upper bound is exactly 1.0 when
+   k = n.
+
+3. **The first real run measured the ruler.** Precision came back **0.001** with `exact`
+   scoring zero. SCIP counts lines from zero, Nexus from one; every site lookup missed by one
+   and 3,462 of 4,208 sites fell out of the comparable set. Every unit test passed
+   throughout, because both sides of each are hand-built and agreed with each other. **This
+   is the plan's worst near-miss: Task 8 Step 2 is the only step that could have caught it,
+   and it is the step an executor without an indexer would skip.**
+
+4. **Four more defects the run and the review found together**, all fixed in `0ded6b3`: two
+   references on one line collided in the truth map (last write winning, so the candidate
+   that agreed with the first was scored wrong for being right); §4.4's "innermost span wins
+   when spans nest" was not implemented, so an edge bound to the enclosing `impl` scored
+   correct; the coverage denominator came from the edge dump and so could not see a file with
+   no edges — `nexus graph --files` was added for the real list; and an empty comparable set
+   printed `precision 0.000` rather than reporting itself inconclusive.
+
+5. **Coverage is scoped to the oracle's languages.** §8.1 says every file Nexus indexed must
+   appear in the oracle, but one SCIP indexer speaks one language and Nexus indexes five.
+   Unscoped, a complete run read "102 of 287" and printed PARTIAL over numbers that did not
+   need it. The denominator is now the extensions the oracle produced documents for; the
+   limitation that leaves — an extension skipped *entirely* drops out rather than failing —
+   is named in the code.
+
+6. **Task 2 shipped no `main.rs`.** The plan's `lib.rs` declares five modules that Tasks 3–7
+   create and its `main.rs` calls a `run` that does not exist yet, so the crate as written
+   would not compile. Modules and binary arrive with the code they hold.
+
+7. **A pre-existing flake was fixed on the way** (`47f9608`). Two tests in
+   `nexus-cli/tests/hooks.rs` passed the same name to `fixture()`, which deletes the path it
+   returns, so `make check` failed about one run in five. Out of scope by the letter, but
+   every "make check green" claim here depends on that gate being deterministic.
+
 ## Global Constraints
 
 - Rust 1.82+; CI runs `RUSTFLAGS=-D warnings`, so a warning fails the build.
@@ -36,7 +89,7 @@
 **Interfaces:**
 - Produces: `nexus_core::report::EdgeRecord { src_fqn: String, src_file: String, site_line: Option<i64>, edge_type: String, dst_fqn: Option<String>, dst_file: Option<String>, dst_start_line: Option<i64>, dst_end_line: Option<i64>, resolution: String, confidence: f64 }`, serialized one per line. Task 4 consumes it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `crates/nexus-cli/tests/edge_dump.rs`. Copy `nexus()`, `git()` and the Rust fixture from `crates/nexus-cli/tests/metric_agreement.rs` verbatim — the executor may be reading these tasks out of order, and that fixture is the one proven to produce a fan-out (3 rows, 1 site):
 
@@ -81,12 +134,12 @@ fn stdout_still_holds_exactly_one_json_document_when_edges_are_dumped() {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cargo test -p nexus-cli --test edge_dump`
 Expected: FAIL — `error: unexpected argument '--edges'`.
 
-- [ ] **Step 3: Add the store query**
+- [x] **Step 3: Add the store query**
 
 In `crates/nexus-store/src/lib.rs`, next to `edge_counts`:
 
@@ -147,7 +200,7 @@ pub struct EdgeRow {
 }
 ```
 
-- [ ] **Step 4: Add the report type and the engine method**
+- [x] **Step 4: Add the report type and the engine method**
 
 In `crates/nexus-core/src/report.rs`, beside `GraphReport`:
 
@@ -194,7 +247,7 @@ pub fn edge_records(&self) -> Result<Vec<EdgeRecord>> {
 }
 ```
 
-- [ ] **Step 5: Wire the flag**
+- [x] **Step 5: Wire the flag**
 
 In `crates/nexus-cli/src/main.rs`, change the `Graph` variant to carry a path and write the file before rendering the summary:
 
@@ -230,12 +283,12 @@ and in the `Command::Graph` arm, before rendering:
         }
 ```
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: `cargo test -p nexus-cli --test edge_dump && cargo test -p nexus-cli --test json_contract`
 Expected: PASS, 2 + 2 tests.
 
-- [ ] **Step 7: `make check`, then commit**
+- [x] **Step 7: `make check`, then commit**
 
 ```bash
 make check
@@ -257,7 +310,7 @@ git commit -m "feat(graph): dump the uncollapsed edge list for accuracy measurem
 **Interfaces:**
 - Produces: the crate `nexus-eval` with a binary of the same name. Tasks 3–7 add modules to it.
 
-- [ ] **Step 1: Write the failing boundary test**
+- [x] **Step 1: Write the failing boundary test**
 
 In `crates/nexus-cli/tests/boundaries.rs`, beside `nothing_but_the_composition_root_depends_on_the_fixture_generator`:
 
@@ -285,12 +338,12 @@ fn nothing_depends_on_the_evaluator() {
 }
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cargo test -p nexus-cli --test boundaries nothing_depends_on_the_evaluator`
 Expected: PASS trivially — `assert_forbidden` skips a `to` absent from the graph, exactly as its doc comment at `boundaries.rs:309` says. That is correct and expected; the test becomes load-bearing the moment the crate exists. Proceed.
 
-- [ ] **Step 3: Create the crate**
+- [x] **Step 3: Create the crate**
 
 `crates/nexus-eval/Cargo.toml`:
 
@@ -349,7 +402,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Add `"crates/nexus-eval"` to `members` in the workspace `Cargo.toml`. Do **not** add it to `[workspace.dependencies]` — nothing may depend on it.
 
-- [ ] **Step 4: `make check`, then commit**
+- [x] **Step 4: `make check`, then commit**
 
 Run: `make check`
 Expected: PASS. `nothing_depends_on_the_evaluator` is now load-bearing.
@@ -370,7 +423,7 @@ git commit -m "feat(eval): the crate that marks the graph's homework, depended o
 **Interfaces:**
 - Produces: `oracle::Oracle { defs: HashMap<String, Position>, refs: Vec<Reference>, files: HashSet<String> }`, `oracle::Position { file: String, line: i64 }`, `oracle::Reference { file: String, line: i64, symbol: String }`, and `Oracle::load(path: &Path) -> Result<Oracle, OracleError>`. Task 4 consumes it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 A hand-built index, so the reader is tested against bytes we control rather than against whatever an indexer happened to emit:
 
@@ -462,12 +515,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cargo test -p nexus-eval oracle`
 Expected: FAIL to compile — `cannot find type Oracle`.
 
-- [ ] **Step 3: Write the reader**
+- [x] **Step 3: Write the reader**
 
 ```rust
 use protobuf::Message;
@@ -559,12 +612,12 @@ impl Oracle {
 
 Add `thiserror = { workspace = true }` to the crate's dependencies.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cargo test -p nexus-eval oracle`
 Expected: PASS, 4 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/nexus-eval/src/oracle.rs crates/nexus-eval/Cargo.toml Cargo.lock
@@ -583,7 +636,7 @@ git commit -m "feat(eval): read a SCIP index, both range encodings, locals skipp
 - Consumes: `oracle::Oracle` (Task 3), `EdgeRecord`'s JSON shape (Task 1).
 - Produces: `matcher::Judged { site: (String, i64), tier: String, confidence: f64, correct: bool }`, `matcher::Comparison { judged: Vec<Judged>, sites_total: usize, excluded_non_project: usize, excluded_oracle_blind: usize }`, and `matcher::compare(&[edges::Edge], &Oracle) -> Comparison`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 #[cfg(test)]
@@ -669,12 +722,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cargo test -p nexus-eval matcher`
 Expected: FAIL to compile — `cannot find function compare`.
 
-- [ ] **Step 3: Write the NDJSON reader**
+- [x] **Step 3: Write the NDJSON reader**
 
 `crates/nexus-eval/src/edges.rs`:
 
@@ -715,7 +768,7 @@ pub fn load(path: &Path) -> std::io::Result<Vec<Edge>> {
 }
 ```
 
-- [ ] **Step 4: Write the matcher**
+- [x] **Step 4: Write the matcher**
 
 `crates/nexus-eval/src/matcher.rs`:
 
@@ -793,12 +846,12 @@ pub fn compare(edges: &[Edge], oracle: &Oracle) -> Comparison {
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cargo test -p nexus-eval matcher`
 Expected: PASS, 5 tests.
 
-- [ ] **Step 6: `make check`, then commit**
+- [x] **Step 6: `make check`, then commit**
 
 ```bash
 make check
@@ -818,7 +871,7 @@ git commit -m "feat(eval): match a bound destination by position, never by name"
 - Consumes: `matcher::Comparison`.
 - Produces: `metrics::wilson(k: u64, n: u64) -> (f64, f64)` returning `(low, high)`; `metrics::Scores { precision: Rate, recall: Rate, strict: Rate, f1: f64 }`; `metrics::Rate { value: f64, low: f64, high: f64, n: u64 }`; `metrics::score(&Comparison) -> Scores`. Task 6 reuses `wilson` and `Rate`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 The instrument is worthless unless it reproduces arithmetic done on paper:
 
@@ -905,12 +958,12 @@ with the helper, in the same module:
     }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cargo test -p nexus-eval metrics`
 Expected: FAIL to compile — `cannot find function wilson`.
 
-- [ ] **Step 3: Write the metrics**
+- [x] **Step 3: Write the metrics**
 
 ```rust
 use crate::matcher::Comparison;
@@ -998,12 +1051,12 @@ pub fn score(c: &Comparison) -> Scores {
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cargo test -p nexus-eval metrics`
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/nexus-eval/src/metrics.rs
@@ -1022,7 +1075,7 @@ git commit -m "feat(eval): precision, recall and strict accuracy, each with a Wi
 - Consumes: `matcher::Comparison`, `metrics::wilson`, `metrics::Rate`.
 - Produces: `metrics::brier(&Comparison) -> f64`, `metrics::ece(&[TierResult]) -> f64`, `metrics::TierResult { tier: String, claimed: f64, measured: Rate, verdict: Verdict, proposed: Option<f64> }`, `metrics::Verdict { Ok, Miscalibrated, UnderPowered }`, `metrics::calibrate(&Comparison) -> Vec<TierResult>`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
     #[test]
@@ -1092,12 +1145,12 @@ with the helper:
     }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cargo test -p nexus-eval metrics`
 Expected: FAIL to compile — `cannot find function brier`.
 
-- [ ] **Step 3: Write the calibration**
+- [x] **Step 3: Write the calibration**
 
 ```rust
 /// The Brier score: mean squared error of a probability claim.
@@ -1191,12 +1244,12 @@ pub fn ece(tiers: &[TierResult]) -> f64 {
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cargo test -p nexus-eval metrics`
 Expected: PASS, 9 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/nexus-eval/src/metrics.rs
@@ -1216,7 +1269,7 @@ git commit -m "feat(eval): calibration, with a corrected constant that refuses t
 - Consumes: everything above.
 - Produces: `report::Run { oracle: String, file_coverage: Rate, partial: bool, scores: Scores, brier: f64, ece: f64, tiers: Vec<TierResult>, excluded_non_project: usize, excluded_oracle_blind: usize }`, `report::build(...) -> Run`, `report::render(&Run) -> String`, and `nexus_eval::run(args)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
     #[test]
@@ -1242,12 +1295,12 @@ git commit -m "feat(eval): calibration, with a corrected constant that refuses t
     }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cargo test -p nexus-eval report`
 Expected: FAIL to compile.
 
-- [ ] **Step 3: Write the report**
+- [x] **Step 3: Write the report**
 
 ```rust
 /// Below this share of files indexed, the metrics are advisory rather than a measurement.
@@ -1323,12 +1376,12 @@ pub fn run(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<(), Box
 }
 ```
 
-- [ ] **Step 4: Run the tests, then `make check`**
+- [x] **Step 4: Run the tests, then `make check`**
 
 Run: `cargo test -p nexus-eval && make check`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/nexus-eval/src
@@ -1348,7 +1401,7 @@ git commit -m "feat(eval): the report, and the coverage check that stops a parti
 - Consumes: the binary from Task 7.
 - Produces: `make eval`, and a committed baseline at `docs/eval/baseline.json`.
 
-- [ ] **Step 1: Write the runner**
+- [x] **Step 1: Write the runner**
 
 `scripts/eval.sh`:
 
@@ -1396,12 +1449,12 @@ eval: ## measure resolution accuracy against a SCIP oracle (needs external index
 .PHONY: eval
 ```
 
-- [ ] **Step 2: Run it on this repository**
+- [x] **Step 2: Run it on this repository**
 
 Run: `make eval`
 Expected: a report. **Record the actual numbers; do not predict them.** If `rust-analyzer` is absent, `scripts/eval.sh` exits 1 with the reason — install it with `rustup component add rust-analyzer` rather than making the script tolerate its absence.
 
-- [ ] **Step 3: Commit the baseline and what it showed**
+- [x] **Step 3: Commit the baseline and what it showed**
 
 ```bash
 make eval > /dev/null; nexus-eval --edges target/eval/edges.ndjson \
@@ -1410,7 +1463,7 @@ git add Makefile scripts/eval.sh docs/eval/
 git commit -m "feat(eval): make eval, and the first measurement of whether the graph is right"
 ```
 
-- [ ] **Step 4: Write down what it found**
+- [x] **Step 4: Write down what it found**
 
 Create `docs/eval/README.md` recording: the oracle and its pinned version, the commit measured, the four scores with intervals, the Brier score and ECE, and every tier verdict. **Then update `docs/architecture.md` and ADR-003's tier tables**, replacing "None of these confidences has been measured" with the measured values and their intervals — and for any tier the run marks `UnderPowered`, say so rather than quoting a number the evidence cannot carry.
 
