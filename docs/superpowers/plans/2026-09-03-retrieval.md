@@ -1472,6 +1472,121 @@ Claude-Session: https://claude.ai/code/session_014cmQc2a8FrfdFr7WzGM4iC"
 
 ---
 
+## Task 8: The two call sites the plan missed, and the index it never used
+
+**Added after Task 7's measurement blocked.** The plan's headline goal is a flat curve. Measured
+on this repository after Tasks 1–6: **0 facts 17 ms, 10,000 35 ms, 200,000 360 ms** — 21×, not
+flat. Task 7 stopped rather than document a goal that is not met.
+
+Two causes. The first is a planning miss: `facts(project_id, None)` was audited in
+`engine/query.rs` only, and two more sit on the `--task` request path in `context/`. The second
+is that `facts_for_seeds` never used the index it was written for.
+
+**Files:**
+- Modify: `crates/nexus-core/src/context/signals.rs:129`
+- Modify: `crates/nexus-core/src/context/seeds.rs:337`
+- Modify: `crates/nexus-store/src/lib.rs` — `facts_for_seeds`'s SQL
+- Test: `crates/nexus-core/tests/memory_scale.rs`
+
+**Interfaces:** consumes `Store::facts_for_seeds` (Task 1) and `seeds::targets` (Task 5).
+
+- [ ] **Step 1: Make the index actually get used**
+
+`EXPLAIN QUERY PLAN` shows `facts_for_seeds` planned via `idx_facts_key`, not
+`idx_facts_subject`. The cause is the `OR` between the `IN` arm and the range arms: SQLite will
+not drive a single index scan from a disjunction of a set-membership test and N ranges.
+
+Rewrite the query as a `UNION` of index-seekable arms rather than one `WHERE ... OR ...`. Each
+arm then plans independently and can use `idx_facts_subject`:
+
+```sql
+SELECT <cols> FROM facts
+ WHERE project_id = ?1 AND superseded_by IS NULL AND invalidated_at IS NULL
+   AND subject IN (<exact set>)
+UNION
+SELECT <cols> FROM facts
+ WHERE project_id = ?1 AND superseded_by IS NULL AND invalidated_at IS NULL
+   AND subject >= ?a AND subject < ?b
+UNION
+ ... one arm per seed ...
+ORDER BY fact_key
+```
+
+`UNION` (not `UNION ALL`) also removes the duplicate rows a fact matching both arms currently
+produces, which the `OR` form relied on the database to collapse.
+
+**Verify with `EXPLAIN QUERY PLAN` that every arm reports `idx_facts_subject`, and put the
+output in your report.** If it still does not, fall back to `INDEXED BY idx_facts_subject` on
+each arm and say so — but try the `UNION` first, because a hint that the planner disagrees with
+is a future regression waiting for a schema change.
+
+Note `idx_facts_subject` is a **partial** index (`WHERE invalidated_at IS NULL`); every arm must
+keep that predicate or SQLite will refuse it.
+
+- [ ] **Step 2: Scope the signal index**
+
+`crates/nexus-core/src/context/signals.rs:129` loads every fact to build "is there a fact about
+this symbol" for the candidates in hand. It already knows those candidates. Pass their FQNs and
+call `facts_for_seeds` instead of `facts(project_id, None)`.
+
+Read the function to find what the candidate list is called at that point; do not guess a name.
+The filter immediately below the call (`let subject = f.subject?`) stays as it is.
+
+- [ ] **Step 3: Invert the fact-subject seed source**
+
+`crates/nexus-core/src/context/seeds.rs:337` asks "does the request text mention any fact's
+subject?" by scanning every fact and testing `lower.contains(&subject.to_lowercase())`. That is
+the inverse of an indexed query, and it is why it costs 223 ms at 200,000 facts.
+
+Invert it: take the words the request already yields from `targets(&req.text)` — the same list
+stage 2 uses everywhere else — and ask `facts_for_seeds` for facts whose subject matches any of
+them. A subject the text names is, by construction, a target of that text.
+
+**This narrows behaviour and you must say so in the report.** The old form matched a subject
+appearing anywhere in the text, including one that `targets` filters out — a stopword, a word
+under four characters, or a bare lowercase word matching more than one symbol. The new form
+matches what the request actually seeds on. That is the intended trade: an unbounded scan of
+every fact on every request, for the same rule the rest of stage 2 already applies. If a test
+depends on the old breadth, report it rather than widening `targets` to accommodate it.
+
+- [ ] **Step 4: Prove the curve is flat**
+
+Task 7 Step 1b's `#[ignore]`d test is the gate. Add it now if Task 7 has not landed it, then
+run the measurement again:
+
+```
+cargo test -p nexus-core --test memory_scale -- --ignored --nocapture
+```
+
+Then re-run Task 7's Step 1 measurement by hand at 0 / 10,000 / 200,000 facts. **Report all
+three numbers whatever they are.** The target is within 20% of the 0-fact baseline. If it is
+still not flat, stop and report which call site is still dominating — `EXPLAIN QUERY PLAN` and
+a profile beat another guess.
+
+- [ ] **Step 5: `make check` and commit**
+
+```bash
+make check
+git add crates/nexus-store/src/lib.rs crates/nexus-core/src/context/signals.rs crates/nexus-core/src/context/seeds.rs crates/nexus-core/tests/memory_scale.rs
+git commit -m "perf(context): the last two unscoped fact loads, and the index that was never used
+
+The plan that removed the O(all facts) scan from the task path left two of them
+behind, in SignalIndex::build and in stage 2's fact-subject seed source. Both
+are on every --task request and each cost ~223ms at 200,000 facts — the same
+number the plan was written to remove, still paid twice. They were missed
+because the audit grepped engine/query.rs and not the crate.
+
+facts_for_seeds also never used idx_facts_subject: SQLite will not drive one
+index scan from an OR of a set-membership test and N ranges, so it fell back to
+idx_facts_key. Written as a UNION of index-seekable arms it plans correctly.
+
+Measured on this repository, 0 / 10,000 / 200,000 facts: <fill in from Step 4>.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ## Task 7: Record what changed, and measure that it worked
 
 **Files:**
