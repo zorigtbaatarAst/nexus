@@ -20,7 +20,7 @@ The hard part of the second is *anchoring*, which the first has no concept of. *
 is designed and not built**; the anchoring half of it now exists as the Context Engine's text
 seeding over `ui_strings`. See [`docs/investigation.md`](docs/investigation.md).
 
-**Status: all six roadmap phases ship.** Eighteen crates, ~32k lines, 495 tests. On top of
+**Status: all six roadmap phases ship.** Eighteen crates, ~32k lines, 501 tests. On top of
 the original cascade — `scan`, `rescan`, `status`, `changes`, `impact`, `graph`, `ask`,
 `analyze`, `doctor` — the Context Engine (`context`), the fact lifecycle with Markdown export
 and file-based sharing (`fact`, `memory`, `share`), and the verification gate (`verify`) all
@@ -179,6 +179,23 @@ that is hard to attribute.
   language-keyed map kept only whichever registered last, so bumping the TypeScript analyzer
   invalidated nothing at all. `nexus doctor` reads the analyzers for its language line, not
   this map: a key shaped to be unique is not a name to show anyone.
+
+- **Two analyzers can emit the same FQN, and `RawSymbol::authority` decides who owns the
+  row.** `symbols` is `UNIQUE (project_id, fqn)`, and a `.graphqls` file *declares*
+  `Query.vehicles` while a Spring `@QueryMapping` handler *implements* it — both must emit a
+  symbol there, because it is the join key the frontend points at. Every symbol is
+  `Declares` but that one, and the field is required rather than defaulted so that the next
+  analyzer to project a symbol onto someone else's coordinate has to answer the question.
+  Until this existed the winner was whichever file a scan re-parsed last: a rescan touching
+  only the resolver rewrote the schema's signature and recorded the field as `ADDED`, on a
+  ledger that is append-only. `Store::replace_symbols` applies the rule in SQL and returns
+  what it refused, because a refused write is not a change and the ledger must not say it
+  was. Yielding is not silence — a project that generates its schema has only the handler,
+  and its row stands; delete the schema and `rescan` re-parses the files that supplied that
+  row's edges so the implementation can take the coordinate back. The same split is why
+  `symbol_edges.file_id` exists: **an edge belongs to the parse that emitted it, not to the
+  file that owns its source symbol**, and deleting by the latter silently multiplied a
+  `routes` edge on every rescan of a file nobody had touched. See docs/data-model.md.
 
 - **`sig_hash` has one construction, and it lives in `nexus-lang`.** Analyzers supply the
   signature and the annotations; none of them hashes. There were four implementations and

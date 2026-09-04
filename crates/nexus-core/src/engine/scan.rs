@@ -74,8 +74,11 @@ impl Engine {
                 error.as_deref(),
             )?;
             if let Some(syms) = symbols {
-                symbols_indexed +=
+                // A refused write indexed nothing: an `implements` symbol that yielded to a
+                // declaration elsewhere left no row of its own.
+                let refused =
                     Store::replace_symbols(&tx, self.project_id, file_id, scan_id, &syms)?;
+                symbols_indexed += syms.len().saturating_sub(refused.len());
             }
             // What a person sees on the screen (roadmap 5.5).
             if let Some(rows) = ui_rows(&self.root, &file.path) {

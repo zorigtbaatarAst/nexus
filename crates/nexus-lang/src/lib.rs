@@ -10,7 +10,7 @@
 // an assertion that cannot unwrap is not an assertion.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-use nexus_types::{EdgeType, Language, SymbolKind};
+use nexus_types::{Authority, EdgeType, Language, SymbolKind};
 use std::collections::BTreeMap;
 
 #[derive(Debug, thiserror::Error)]
@@ -41,6 +41,9 @@ pub struct RawSymbol {
     /// blake3 of the normalized body. Moving alone means a behaviour change.
     pub body_hash: String,
     pub annotations: Vec<String>,
+    /// Whether this file states the contract this symbol names, or merely implements it.
+    /// Almost always `Declares`; see `Authority` for the one shape that is not.
+    pub authority: Authority,
 }
 
 /// The one construction for `RawSymbol::sig_hash`, in every language.

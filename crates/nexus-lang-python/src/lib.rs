@@ -23,7 +23,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use nexus_lang::{LangError, LanguageAnalyzer, ParsedFile, RawEdge, RawSymbol, SourceFile};
-use nexus_types::{EdgeType, Language, SymbolKind};
+use nexus_types::{Authority, EdgeType, Language, SymbolKind};
 use tree_sitter::{Node, Parser};
 
 pub struct PythonAnalyzer;
@@ -249,6 +249,7 @@ fn push_symbol(
         sig_hash: nexus_lang::sig_hash(&sig, &annotations),
         body_hash: hash(&[&body]),
         annotations,
+        authority: Authority::Declares,
     });
 }
 

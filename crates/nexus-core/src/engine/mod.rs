@@ -351,6 +351,7 @@ fn to_new_symbol(s: &nexus_lang::RawSymbol) -> NewSymbol {
         sig_hash: s.sig_hash.clone(),
         body_hash: s.body_hash.clone(),
         annotations: s.annotations.clone(),
+        authority: s.authority,
     }
 }
 

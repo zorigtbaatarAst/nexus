@@ -201,12 +201,49 @@ CREATE TABLE symbols (
   sig_hash           TEXT    NOT NULL,   -- signature + annotations   → API change
   body_hash          TEXT    NOT NULL,   -- normalized body           → behaviour change
   annotations_json   TEXT,               -- ["@Transactional","@PostMapping(\"/pay\")"]
+  authority          TEXT    NOT NULL DEFAULT 'declares', -- declares | implements
   first_seen_scan_id INTEGER NOT NULL REFERENCES scans(id),
   last_seen_scan_id  INTEGER NOT NULL REFERENCES scans(id),
   deleted            INTEGER NOT NULL DEFAULT 0,
   UNIQUE (project_id, fqn)
 );                                                        -- MUTABLE, soft-delete
 ```
+
+**`UNIQUE (project_id, fqn)` means two analyzers can contend for one row, and `authority`
+says who wins.** A `.graphqls` file *declares* `Query.vehicles`; a Spring `@QueryMapping`
+handler *implements* it. Both emit a symbol at that coordinate — it is the join key the
+frontend also points at — so one of them owns the row. `Store::replace_symbols` applies the
+precedence in the upsert's `WHERE`, and it has to be there rather than in the caller: on a
+partial rescan the file that declares an FQN may not be in the scan at all, so only the
+stored row can say who owns it.
+
+| incoming | stored | outcome |
+|---|---|---|
+| `declares` | anything | wins |
+| `implements` | `implements` | wins |
+| `implements` | same file | wins — a file always owns its own updates |
+| `implements` | deleted | wins — nothing live holds the name |
+| `implements` | live `declares`, another file | **refused** |
+
+A refused write is returned to the caller rather than swallowed, because it is not a change
+and `changes` is append-only: recording one puts a permanent phantom in the ledger that
+regression detection reads back. Yielding is not silence — a project that generates its
+schema at build time has only the handler, and its `implements` row is the one that stands.
+Nor is it permanent: deleting the declaration soft-deletes its row, and `rescan` re-parses
+the files that supplied edges for it (`Store::edge_suppliers_for_file`) so the
+implementation can take the coordinate back. Without that step the symbol stayed buried
+until the next full scan, because the implementing file had not itself changed.
+
+Two `declares` rows at one FQN are still last-writer-wins. That is not the seam case — it
+means two files really do declare the same thing, which is a duplicate to fix rather than a
+precedence to arbitrate — and nothing about `authority` makes it quieter.
+
+Upgrading a pre-9 database records one phantom `ADDED` for a contested coordinate: rows
+predating the column default to `declares`, so the schema's write is an ordinary overwrite
+of a row the resolver happened to own, and the forced full rescan reports the move. The end
+state is correct, and it happens once.
+
+See `nexus_types::Authority` and [ADR-014](architecture-decisions.md#adr-014-join-the-stack-at-the-http-contract).
 
 **Two hashes per symbol is the single most load-bearing decision in the schema.**
 `sig_hash` covers the signature and annotations; `body_hash` covers the normalized body
@@ -244,7 +281,8 @@ CREATE TABLE symbol_edges (             -- the dependency graph
                        'external','sibling','unresolved')),
   confidence        REAL    NOT NULL CHECK (confidence BETWEEN 0 AND 1),
   site_line         INTEGER,
-  last_seen_scan_id INTEGER NOT NULL REFERENCES scans(id)
+  last_seen_scan_id INTEGER NOT NULL REFERENCES scans(id),
+  file_id           INTEGER REFERENCES files(id),  -- the parse that produced it; NULL if none
 );                                                        -- DERIVED
 ```
 
@@ -253,6 +291,14 @@ marks an edge produced by matching a canonical `METHOD /path/:p` on both sides. 
 table of its own: a backend route is already a symbol with `kind='route'`, so a frontend call
 site emits an edge with `dst_fqn_hint = 'GET /api/cart/:p'` and the existing Tier-3
 unresolved sweep matches it. See [investigation.md](investigation.md) §3.
+
+`file_id` is the edge's provenance — the file whose parse emitted it — and it is what
+`replace_edges_for_file` deletes by. Deleting by the file that owns the *source symbol*
+looks equivalent and is not: a symbol can be owned by one file while another supplies its
+edges (see `authority` above), and the rescan of that other file then deleted nothing and
+inserted a second copy, growing the edge every time an untouched file was rescanned. NULL
+means no file parse produced it — the external dependency graph, which is not per-file and
+must not be swept away by one.
 
 Carrying `resolution` and `confidence` on every edge is what lets an impact result explain
 *why* it believes something is affected, and lets a calling agent discount a chain that

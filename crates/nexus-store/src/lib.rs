@@ -17,7 +17,7 @@ use nexus_types::*;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::Path;
 
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_init.sql")),
     (2, include_str!("../migrations/0002_graphql_seam.sql")),
@@ -27,6 +27,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (6, include_str!("../migrations/0006_external_graph.sql")),
     (7, include_str!("../migrations/0007_fact_lifecycle.sql")),
     (8, include_str!("../migrations/0008_memory_version.sql")),
+    (9, include_str!("../migrations/0009_symbol_ownership.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -100,6 +101,9 @@ pub struct NewSymbol {
     pub sig_hash: String,
     pub body_hash: String,
     pub annotations: Vec<String>,
+    /// A row an analyzer only implements never takes the FQN from one that declares it.
+    /// See `nexus_types::Authority` and docs/data-model.md §`symbols`.
+    pub authority: Authority,
 }
 
 /// An edge as an analyzer produced it, before resolution.
@@ -818,13 +822,18 @@ impl Store {
     }
 
     /// Replace the symbol set of one file. Symbols absent from `symbols` are soft-deleted.
+    ///
+    /// Returns the FQNs whose write was **refused** — an `implements` symbol reaching for a
+    /// name a live `declares` row in another file already holds. The caller needs them
+    /// because a refused write is not a change: the ledger must not record one either, and
+    /// it is append-only, so a phantom recorded here is permanent.
     pub fn replace_symbols(
         tx: &Transaction<'_>,
         project_id: ProjectId,
         file_id: FileId,
         scan_id: ScanId,
         symbols: &[NewSymbol],
-    ) -> Result<usize> {
+    ) -> Result<Vec<String>> {
         let keep: Vec<&str> = symbols.iter().map(|s| s.fqn.as_str()).collect();
 
         // Soft-delete what this file no longer defines.
@@ -848,6 +857,7 @@ impl Store {
 
         // Containers come first in source order, so a parent is always inserted before its
         // children and `parent_id` resolves in a single pass.
+        let mut refused = Vec::new();
         for s in symbols {
             let parent_id: Option<i64> = match &s.parent_fqn {
                 Some(p) => tx
@@ -864,34 +874,71 @@ impl Store {
             } else {
                 Some(serde_json::to_string(&s.annotations)?)
             };
-            tx.execute(
+            // The `WHERE` is the precedence rule, and it is here rather than in the caller
+            // because a partial rescan is exactly when it matters: the file that declares an
+            // FQN may not be in this scan at all, so only the row already stored can say who
+            // owns it. See `nexus_lang::Authority`.
+            //
+            //   incoming declares          → wins, always
+            //   stored implements          → an implementation may replace another
+            //   same file                  → a file always owns its own updates
+            //   stored is deleted          → nothing live holds the name; revive it
+            //
+            // Anything else is an implementation reaching for a name a live declaration
+            // holds, and it is refused rather than applied.
+            let written = tx.execute(
                 "INSERT INTO symbols (project_id, file_id, parent_id, kind, name, fqn, signature,
                                       visibility, start_line, end_line, sig_hash, body_hash,
-                                      annotations_json, first_seen_scan_id, last_seen_scan_id, deleted)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?14,0)
+                                      annotations_json, first_seen_scan_id, last_seen_scan_id,
+                                      deleted, authority)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?14,0,?15)
                  ON CONFLICT(project_id, fqn) DO UPDATE SET
                    file_id=excluded.file_id, parent_id=excluded.parent_id, kind=excluded.kind,
                    name=excluded.name, signature=excluded.signature, visibility=excluded.visibility,
                    start_line=excluded.start_line, end_line=excluded.end_line,
                    sig_hash=excluded.sig_hash, body_hash=excluded.body_hash,
-                   annotations_json=excluded.annotations_json,
-                   last_seen_scan_id=excluded.last_seen_scan_id, deleted=0",
+                   annotations_json=excluded.annotations_json, authority=excluded.authority,
+                   last_seen_scan_id=excluded.last_seen_scan_id, deleted=0
+                 WHERE excluded.authority = 'declares'
+                    OR symbols.authority = 'implements'
+                    OR symbols.file_id = excluded.file_id
+                    OR symbols.deleted = 1",
                 params![
-                    project_id, file_id, parent_id, s.kind.as_str(), s.name, s.fqn, s.signature,
-                    s.visibility, s.start_line as i64, s.end_line as i64, s.sig_hash, s.body_hash,
-                    annotations, scan_id
+                    project_id,
+                    file_id,
+                    parent_id,
+                    s.kind.as_str(),
+                    s.name,
+                    s.fqn,
+                    s.signature,
+                    s.visibility,
+                    s.start_line as i64,
+                    s.end_line as i64,
+                    s.sig_hash,
+                    s.body_hash,
+                    annotations,
+                    scan_id,
+                    s.authority.as_str()
                 ],
             )?;
+            // Zero rows touched means the `WHERE` above declined the update — the only way
+            // an insert reaches here without changing anything.
+            if written == 0 {
+                refused.push(s.fqn.clone());
+            }
         }
-        Ok(symbols.len())
+        Ok(refused)
     }
 
     // ── edges ────────────────────────────────────────────────
 
-    /// Replace the outgoing edges of every symbol defined in one file.
+    /// Replace the edges one file's parse produced.
     ///
     /// Edges are `DERIVED` (docs/data-model.md §2c): dropping and recomputing them is
-    /// always safe, which is why an analyzer upgrade needs no data migration.
+    /// always safe, which is why an analyzer upgrade needs no data migration. Safe only if
+    /// the drop is complete, though — the delete is by the edge's own `file_id` and not by
+    /// the file that owns its source symbol, because those stopped being the same thing
+    /// once a symbol could be owned by another file.
     pub fn replace_edges_for_file(
         tx: &Transaction<'_>,
         project_id: ProjectId,
@@ -900,8 +947,7 @@ impl Store {
         edges: &[NewEdge],
     ) -> Result<usize> {
         tx.execute(
-            "DELETE FROM symbol_edges
-             WHERE src_symbol_id IN (SELECT id FROM symbols WHERE file_id = ?1)",
+            "DELETE FROM symbol_edges WHERE file_id = ?1",
             params![file_id],
         )?;
         let mut written = 0usize;
@@ -916,13 +962,51 @@ impl Store {
             let Some(src) = src else { continue };
             tx.execute(
                 "INSERT INTO symbol_edges (project_id, src_symbol_id, dst_symbol_id, dst_fqn_hint,
-                                           edge_type, resolution, confidence, site_line, last_seen_scan_id)
-                 VALUES (?1, ?2, NULL, ?3, ?4, 'unresolved', 0.0, ?5, ?6)",
-                params![project_id, src, e.dst_hint, e.edge_type.as_str(), e.site_line as i64, scan_id],
+                                           edge_type, resolution, confidence, site_line,
+                                           last_seen_scan_id, file_id)
+                 VALUES (?1, ?2, NULL, ?3, ?4, 'unresolved', 0.0, ?5, ?6, ?7)",
+                params![
+                    project_id,
+                    src,
+                    e.dst_hint,
+                    e.edge_type.as_str(),
+                    e.site_line as i64,
+                    scan_id,
+                    file_id
+                ],
             )?;
             written += 1;
         }
         Ok(written)
+    }
+
+    /// Live files that supplied edges for symbols another file owns.
+    ///
+    /// Normally a symbol's edges come from the file that defines it, and this returns
+    /// nothing. It answers for the one shape where that is false: a file *implements* a
+    /// coordinate another file *declares*, so the row belongs to the declaring file while
+    /// the edges out of it were emitted by the implementing one. Deleting the declaration
+    /// soft-deletes the row, and the implementing file — unchanged, so never re-parsed —
+    /// could not stand in for it. Its route stayed buried until a full scan.
+    pub fn edge_suppliers_for_file(
+        &self,
+        project_id: ProjectId,
+        path: &str,
+    ) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT supplier.path
+               FROM symbol_edges e
+               JOIN symbols s        ON s.id = e.src_symbol_id
+               JOIN files   owner    ON owner.id = s.file_id
+               JOIN files   supplier ON supplier.id = e.file_id
+              WHERE owner.project_id = ?1 AND owner.path = ?2
+                AND e.file_id <> s.file_id
+                AND supplier.deleted = 0",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id, path], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// Turn `dst_fqn_hint` into a symbol id.
@@ -1081,9 +1165,10 @@ impl Store {
                     for dst in &many[1..] {
                         tx.execute(
                             "INSERT INTO symbol_edges (project_id, src_symbol_id, dst_symbol_id, dst_fqn_hint,
-                                                       edge_type, resolution, confidence, site_line, last_seen_scan_id)
+                                                       edge_type, resolution, confidence, site_line,
+                                                       last_seen_scan_id, file_id)
                              SELECT project_id, src_symbol_id, ?2, dst_fqn_hint, ?3, 'heuristic', ?4,
-                                    site_line, last_seen_scan_id
+                                    site_line, last_seen_scan_id, file_id
                              FROM symbol_edges WHERE id = ?1",
                             params![edge_id, dst, edge_type, conf],
                         )?;
@@ -1140,9 +1225,9 @@ impl Store {
                                             } else {
                                                 tx.execute(
                                                     "INSERT INTO symbol_edges (project_id, src_symbol_id, dst_symbol_id, dst_fqn_hint,
-                                                                               edge_type, resolution, confidence, site_line, last_seen_scan_id)
+                                                                               edge_type, resolution, confidence, site_line, last_seen_scan_id, file_id)
                                                      SELECT project_id, src_symbol_id, ?2, dst_fqn_hint, ?3, 'heuristic', ?4,
-                                                            site_line, last_seen_scan_id
+                                                            site_line, last_seen_scan_id, file_id
                                                      FROM symbol_edges WHERE id = ?1",
                                                     params![edge_id, dst, edge_type, conf],
                                                 )?;
@@ -1215,9 +1300,9 @@ impl Store {
                                 for dst in &many[1..] {
                                     tx.execute(
                                         "INSERT INTO symbol_edges (project_id, src_symbol_id, dst_symbol_id, dst_fqn_hint,
-                                                                   edge_type, resolution, confidence, site_line, last_seen_scan_id)
+                                                                   edge_type, resolution, confidence, site_line, last_seen_scan_id, file_id)
                                          SELECT project_id, src_symbol_id, ?2, dst_fqn_hint, ?3, 'heuristic', ?4,
-                                                site_line, last_seen_scan_id
+                                                site_line, last_seen_scan_id, file_id
                                          FROM symbol_edges WHERE id = ?1",
                                         params![edge_id, dst, edge_type, conf],
                                     )?;
@@ -3532,6 +3617,7 @@ mod tests {
                 sig_hash: "s1".into(),
                 body_hash: body_hash.into(),
                 annotations: vec![],
+                authority: Authority::Declares,
             }],
         )
         .expect("symbols");
@@ -3977,6 +4063,188 @@ mod tests {
         );
     }
 
+    /// The precedence rule, one branch at a time.
+    ///
+    /// Two analyzers reach the same FQN — a `.graphqls` file declares `Query.vehicles` and a
+    /// `@QueryMapping` handler implements it — and `symbols` is unique on FQN, so one of
+    /// them owns the row. See `nexus_lang::Authority`.
+    #[test]
+    fn a_declaration_holds_its_fqn_against_an_implementation_and_yields_to_none() {
+        let mut s = Store::open_in_memory().expect("open");
+        let p = s
+            .ensure_project("/tmp/auth", "auth", "git")
+            .expect("project");
+        let (scan, _) = s
+            .begin_scan(p, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
+
+        let file = |tx: &Transaction<'_>, path: &str| {
+            Store::upsert_file(
+                tx,
+                p,
+                scan,
+                path,
+                None,
+                "h1",
+                10,
+                Some(1),
+                None,
+                ParseStatus::Ok,
+                None,
+            )
+            .expect("upsert")
+        };
+        let sym = |authority: Authority, signature: &str| NewSymbol {
+            kind: SymbolKind::Route,
+            name: "vehicles".into(),
+            fqn: "graphql:Query.vehicles".into(),
+            parent_fqn: None,
+            signature: Some(signature.into()),
+            visibility: None,
+            start_line: 1,
+            end_line: 1,
+            sig_hash: signature.into(),
+            body_hash: "b".into(),
+            annotations: vec![],
+            authority,
+        };
+        let signature_now = |s: &Store| -> String {
+            s.conn
+                .query_row(
+                    "SELECT signature FROM symbols WHERE project_id = ?1 AND fqn = ?2",
+                    params![p, "graphql:Query.vehicles"],
+                    |r| r.get::<_, String>(0),
+                )
+                .expect("row")
+        };
+
+        // An implementation with nothing to yield to creates the row: a project that
+        // generates its schema has only the handler, and its route must still exist.
+        let tx = s.transaction().expect("tx");
+        let java = file(&tx, "C.java");
+        let refused =
+            Store::replace_symbols(&tx, p, java, scan, &[sym(Authority::Implements, "graphql")])
+                .expect("w");
+        tx.commit().expect("commit");
+        assert!(refused.is_empty(), "nothing held the name: {refused:?}");
+        assert_eq!(signature_now(&s), "graphql");
+
+        // A declaration takes it, whichever order the two files were scanned in.
+        let tx = s.transaction().expect("tx");
+        let schema = file(&tx, "s.graphqls");
+        let refused = Store::replace_symbols(
+            &tx,
+            p,
+            schema,
+            scan,
+            &[sym(Authority::Declares, "vehicles: Page")],
+        )
+        .expect("w");
+        tx.commit().expect("commit");
+        assert!(refused.is_empty(), "a declaration always wins: {refused:?}");
+        assert_eq!(signature_now(&s), "vehicles: Page");
+
+        // And the implementation cannot take it back — this is the rescan-of-one-file case
+        // that recorded a phantom `ADDED` against an append-only ledger.
+        let tx = s.transaction().expect("tx");
+        let refused =
+            Store::replace_symbols(&tx, p, java, scan, &[sym(Authority::Implements, "graphql")])
+                .expect("w");
+        tx.commit().expect("commit");
+        assert_eq!(refused, vec!["graphql:Query.vehicles".to_string()]);
+        assert_eq!(
+            signature_now(&s),
+            "vehicles: Page",
+            "the file that declares the coordinate still owns it"
+        );
+
+        // A declaration replaces a declaration: an ordinary edit to the schema still lands.
+        let tx = s.transaction().expect("tx");
+        let refused = Store::replace_symbols(
+            &tx,
+            p,
+            schema,
+            scan,
+            &[sym(Authority::Declares, "vehicles: X")],
+        )
+        .expect("w");
+        tx.commit().expect("commit");
+        assert!(refused.is_empty());
+        assert_eq!(signature_now(&s), "vehicles: X");
+    }
+
+    #[test]
+    fn an_implementation_revives_an_fqn_whose_declaration_was_deleted() {
+        // Deleting the `.graphqls` file soft-deletes its rows. The handler still exists, so
+        // its route must come back rather than stay buried under a tombstone.
+        let mut s = Store::open_in_memory().expect("open");
+        let p = s.ensure_project("/tmp/rev", "rev", "git").expect("project");
+        let (scan, _) = s
+            .begin_scan(p, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
+        let sym = |authority: Authority| NewSymbol {
+            kind: SymbolKind::Route,
+            name: "vehicles".into(),
+            fqn: "graphql:Query.vehicles".into(),
+            parent_fqn: None,
+            signature: Some(authority.as_str().into()),
+            visibility: None,
+            start_line: 1,
+            end_line: 1,
+            sig_hash: "s".into(),
+            body_hash: "b".into(),
+            annotations: vec![],
+            authority,
+        };
+
+        let tx = s.transaction().expect("tx");
+        let schema = Store::upsert_file(
+            &tx,
+            p,
+            scan,
+            "s.graphqls",
+            None,
+            "h1",
+            10,
+            Some(1),
+            None,
+            ParseStatus::Ok,
+            None,
+        )
+        .expect("upsert");
+        let java = Store::upsert_file(
+            &tx,
+            p,
+            scan,
+            "C.java",
+            None,
+            "h1",
+            10,
+            Some(1),
+            None,
+            ParseStatus::Ok,
+            None,
+        )
+        .expect("upsert");
+        Store::replace_symbols(&tx, p, schema, scan, &[sym(Authority::Declares)]).expect("w");
+        // The schema file loses the symbol, which soft-deletes it.
+        Store::replace_symbols(&tx, p, schema, scan, &[]).expect("w");
+        let refused =
+            Store::replace_symbols(&tx, p, java, scan, &[sym(Authority::Implements)]).expect("w");
+        tx.commit().expect("commit");
+
+        assert!(refused.is_empty(), "a tombstone holds no name: {refused:?}");
+        let live: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM live_symbols WHERE project_id = ?1 AND fqn = ?2",
+                params![p, "graphql:Query.vehicles"],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(live, 1, "the handler's route is live again");
+    }
+
     /// One call site, three candidate destinations — the shape the bare-member tier
     /// produces for `x.save()` when three symbols answer to `save`.
     ///
@@ -4018,6 +4286,7 @@ mod tests {
             sig_hash: "sig".into(),
             body_hash: "body".into(),
             annotations: Vec::new(),
+            authority: Authority::Declares,
         };
         Store::replace_symbols(
             &tx,
@@ -4111,6 +4380,7 @@ mod tests {
             sig_hash: "sig".into(),
             body_hash: "body".into(),
             annotations: Vec::new(),
+            authority: Authority::Declares,
         };
         Store::replace_symbols(
             &tx,

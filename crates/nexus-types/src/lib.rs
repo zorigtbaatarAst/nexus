@@ -15,6 +15,40 @@ pub type ScanId = i64;
 pub type FileId = i64;
 pub type SymbolId = i64;
 
+/// Which file's version of a symbol survives when two of them name the same FQN.
+///
+/// Symbols are unique on FQN, and two analyzers can legitimately reach the same one. A
+/// `.graphqls` file *declares* `Query.vehicles`; a Spring `@QueryMapping` handler
+/// *implements* it. Both must emit a symbol at that coordinate — it is the join key the
+/// frontend also points at — so exactly one of them owns the row.
+///
+/// Without a stated rule the winner was whichever file a scan happened to re-parse last: a
+/// rescan touching only the resolver took the coordinate away from the schema and reported
+/// the field as newly `ADDED`, on a ledger that is append-only. ADR-014 already decided the
+/// precedence — the schema is the contract — and this is where an analyzer says which side
+/// of it a symbol is on.
+///
+/// Yielding is not silence. A project that generates its schema at build time has only the
+/// handler, and its route symbol stands: an `Implements` symbol creates the row when nothing
+/// has declared it, and may replace another `Implements`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Authority {
+    /// This file states the contract. It wins. Almost every symbol is this.
+    Declares,
+    /// This file implements a contract another file may state. It yields to a `Declares` at
+    /// the same FQN, and stands in when there is none.
+    Implements,
+}
+
+impl Authority {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Authority::Declares => "declares",
+            Authority::Implements => "implements",
+        }
+    }
+}
+
 /// The five characters that end an identifier and start the next segment, across every
 /// language this project indexes: `:` (Rust `::`, `graphql:`), `#` (member), `.` (Java
 /// package, TS `Class.method`), `/` (TS/JS module path), `(` (a signature). Measured across

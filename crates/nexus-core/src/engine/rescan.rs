@@ -139,6 +139,31 @@ impl Engine {
         // invents a repository full of "new" symbols.
         let renames = detect_renames(&stored, &changed, &mut deleted_paths);
 
+        // A deleted file can invalidate an untouched one. Where a file *implements* a
+        // coordinate the deleted file *declared*, the row belonged to the declaration and
+        // the edges out of it came from the implementation — so deleting the declaration
+        // buries a symbol the surviving file can still supply. Re-parsing that file is what
+        // lets it stand in. Nothing else produces this shape, so on an ordinary deletion
+        // this finds nothing. See `Store::edge_suppliers_for_file`.
+        let already: BTreeSet<String> = changed.iter().map(|c| c.path.clone()).collect();
+        let mut supplier_paths: BTreeSet<String> = BTreeSet::new();
+        for path in &deleted_paths {
+            for supplier in self.store.edge_suppliers_for_file(self.project_id, path)? {
+                if !already.contains(&supplier) && !deleted_paths.contains(&supplier) {
+                    supplier_paths.insert(supplier);
+                }
+            }
+        }
+        for path in supplier_paths {
+            match hashed_file(&self.root, &path) {
+                Some(file) => changed.push(file),
+                // Unreadable now, so it cannot stand in for anything. The next scan sees it.
+                None => warnings.push(format!(
+                    "{path} supplies symbols a deleted file owned, but could not be re-read"
+                )),
+            }
+        }
+
         if changed.is_empty() && deleted_paths.is_empty() {
             return Ok(RescanReport {
                 scan_uid: None,
@@ -334,7 +359,15 @@ impl Engine {
 
             // ── Tier 2: symbol-level diff ──
             if let Some(new_symbols) = symbols {
-                for s in &new_symbols {
+                // Written before the diff, because the store decides whether a symbol
+                // landed and a refused write is not a change. Reporting one puts a
+                // permanent phantom on an append-only ledger. See
+                // `Store::replace_symbols` for which writes are refused, and why.
+                let refused: BTreeSet<String> =
+                    Store::replace_symbols(&tx, self.project_id, file_id, scan_id, &new_symbols)?
+                        .into_iter()
+                        .collect();
+                for s in new_symbols.iter().filter(|s| !refused.contains(&s.fqn)) {
                     let kind = match old_symbols.get(&s.fqn) {
                         None => {
                             // Held back: this may be half of a rename, and that can only be
@@ -392,7 +425,6 @@ impl Engine {
                         old_id: Some(old.id),
                     });
                 }
-                Store::replace_symbols(&tx, self.project_id, file_id, scan_id, &new_symbols)?;
             }
             {
                 if let Some(rows) = ui_rows(&self.root, &file.path) {
@@ -612,6 +644,24 @@ impl Engine {
     }
 }
 
+/// One file read and hashed, in the shape the changed-file list holds.
+fn hashed_file(root: &std::path::Path, path: &str) -> Option<HashedFile> {
+    let bytes = std::fs::read(root.join(path)).ok()?;
+    let meta = std::fs::metadata(root.join(path)).ok()?;
+    Some(HashedFile {
+        path: path.to_string(),
+        size_bytes: meta.len(),
+        mtime_ns: meta
+            .modified()
+            .ok()
+            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or_default(),
+        content_hash: walk::hash_bytes(&bytes),
+        loc: bytes.iter().filter(|b| **b == b'\n').count() as u32 + 1,
+    })
+}
+
 /// Which hash moved, and therefore how far the change ripples. ADR-010.
 pub(super) fn symbol_change(old: &nexus_store::SymbolRow, new: &NewSymbol) -> Option<ChangeKind> {
     let sig_text_changed = old.signature.as_deref().unwrap_or_default()
@@ -675,6 +725,7 @@ mod symbol_change_tests {
             sig_hash: "unused-here".into(),
             body_hash: body.into(),
             annotations: annotations.iter().map(|a| (*a).to_string()).collect(),
+            authority: nexus_types::Authority::Declares,
         }
     }
 

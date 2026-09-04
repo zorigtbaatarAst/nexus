@@ -11,7 +11,7 @@
 pub mod graphql;
 
 use nexus_lang::{LangError, LanguageAnalyzer, ParsedFile, RawEdge, RawSymbol, SourceFile};
-use nexus_types::{EdgeType, Language, SymbolKind};
+use nexus_types::{Authority, EdgeType, Language, SymbolKind};
 use tree_sitter::{Node, Parser};
 
 pub struct TypeScriptAnalyzer;
@@ -334,6 +334,7 @@ fn symbol(
         sig_hash: nexus_lang::sig_hash(signature, &annotations),
         body_hash: hash(&normalize_body(node, src)),
         annotations,
+        authority: Authority::Declares,
     }
 }
 
@@ -428,6 +429,7 @@ fn push_operations(doc: &str, export_fqn: &str, module: &str, node: Node, out: &
             sig_hash: nexus_lang::sig_hash(&signature, &[]),
             body_hash: hash(doc),
             annotations: Vec::new(),
+            authority: Authority::Declares,
         });
         for field in &op.fields {
             out.edges.push(RawEdge {

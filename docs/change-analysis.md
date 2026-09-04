@@ -150,7 +150,7 @@ proportional to the number of changed FQNs, not to graph size.
   "grammar:rust:rs": "tree-sitter-rust 0.24+fqn2+sig3",
   "grammar:typescript:graphqls,graphql,gql": "graphql-schema/2",
   "grammar:typescript:ts,tsx,mts,cts": "tree-sitter-typescript/0.23+extract2",
-  "schema": "8" }
+  "schema": "9" }
 ```
 
 That is the whole map, copied from a real scan: one entry per registered analyzer plus the

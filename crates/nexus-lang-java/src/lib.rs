@@ -13,7 +13,7 @@
 use nexus_lang::{
     sig_hash, LangError, LanguageAnalyzer, ParsedFile, RawEdge, RawSymbol, SourceFile,
 };
-use nexus_types::{EdgeType, Language, SymbolKind};
+use nexus_types::{Authority, EdgeType, Language, SymbolKind};
 use std::collections::HashMap;
 use tree_sitter::{Node, Parser};
 
@@ -204,6 +204,7 @@ fn walk_type(
         // is a change, but editing one method's body already shows on that method.
         body_hash: hash(&member_shape(node, src)),
         annotations,
+        authority: Authority::Declares,
     });
 
     // extends / implements
@@ -274,6 +275,7 @@ fn walk_type(
                     sig_hash: sig_hash(&sig, &[]),
                     body_hash: hash(""),
                     annotations: Vec::new(),
+                    authority: Authority::Declares,
                 });
             }
         }
@@ -347,6 +349,7 @@ fn walk_type(
                         sig_hash: sig_hash(&sig, &[]),
                         body_hash: hash(""),
                         annotations: Vec::new(),
+                        authority: Authority::Declares,
                     });
                 };
                 if lombok_getters {
@@ -446,6 +449,7 @@ fn push_method(
         sig_hash: sig_hash(&signature, &annotations),
         body_hash,
         annotations: annotations.clone(),
+        authority: Authority::Declares,
     });
 
     // Spring for GraphQL: the handler becomes reachable from a schema field, which is the
@@ -473,6 +477,10 @@ fn push_method(
             // them here made `@Transactional` on a resolver read as a contract change on the
             // schema field.
             annotations: Vec::new(),
+            // This file implements the coordinate; the `.graphqls` file states it. Where
+            // both exist the schema's row stands, and this one only fills the gap on a
+            // project that generates its schema and has no `.graphqls` to index.
+            authority: Authority::Implements,
         });
         out.edges.push(RawEdge {
             src_fqn: route_fqn,
@@ -536,6 +544,7 @@ fn push_fields(node: Node, src: &[u8], owner: &str, ctx: &Ctx<'_>, out: &mut Par
             sig_hash: sig_hash(&signature, &annotations),
             body_hash: hash(&init),
             annotations: annotations.clone(),
+            authority: Authority::Declares,
         });
     }
 }
@@ -558,6 +567,7 @@ fn push_enum_constant(node: Node, src: &[u8], owner: &str, out: &mut ParsedFile)
         sig_hash: sig_hash(&signature, &annotations),
         body_hash: hash(&normalize_body(node, src)),
         annotations,
+        authority: Authority::Declares,
     });
 }
 

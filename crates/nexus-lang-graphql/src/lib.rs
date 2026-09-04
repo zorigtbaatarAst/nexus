@@ -14,7 +14,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use nexus_lang::{LangError, LanguageAnalyzer, ParsedFile, RawSymbol, SourceFile};
-use nexus_types::{Language, SymbolKind};
+use nexus_types::{Authority, Language, SymbolKind};
 
 pub struct GraphQlSchemaAnalyzer;
 
@@ -67,6 +67,7 @@ impl LanguageAnalyzer for GraphQlSchemaAnalyzer {
                 sig_hash: nexus_lang::sig_hash(&def.signature, &def.directives),
                 body_hash: hash(""),
                 annotations: def.directives,
+                authority: Authority::Declares,
             });
         }
         Ok(out)
