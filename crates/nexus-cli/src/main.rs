@@ -89,10 +89,16 @@ enum ShareCommand {
 enum Command {
     /// Detect the project, create .nexus/, migrate the database
     Init {
-        /// Also install the SessionStart hook for Claude Code. Off by default: a hook
-        /// whose latency has not been measured on this project is not turned on uninvited.
+        /// Also install the Claude Code hooks. Off by default: a hook whose latency has not
+        /// been measured on this project is not turned on uninvited.
         #[arg(long)]
         hooks: bool,
+        /// Additionally install the `Stop` verification gate. Separate from `--hooks`
+        /// because it runs a real build at the end of every turn — `verify --changed` does
+        /// not scope yet, so the run is the whole project, and on a Gradle build that is
+        /// minutes. Worth having deliberately; not worth acquiring by accident.
+        #[arg(long, requires = "hooks")]
+        verify: bool,
     },
     /// Full scan: index files and symbols, and establish the baseline
     Scan,
@@ -344,10 +350,10 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             return Ok(code);
         }
 
-        Command::Init { hooks } => {
+        Command::Init { hooks, verify } => {
             let (_engine, profile) = Engine::init(&root, nexus_lang_pack::default_registry())?;
             let installed = if *hooks {
-                Some(hooks::install(&root)?)
+                Some(hooks::install(&root, *verify)?)
             } else {
                 None
             };
@@ -364,14 +370,22 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                     nexus_core::NEXUS_DIR
                 )?;
                 match installed {
+                    // Naming them is the point: a hook the developer did not know they had
+                    // is the thing ADR-024's off-by-default exists to prevent, and saying
+                    // "the SessionStart hook" while installing three said the wrong number.
                     Some(hooks::Outcome::Installed) => {
                         writeln!(
                             out,
-                            "Installed the SessionStart hook in .claude/settings.json"
+                            "Installed hooks in .claude/settings.json: SessionStart, \
+                             UserPromptSubmit, PostToolUse ({})",
+                            hooks::EDIT_TOOLS
                         )?;
+                        if *verify {
+                            writeln!(out, "  and Stop — a full build runs at the end of a turn")?;
+                        }
                     }
                     Some(hooks::Outcome::AlreadyPresent) => {
-                        writeln!(out, "The SessionStart hook was already installed")?;
+                        writeln!(out, "The hooks were already installed")?;
                     }
                     None => {}
                 }
