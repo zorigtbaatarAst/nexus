@@ -14,6 +14,24 @@ use crate::context::intent::Intent;
 use nexus_store::{Store, StoreError, SymbolRef};
 use std::collections::BTreeMap;
 
+/// How long a list `facts_for_seeds` may be asked about, wherever it was built.
+///
+/// `facts_for_seeds` emits one compound-`SELECT` arm per seed, and SQLite refuses a compound
+/// `SELECT` past 500 terms — a query that fails to prepare, not one that answers short. Both
+/// lists that reach it are unbounded at their source, so both are capped here:
+///
+///   * `resolve` below, over the candidate words in one request. Each is also one indexed
+///     lookup on the `UserPromptSubmit` hook, whose budget is ADR-024's 400 ms; 256 holds
+///     that to about 90 ms on this repository.
+///   * `engine::query`, over the seeds plus everything expansion reached. Expansion runs to
+///     `max_depth: 5` with no node cap — a four-symbol prompt on this repository already
+///     reaches 189 — so the cap is generous enough never to bite an ordinary prompt.
+///
+/// One number, in one place: two would drift, and the one further from the failure would be
+/// the one still wrong. When it bites, the package says so, because a silently narrowed
+/// query is an error.
+pub(crate) const SEED_QUERY_CAP: usize = 256;
+
 /// Words a request uses *about* code rather than *as* code.
 ///
 /// The Rust analyzer's PRELUDE deny-list solved this exact shape of problem the same way, and
@@ -254,10 +272,35 @@ pub fn resolve(
         }
     }
 
+    // The candidate words, resolved once and capped, because this stage reads them twice:
+    // here and at source 6 below. `targets` costs what its input costs, and a prompt is not
+    // the 25-word symptom sentence its doc comment budgets for — paste a stack trace, a diff
+    // or a file into one and it yields thousands of words. Measured on this repository: 5,305
+    // candidate words, one indexed lookup each, 1.9 s against a 400 ms budget; and source 6
+    // handed that same unbounded list to `facts_for_seeds`, which passed
+    // SQLITE_MAX_COMPOUND_SELECT at 499 seeds and failed the whole request. The hook that
+    // runs this discards stderr, so that error reached the developer as no context at all.
+    // One cap here, on the binding both sources read, rather than one at each use.
+    let mut targets = targets(&req.text);
+    if targets.len() > SEED_QUERY_CAP {
+        notes.push(format!(
+            "the request names {} candidate words; the index was asked about \
+             {SEED_QUERY_CAP} of them, qualified names first",
+            targets.len()
+        ));
+        // Qualified names first. A word carrying a dot, slash, `#`, `::`, an interior
+        // underscore or a leading capital was typed *as* code; a plain word is prose that
+        // only earns a seed by naming exactly one symbol. `is_plain_word` is the same
+        // predicate the loop below uses to tell those apart, and `sort_by_key` is stable, so
+        // alphabetical order survives inside each group and the cut falls on prose first.
+        targets.sort_by_key(|t| is_plain_word(t));
+        targets.truncate(SEED_QUERY_CAP);
+    }
+
     // 2 and 4 — an FQN or path in the text, then a bare name. One lookup per candidate word;
     // `find_symbols` decides which kind it is, so the two sources differ only in how the
     // result is labelled.
-    for target in targets(&req.text) {
+    for target in &targets {
         let exact_shape = target.contains('.') || target.contains('/') || target.contains('#');
         // A plain lowercase word is weaker evidence than a name someone qualified, so it is
         // accepted only when it identifies one symbol outright. Without that rule the word
@@ -265,8 +308,8 @@ pub fn resolve(
         // with confidence. `is_plain_word` is the same predicate `targets` used to let this
         // word through in the first place — re-deriving "what counts as plain" here would be
         // a second copy of that rule, and the two would drift the moment either one changed.
-        if is_plain_word(&target) {
-            if let Some(s) = uniquely_named_symbol(store, project_id, &target)? {
+        if is_plain_word(target) {
+            if let Some(s) = uniquely_named_symbol(store, project_id, target)? {
                 offer(
                     &mut found,
                     s,
@@ -276,7 +319,7 @@ pub fn resolve(
             }
             continue;
         }
-        for s in store.find_symbols(project_id, &target, 10)? {
+        for s in store.find_symbols(project_id, target, 10)? {
             let source = if exact_shape {
                 SeedSource::Exact
             } else {
@@ -340,7 +383,7 @@ pub fn resolve(
     // text by hand. This narrows what source 6 matches to the same rule the rest of stage 2
     // already applies — see the doc comment on `targets` for what that excludes.
     if !req.text.is_empty() {
-        for fact in store.facts_for_seeds(project_id, &targets(&req.text))? {
+        for fact in store.facts_for_seeds(project_id, &targets)? {
             let Some(subject) = fact.subject.as_deref() else {
                 continue;
             };

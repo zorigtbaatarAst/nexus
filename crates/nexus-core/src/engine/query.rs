@@ -4,18 +4,11 @@
 //! row and are here because they are what a caller asking a question does next.
 
 use super::*;
+use crate::context::seeds::SEED_QUERY_CAP;
 use crate::context::{
     self, estimate_tokens, expand, seeds, Candidate, ContextPackage, InclusionLedger, Intent,
     ItemKind, PackageBasis, ProjectSummary, Purpose, Seed, SeedResult, SignalIndex, TaskRequest,
 };
-
-/// How many symbols the memory query may name.
-///
-/// Expansion runs to `max_depth: 5` with no node cap — a four-symbol prompt on this
-/// repository already reaches 189 — and each seed becomes bound parameters. The cap is
-/// generous enough never to bite in practice and low enough that it cannot surprise SQLite.
-/// When it does bite the package says so, because a silently narrowed query is an error.
-const SEED_QUERY_CAP: usize = 256;
 
 impl Engine {
     pub fn status(&self) -> Result<StatusReport> {

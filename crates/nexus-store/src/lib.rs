@@ -2454,6 +2454,17 @@ impl Store {
         Ok(strings.len())
     }
 
+    /// How many words one screen-text query may carry into `MATCH`.
+    ///
+    /// The caller passes whatever a person wrote, and every word becomes one `OR` term FTS5
+    /// has to parse and then evaluate against the index. That is affordable for the phrase
+    /// this was designed for — the words on a screen — and not for a request with a stack
+    /// trace or a file pasted into it: 95 KB of text measured at 19,000 terms and 0.3 s,
+    /// against ADR-024's 400 ms for the whole hook, on a project that indexes no screen
+    /// strings at all. 256 distinct words already match anything a screen string could say;
+    /// past that the query is paying for the request's length rather than its content.
+    const UI_QUERY_TERM_CAP: usize = 256;
+
     /// Files whose screen text matches, best match first.
     ///
     /// Matching the *value* is what reaches a non-English interface: the query is the words
@@ -2467,9 +2478,17 @@ impl Store {
         // FTS5 treats punctuation as syntax. A screen string is not a query language, so the
         // words are extracted and quoted rather than passed through — otherwise "Are you
         // sure?" is a syntax error rather than a search.
+        //
+        // Deduplicated before the cap, not after: FTS5's default tokenizer folds ASCII case,
+        // so a repeated word is an `OR` arm that cannot match a row the first one missed —
+        // and without this a request that says "error" two hundred times spends the whole
+        // budget on one word and never asks about the rest of the sentence.
+        let mut seen = std::collections::HashSet::new();
         let terms: Vec<String> = query
             .split(|c: char| !c.is_alphanumeric())
             .filter(|w| w.chars().count() > 1)
+            .filter(|w| seen.insert(w.to_lowercase()))
+            .take(Self::UI_QUERY_TERM_CAP)
             .map(|w| format!("\"{w}\""))
             .collect();
         if terms.is_empty() {
@@ -4006,6 +4025,51 @@ mod tests {
         assert!(
             s.facts_for_seeds(pid, &[]).expect("empty").is_empty(),
             "no seeds is no query, not every fact"
+        );
+    }
+
+    #[test]
+    fn a_repeated_word_does_not_crowd_a_screen_text_query() {
+        // `UI_QUERY_TERM_CAP` counts distinct words, and it has to: the text it caps is
+        // whatever a person wrote, and people repeat themselves. A request that says "error"
+        // three hundred times and then quotes the label actually on the screen must still
+        // find that label — deduplicate after the cap instead of before it and the first 256
+        // terms are all the same word, so the one term that could have matched never reaches
+        // FTS5 at all.
+        let mut s = Store::open_in_memory().expect("open");
+        let (pid, scan) = seeded_project(&mut s);
+        let tx = s.transaction().expect("tx");
+        let file = Store::upsert_file(
+            &tx,
+            pid,
+            scan,
+            "Checkout.tsx",
+            Some("typescript"),
+            "h1",
+            10,
+            Some(1),
+            None,
+            ParseStatus::Ok,
+            None,
+        )
+        .expect("upsert");
+        Store::replace_ui_strings(
+            &tx,
+            pid,
+            file,
+            scan,
+            &[("Are you sure? bolgomjtoi".into(), "literal".into(), None, 7)],
+        )
+        .expect("ui strings");
+        tx.commit().expect("commit");
+
+        let mut noisy = "error ".repeat(300);
+        noisy.push_str("bolgomjtoi");
+        let hits = s.search_ui_strings(pid, &noisy, 20).expect("search");
+        assert_eq!(
+            hits.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(),
+            vec!["Checkout.tsx"],
+            "the one distinctive word in a long request still reaches the screen it names"
         );
     }
 

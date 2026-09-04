@@ -115,6 +115,35 @@ fn a_stopword_seeds_nothing_even_when_it_is_a_symbol() {
     );
 }
 
+/// A prompt is not the 25-word symptom sentence `targets` budgets for.
+///
+/// Paste a stack trace, a diff or a file into one and every distinct word becomes a candidate:
+/// one indexed lookup each, and one compound-`SELECT` arm each in the fact query, which SQLite
+/// refuses past 500 terms. That was a hard error out of `nexus context` — and the
+/// `UserPromptSubmit` hook that runs it discards stderr, so a long prompt arrived as no
+/// context at all rather than as a diagnostic anyone could act on.
+#[test]
+fn a_pasted_prompt_is_answered_rather_than_refused() {
+    let (_root, engine) = scanned("pasted");
+    // 800 distinct identifier-shaped words: past SEED_QUERY_CAP (256) and past
+    // SQLITE_MAX_COMPOUND_SELECT (500 terms), so the cap and the ceiling it protects are
+    // both exercised. Identifier-shaped, not prose, because prose is what the cap drops
+    // first — a test that fed it prose would stop covering the seed query the day the
+    // ordering rule changed.
+    let pasted: String = (0..800).map(|i| format!("Widget{i}_field ")).collect();
+    let mut r = TaskRequest::session(TASK_BUDGET_TOKENS);
+    r.text = pasted;
+    r.purpose = Purpose::Task;
+    let pkg = engine
+        .context(&r)
+        .expect("a long prompt is capped, not failed");
+    assert!(
+        pkg.notes.iter().any(|n| n.contains("candidate words")),
+        "the cap bit, so the package has to say so: {:?}",
+        pkg.notes
+    );
+}
+
 #[test]
 fn a_short_word_seeds_nothing() {
     let (_root, engine) = scanned("short");
