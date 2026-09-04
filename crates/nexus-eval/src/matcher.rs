@@ -170,7 +170,10 @@ mod tests {
     #[test]
     fn a_site_the_oracle_never_saw_is_excluded_not_counted_wrong() {
         // No reference recorded at that line: the oracle is silent, not contradicting.
-        let c = compare(&[edge(999, "src/a.rs", 40, 43, "heuristic", 0.6)], &oracle());
+        let c = compare(
+            &[edge(999, "src/a.rs", 40, 43, "heuristic", 0.6)],
+            &oracle(),
+        );
         assert!(c.judged.is_empty());
         assert_eq!(c.excluded_non_project, 1);
     }

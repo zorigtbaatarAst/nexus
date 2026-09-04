@@ -30,7 +30,11 @@ pub fn load(path: &Path) -> std::io::Result<Vec<Edge>> {
         match serde_json::from_str(line) {
             Ok(e) => out.push(e),
             // One malformed line must not discard the run: say which, keep the rest.
-            Err(e) => eprintln!("{}:{}: skipped unparseable edge: {e}", path.display(), n + 1),
+            Err(e) => eprintln!(
+                "{}:{}: skipped unparseable edge: {e}",
+                path.display(),
+                n + 1
+            ),
         }
     }
     Ok(out)

@@ -27,6 +27,9 @@ pub struct Rate {
     pub value: f64,
     pub low: f64,
     pub high: f64,
+    /// The numerator, kept rather than recovered as `value * n`: a report that reconstructs
+    /// a count from a float prints "311.99999 of 312".
+    pub k: u64,
     pub n: u64,
 }
 
@@ -37,6 +40,7 @@ impl Rate {
             value: if n == 0 { 0.0 } else { k as f64 / n as f64 },
             low,
             high,
+            k,
             n,
         }
     }
@@ -323,7 +327,11 @@ mod tests {
             .expect("tier present");
         assert_eq!(t.verdict, Verdict::Miscalibrated);
         // Jeffreys posterior mean: (80 + 0.5) / (200 + 1) = 0.400498
-        close(t.proposed.expect("a proposal"), 0.400498, "jeffreys estimate");
+        close(
+            t.proposed.expect("a proposal"),
+            0.400498,
+            "jeffreys estimate",
+        );
     }
 
     #[test]
@@ -370,7 +378,11 @@ mod tests {
             ..Default::default()
         };
         let t = &calibrate(&c)[0];
-        assert_eq!(t.verdict, Verdict::Ok, "200 for 200 does not refute p = 1.0");
+        assert_eq!(
+            t.verdict,
+            Verdict::Ok,
+            "200 for 200 does not refute p = 1.0"
+        );
     }
 
     #[test]
@@ -387,6 +399,10 @@ mod tests {
         let t = &calibrate(&c)[0];
         assert_eq!(t.verdict, Verdict::Miscalibrated);
         // Jeffreys, not k/n: (199 + 0.5) / (200 + 1) = 0.992537
-        close(t.proposed.expect("a proposal"), 0.992537, "jeffreys estimate");
+        close(
+            t.proposed.expect("a proposal"),
+            0.992537,
+            "jeffreys estimate",
+        );
     }
 }

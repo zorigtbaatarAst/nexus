@@ -76,7 +76,9 @@ impl Oracle {
                 if occ.symbol.starts_with("local ") {
                     continue;
                 }
-                let Some(line) = start_line(occ) else { continue };
+                let Some(line) = start_line(occ) else {
+                    continue;
+                };
                 if occ.symbol_roles & (SymbolRole::Definition as i32) != 0 {
                     out.defs.insert(
                         occ.symbol.clone(),
