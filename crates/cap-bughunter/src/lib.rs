@@ -41,8 +41,8 @@ impl Capability for BugHunter {
     }
 
     fn describe(&self) -> &'static str {
-        "Deterministic bug detection: Spring proxy mistakes, GraphQL fields no resolver \
-         serves, and credentials committed to source"
+        "Deterministic bug detection: Spring proxy mistakes, and GraphQL fields no \
+         resolver serves"
     }
 
     fn analyze(

@@ -227,8 +227,17 @@ a compiler cannot express; and Nexus decides which of the two a given question b
 before either is invoked.
 
 **Must not build:** rules that duplicate a linter. `cap-bughunter` detects Spring proxy
-mistakes, orphaned GraphQL fields and committed credentials — three things no linter checks,
-because each requires the *project-wide* index that only Nexus has.
+mistakes and orphaned GraphQL fields — two things no linter checks, because each requires the
+*project-wide* index that only Nexus has.
+
+It detected committed credentials too, and that was this rule being broken by the document
+that states it. `gitleaks` and `trufflehog` do the same job with hundreds of patterns, entropy
+scoring and allowlists; the 243-line detector here scored **0 % precision** on this repository
+— eleven critical findings, ten of them its own prefix table and one anchored on `let idx =
+index(` in a test — and those findings led every session's context package. It was deleted on
+2026-09-04. **Nexus therefore does not check for committed credentials at all**, which is the
+correct state under this section's own rule: the gap belongs to a tool that already fills it,
+and wrapping one is the work this section describes.
 
 ---
 

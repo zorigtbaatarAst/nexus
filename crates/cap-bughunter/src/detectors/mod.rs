@@ -5,7 +5,6 @@
 //! recurring, fixed or regressed, so no rule re-implements that answer.
 
 pub mod graphql;
-pub mod secrets;
 pub mod spring;
 
 // The trait was called `Detector` here and `Rule` in the other two capabilities, for the
@@ -18,6 +17,5 @@ pub fn all() -> Vec<Box<dyn Rule>> {
         Box::new(spring::TransactionalNonPublic),
         Box::new(spring::SelfInvocation),
         Box::new(graphql::OrphanOperation),
-        Box::new(secrets::HardcodedSecret),
     ]
 }
