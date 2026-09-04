@@ -568,13 +568,11 @@ impl Engine {
 
     /// A fingerprint of what this project remembers, for the cache key.
     ///
-    /// Counts, not contents: recording a fact or a finding must invalidate the cache, and a
-    /// count plus the newest row id changes whenever either does. Cheap enough to run on
-    /// every request, which is the point — the alternative is a cache that serves an answer
-    /// from before the thing it should have known.
+    /// A single counter, bumped by every fact and finding write — not a `COUNT(*)` over
+    /// them. Cheap enough to run on every request, which is the point — the alternative is a
+    /// cache that serves an answer from before the thing it should have known.
     fn memory_fingerprint(&self) -> Result<String> {
-        let (facts, findings) = self.store.memory_counters(self.project_id)?;
-        Ok(format!("{facts}:{findings}"))
+        Ok(self.store.memory_version(self.project_id)?.to_string())
     }
 
     /// A fingerprint of the uncommitted state, for the cache key.

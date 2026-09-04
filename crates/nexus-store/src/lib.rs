@@ -17,7 +17,7 @@ use nexus_types::*;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::Path;
 
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_init.sql")),
     (2, include_str!("../migrations/0002_graphql_seam.sql")),
@@ -26,6 +26,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (5, include_str!("../migrations/0005_capability_data.sql")),
     (6, include_str!("../migrations/0006_external_graph.sql")),
     (7, include_str!("../migrations/0007_fact_lifecycle.sql")),
+    (8, include_str!("../migrations/0008_memory_version.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -1695,6 +1696,7 @@ impl Store {
                     b.component
                 ],
             )?;
+            Self::bump_memory_version(tx, project_id)?;
             let next = next.to_string();
             return Ok(FindingUpsert {
                 id,
@@ -1739,6 +1741,7 @@ impl Store {
                 b.capability_data,
             ],
         )?;
+        Self::bump_memory_version(tx, project_id)?;
         Ok(FindingUpsert {
             id: tx.last_insert_rowid(),
             uid,
@@ -1777,11 +1780,20 @@ impl Store {
         scan_id: ScanId,
         commit: Option<&str>,
     ) -> Result<()> {
-        tx.execute(
+        let n = tx.execute(
             "UPDATE findings SET status = 'FIXED', fixed_commit = ?3, last_seen_scan_id = ?2
              WHERE id = ?1 AND status IN ('SUSPECTED','UNVERIFIED','VERIFIED','REGRESSED')",
             params![finding_id, scan_id, commit],
         )?;
+        if n > 0 {
+            // No `project_id` in scope here — derived from the finding itself rather than
+            // widening every caller's signature to carry one more id.
+            tx.execute(
+                "UPDATE projects SET memory_version = memory_version + 1
+                 WHERE id = (SELECT project_id FROM findings WHERE id = ?1)",
+                params![finding_id],
+            )?;
+        }
         Ok(())
     }
 
@@ -1791,10 +1803,18 @@ impl Store {
         uid: &str,
         status: &str,
     ) -> Result<bool> {
-        let n = self.conn.execute(
+        // `&self`, not `&mut self` — this is called through `&Engine` call sites this task
+        // does not touch. `unchecked_transaction` gets the same atomicity as `Self::transaction`
+        // without widening every caller's borrow.
+        let tx = self.conn.unchecked_transaction()?;
+        let n = tx.execute(
             "UPDATE findings SET status = ?3 WHERE project_id = ?1 AND finding_uid = ?2",
             params![project_id, uid, status],
         )?;
+        if n > 0 {
+            Self::bump_memory_version(&tx, project_id)?;
+        }
+        tx.commit()?;
         Ok(n > 0)
     }
 
@@ -2323,23 +2343,28 @@ impl Store {
         )?)
     }
 
-    /// How much this project remembers: (facts, findings), each as `count*1000 + newest id`.
+    /// What this project remembers, as one number that changes whenever memory does.
     ///
-    /// A single number per table that moves on an insert, an invalidation or a status change,
-    /// so a context cache keyed on it cannot serve an answer from before the memory existed.
-    pub fn memory_counters(&self, project_id: ProjectId) -> Result<(i64, i64)> {
-        let facts: i64 = self.conn.query_row(
-            "SELECT COUNT(*) * 1000 + COALESCE(MAX(id), 0) FROM facts
-              WHERE project_id = ?1 AND superseded_by IS NULL AND invalidated_at IS NULL",
+    /// Was `COUNT(*) * 1000 + MAX(id)` over every live fact and every finding, on every
+    /// request — the cache-validity check cost what the cache existed to save. A counter
+    /// bumped by the writers is a single indexed row read instead.
+    pub fn memory_version(&self, project_id: ProjectId) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT memory_version FROM projects WHERE id = ?1",
             params![project_id],
             |r| r.get(0),
-        )?;
-        let findings: i64 = self.conn.query_row(
-            "SELECT COUNT(*) * 1000 + COALESCE(MAX(id), 0) FROM findings WHERE project_id = ?1",
+        )?)
+    }
+
+    /// Record that this project's memory changed. Every statement that inserts or updates a
+    /// row in `facts` or `findings` calls this in the same transaction it wrote in — that is
+    /// what keeps [`Self::memory_version`] a true count instead of a stale approximation.
+    fn bump_memory_version(conn: &Connection, project_id: ProjectId) -> Result<()> {
+        conn.execute(
+            "UPDATE projects SET memory_version = memory_version + 1 WHERE id = ?1",
             params![project_id],
-            |r| r.get(0),
         )?;
-        Ok((facts, findings))
+        Ok(())
     }
 
     // ── commits: the history ledger ──────────────────────────
@@ -2416,6 +2441,7 @@ impl Store {
                 scan_id
             ],
         )?;
+        Self::bump_memory_version(&tx, project_id)?;
         let id: i64 = tx.query_row(
             "SELECT id FROM facts WHERE project_id = ?1 AND fact_key = ?2 AND created_scan_id = ?3",
             params![project_id, f.key, scan_id],
@@ -2426,6 +2452,7 @@ impl Store {
              WHERE project_id = ?1 AND fact_key = ?2 AND id <> ?3 AND superseded_by IS NULL",
             params![project_id, f.key, id],
         )?;
+        Self::bump_memory_version(&tx, project_id)?;
         tx.commit()?;
         Ok(id)
     }
@@ -2648,6 +2675,9 @@ impl Store {
                 validated.insert(*id);
             }
         }
+        if !validated.is_empty() {
+            Self::bump_memory_version(tx, project_id)?;
+        }
         Ok(validated.into_iter().collect())
     }
 
@@ -2777,6 +2807,9 @@ impl Store {
             if changed == 1 {
                 invalidated.insert(anchor.fact_id);
             }
+        }
+        if !invalidated.is_empty() {
+            Self::bump_memory_version(tx, project_id)?;
         }
         Ok(invalidated.into_iter().collect())
     }
@@ -3669,6 +3702,52 @@ mod tests {
             .begin_scan(pid, ScanKind::Full, None, None, "h", false, "{}")
             .expect("scan");
         (pid, scan)
+    }
+
+    #[test]
+    fn memory_version_moves_on_every_kind_of_memory_write() {
+        let mut s = Store::open_in_memory().expect("open");
+        let (pid, scan) = seeded_project(&mut s);
+        let v0 = s.memory_version(pid).expect("v0");
+
+        s.record_fact(
+            pid,
+            scan,
+            &NewFact {
+                key: "arch.a".into(),
+                scope: "symbol".into(),
+                subject: Some("a::B".into()),
+                claim: "x".into(),
+                source: "human".into(),
+                evidence_json: None,
+                confidence: 1.0,
+            },
+        )
+        .expect("record");
+        let v1 = s.memory_version(pid).expect("v1");
+        assert!(
+            v1 > v0,
+            "recording a fact must move the version: {v0} -> {v1}"
+        );
+
+        s.record_fact(
+            pid,
+            scan,
+            &NewFact {
+                key: "arch.a".into(),
+                scope: "symbol".into(),
+                subject: Some("a::B".into()),
+                claim: "y".into(),
+                source: "human".into(),
+                evidence_json: None,
+                confidence: 1.0,
+            },
+        )
+        .expect("supersede");
+        assert!(
+            s.memory_version(pid).expect("v2") > v1,
+            "superseding one must move it too"
+        );
     }
 
     #[test]
