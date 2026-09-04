@@ -12,4 +12,6 @@
 
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
+pub mod edges;
+pub mod matcher;
 pub mod oracle;
