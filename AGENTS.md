@@ -148,11 +148,14 @@ that is hard to attribute.
   mostly everything else.
 
 - **Memory is queried by subject, never scanned.** `Store::facts(project_id, None)` loads
-  every live fact. Four callers may: `fact_states`, `memory_export`, `export_portable`, and
-  the portable importer — all batch commands whose job genuinely is everything. **No request
-  path may.** `task_package` calls `facts_for_seeds`, `session_package` calls
-  `durable_facts`. The unscoped form cost 274 ms at 200,000 facts on a path ADR-024 budgets
-  150 ms for, and memory is append-only by design, so that number only grows.
+  every live fact. Only batch commands may — the exporters, the portable importer, and
+  `nexus ask facts`. **No request path may.** `task_package` calls `facts_for_seeds`,
+  `session_package` calls `durable_facts`. The unscoped form cost 274 ms at 200,000 facts on
+  a path ADR-024 budgets 150 ms for, and memory is append-only by design, so that number only
+  grows. This paragraph named the callers as a count three separate times and was wrong every
+  time, so the count is gone: `crates/nexus-cli/tests/boundaries.rs` greps every call site in
+  `query.rs` against a named allowlist instead, and a caller missing from it fails CI rather
+  than aging the prose.
 
 - **The context cache key must include everything that changes an answer.** Intent, seeds,
   commit, dirty hash, budget, weights, `explain`, the memory fingerprint, and the build

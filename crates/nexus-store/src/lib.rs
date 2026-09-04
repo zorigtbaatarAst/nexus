@@ -2542,6 +2542,15 @@ impl Store {
         if seeds.is_empty() {
             return Ok(Vec::new());
         }
+        // Every seed adds one UNION arm below; a duplicate seed adds a byte-identical arm
+        // that still counts against SQLITE_MAX_COMPOUND_SELECT. The caller already
+        // deduplicates its seed list, but this query should not be the only thing standing
+        // between a caller and that hard limit.
+        let mut seeds: Vec<String> = seeds.to_vec();
+        let mut seen = std::collections::HashSet::with_capacity(seeds.len());
+        seeds.retain(|fqn| seen.insert(fqn.clone()));
+        let seeds = seeds.as_slice();
+
         let exact: std::collections::BTreeSet<String> =
             seeds.iter().flat_map(|s| subject_prefixes(s)).collect();
         let exact: Vec<String> = exact.into_iter().collect();
@@ -3844,9 +3853,19 @@ mod tests {
     }
 
     #[test]
-    fn a_large_seed_set_stays_inside_sqlites_parameter_limit() {
-        // The failure mode of exceeding it is a runtime error on a large project and never
-        // on a fixture, so the bound is asserted rather than assumed.
+    fn a_large_seed_set_stays_inside_sqlites_compound_select_limit() {
+        // Two SQLite compile-time limits are in play here, and only one of them binds.
+        // `facts_for_seeds` binds a handful of parameters per seed — nowhere near
+        // `SQLITE_MAX_VARIABLE_NUMBER` (32,766) — but it also emits one `UNION SELECT` arm
+        // per seed plus one for the base SELECT, and `SQLITE_MAX_COMPOUND_SELECT` (500 terms
+        // in a compound SELECT) is what that shape actually runs into. This test used to
+        // assert against the variable-number limit: 256 seeds looked like 128x headroom
+        // against 32,766, when it was really 2x headroom against 500 — and a caller that
+        // built its seed list from every symbol a Review intent's baseline reported as
+        // changed (1,813 on this repository) found the real ceiling with a query that failed
+        // to prepare at all, not a query that silently ran short. The failure mode of
+        // exceeding it is a runtime error on a large project and never on a fixture, so the
+        // bound is asserted rather than assumed.
         let mut s = Store::open_in_memory().expect("open");
         let (pid, _) = seeded_project(&mut s);
         let seeds: Vec<String> = (0..256)
@@ -3854,7 +3873,36 @@ mod tests {
             .collect();
         assert!(
             s.facts_for_seeds(pid, &seeds).is_ok(),
-            "256 seeds must not exceed SQLITE_MAX_VARIABLE_NUMBER"
+            "SEED_QUERY_CAP (256 seeds) must stay inside SQLITE_MAX_COMPOUND_SELECT (500 terms)"
+        );
+    }
+
+    #[test]
+    fn the_seed_ceiling_is_sqlites_compound_select_limit_not_the_variable_number_one() {
+        // One base SELECT plus one UNION arm per seed: 499 seeds is exactly 500 compound-select
+        // terms, the last size SQLite still accepts; 500 seeds is 501 and fails to prepare —
+        // at a parameter count nowhere near SQLITE_MAX_VARIABLE_NUMBER (32,766). This is the
+        // edge SEED_QUERY_CAP (256) has to stay inside, documented directly rather than left
+        // to whichever limit a comment happened to name.
+        let mut s = Store::open_in_memory().expect("open");
+        let (pid, _) = seeded_project(&mut s);
+        let seeds_at_the_limit: Vec<String> = (0..499)
+            .map(|i| format!("crate{i}::module{i}::Type{i}#method{i}"))
+            .collect();
+        assert!(
+            s.facts_for_seeds(pid, &seeds_at_the_limit).is_ok(),
+            "499 seeds is 500 compound-select terms, exactly SQLITE_MAX_COMPOUND_SELECT — \
+             the last seed count that must still work"
+        );
+
+        let seeds_one_past_the_limit: Vec<String> = (0..500)
+            .map(|i| format!("crate{i}::module{i}::Type{i}#method{i}"))
+            .collect();
+        assert!(
+            s.facts_for_seeds(pid, &seeds_one_past_the_limit).is_err(),
+            "500 seeds is 501 compound-select terms, one past SQLITE_MAX_COMPOUND_SELECT — \
+             this is the real ceiling a seed list must be capped before, not \
+             SQLITE_MAX_VARIABLE_NUMBER"
         );
     }
 

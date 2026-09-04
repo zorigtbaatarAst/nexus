@@ -310,16 +310,36 @@ impl Engine {
         // 3 — expand.
         let reached = expand::run(&self.store, self.project_id, &seeded.seeds, intent.intent)?;
         // 4 — signals, once. `candidate_fqns` is every seed plus everything expansion
-        // reached — the same universe stage 5 below calls `index.for_candidate` on — so the
-        // signal index's own fact read can go through `facts_for_seeds` instead of loading
-        // every live fact in the project.
+        // reached, deduplicated and capped at SEED_QUERY_CAP right here — the one list stage
+        // 5 below ranks, `index.for_candidate` looks up against, and the facts-by-subject
+        // query further down runs against. Built once so there is exactly one cap: this used
+        // to be built a second time down at the facts query, deduplicated and capped there
+        // but not here, so the copy that reached `SignalIndex::build` (and its own fact read
+        // via `facts_for_seeds`) was unbounded — a Review intent's changed-symbol seed set
+        // blew that copy past SQLITE_MAX_COMPOUND_SELECT before the capped copy downstream
+        // ever ran.
         let findings = self.findings(None, None, None)?;
-        let candidate_fqns: Vec<String> = seeded
+        let mut candidate_fqns: Vec<String> = seeded
             .seeds
             .iter()
             .map(|s| s.symbol.fqn.clone())
             .chain(reached.items.iter().map(|i| i.fqn.clone()))
             .collect();
+        // Seeds and what they reach can name the same symbol twice; dedup with a seen-set
+        // (not a `BTreeSet`, which would reorder) so seeds stay ahead of expansion items —
+        // the cap below truncates the tail, so order decides what survives it.
+        let mut seen = std::collections::HashSet::with_capacity(candidate_fqns.len());
+        candidate_fqns.retain(|fqn| seen.insert(fqn.clone()));
+        let mut cap_note = None;
+        if candidate_fqns.len() > SEED_QUERY_CAP {
+            cap_note = Some(format!(
+                "{} symbols are relevant here; memory was queried for the first \
+                 {SEED_QUERY_CAP}, so a fact about the outer edge of the expansion may be \
+                 missing",
+                candidate_fqns.len()
+            ));
+            candidate_fqns.truncate(SEED_QUERY_CAP);
+        }
         let index = SignalIndex::build(
             &self.store,
             self.project_id,
@@ -331,6 +351,9 @@ impl Engine {
 
         let mut notes = seeded.notes.clone();
         notes.extend(index.notes().iter().cloned());
+        if let Some(n) = cap_note {
+            notes.push(n);
+        }
         if let Some(n) = loaded.note {
             notes.push(n);
         }
@@ -433,35 +456,17 @@ impl Engine {
         }
         // Facts about anything the request reached. Knowledge competes with code on the same
         // scale, which is the point of one formula: a fact that answers the question outranks
-        // a symbol that merely mentions it.
-        // Seeds *and* what they reach. A fact about a method the change calls is exactly as
-        // relevant as one about the method being changed — that is what expansion is for, and
-        // matching on seeds alone dropped the idempotency fact from a package about the
-        // controller that enforces it.
-        let mut relevant: Vec<String> = seeded
-            .seeds
-            .iter()
-            .map(|s| s.symbol.fqn.clone())
-            .chain(reached.items.iter().map(|i| i.fqn.clone()))
-            .collect();
-        // Seeds and what they reach can name the same symbol twice; dedup with a seen-set
-        // (not a `BTreeSet`, which would reorder) so seeds stay ahead of expansion items —
-        // the cap below truncates the tail, so order decides what survives it.
-        let mut seen = std::collections::HashSet::with_capacity(relevant.len());
-        relevant.retain(|fqn| seen.insert(fqn.clone()));
-        if relevant.len() > SEED_QUERY_CAP {
-            notes.push(format!(
-                "{} symbols are relevant here; memory was queried for the first \
-                 {SEED_QUERY_CAP}, so a fact about the outer edge of the expansion may be \
-                 missing",
-                relevant.len()
-            ));
-            relevant.truncate(SEED_QUERY_CAP);
-        }
+        // a symbol that merely mentions it. Seeds *and* what they reach: a fact about a
+        // method the change calls is exactly as relevant as one about the method being
+        // changed — that is what expansion is for, and matching on seeds alone dropped the
+        // idempotency fact from a package about the controller that enforces it. Runs against
+        // `candidate_fqns` from stage 4 above, already deduplicated and capped — not a second
+        // seed list with its own cap to keep in sync with the first.
         let current_scan = self.current_scan_id()?;
         for row in crate::memory::rank(
-            self.store.facts_for_seeds(self.project_id, &relevant)?,
-            &relevant,
+            self.store
+                .facts_for_seeds(self.project_id, &candidate_fqns)?,
+            &candidate_fqns,
             current_scan,
         ) {
             let Some(subject) = row.subject.clone() else {
@@ -476,13 +481,13 @@ impl Engine {
             // fact about this symbol", which is trivially true of a fact asked about its own
             // subject — and that let a fact about an unrelated module into every package
             // until a test asked whether it belonged there.
-            let to_seeds = crate::memory::subject_match(Some(&subject), &relevant);
-            if !relevant.is_empty() && to_seeds <= 0.3 {
+            let to_seeds = crate::memory::subject_match(Some(&subject), &candidate_fqns);
+            if !candidate_fqns.is_empty() && to_seeds <= 0.3 {
                 continue;
             }
             let text = format!("{}  {}  [{}]", row.key, row.claim, row.source);
             let signals = crate::context::Signals {
-                fact: crate::memory::relevance(&row, &relevant, current_scan),
+                fact: crate::memory::relevance(&row, &candidate_fqns, current_scan),
                 ..Default::default()
             };
             let (score, terms) = crate::context::rank::score(

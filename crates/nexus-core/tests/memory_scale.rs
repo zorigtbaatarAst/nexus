@@ -143,6 +143,68 @@ fn a_request_that_anchors_to_nothing_carries_no_facts() {
     );
 }
 
+/// Same shape as `scanned`, but followed by a rescan that adds `count` trivial static
+/// methods on one new class — enough, past `SEED_QUERY_CAP`, that a Review intent's seed set
+/// must be capped rather than hit SQLite whole.
+///
+/// A review seeds from the *changed* set (seeds.rs stage 3), which only a rescan populates —
+/// `scan` sets the baseline but records no changes against it, there being nothing yet to
+/// diff against. So the bulk file is added after the first scan and picked up by `rescan`,
+/// same as `renames.rs` does to get a change set to assert on. Own directory, own fixture:
+/// see `scanned`'s doc comment on why one test cannot share either with another.
+fn scanned_with_bulk_symbols(name: &str, count: usize) -> (PathBuf, Engine) {
+    let root = std::env::temp_dir().join(format!("nexus-scale-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("src/mn/pay")).expect("mkdir");
+    fs::write(root.join(SERVICE), SOURCE).expect("write");
+    git(&root, &["init", "-q", "-b", "main"]);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "x"]);
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
+    engine.scan().expect("scan");
+
+    let mut bulk = String::from("package mn.pay;\npublic class Bulk {\n");
+    for i in 0..count {
+        bulk.push_str(&format!("    public static void m{i}() {{}}\n"));
+    }
+    bulk.push_str("}\n");
+    fs::write(root.join("src/mn/pay/Bulk.java"), bulk).expect("write");
+    engine.rescan().expect("rescan");
+    (root, engine)
+}
+
+/// Acceptance criterion 3 of the retrieval spec: "With more than `SEED_QUERY_CAP` relevant
+/// symbols, the package `notes` says the seed set was capped." A Review intent seeds every
+/// symbol the baseline scan reports as changed (§seeds.rs stage 3) — on a fresh project that
+/// is every symbol there is, so 550 trivial methods clear the 256 cap with no expansion
+/// needed.
+///
+/// 550, not 300: `SEED_QUERY_CAP` only needs clearing by one to test the note, but the bug
+/// this guards against was SQLite's `SQLITE_MAX_COMPOUND_SELECT` (500), not the cap — and
+/// 300 seeds stays under 500, so it never reproduced the failure. Before the fix, this test
+/// did not fail on a missing note; it failed on the request itself with the same error the
+/// Critical reproduced on this repository's 1,813 changed symbols — `too many terms in
+/// compound SELECT` — because an uncapped copy of this seed list reached `SignalIndex::build`
+/// before the capped copy further down in `task_package` ever ran.
+#[test]
+fn a_seed_set_over_the_cap_is_capped_and_the_notes_say_so() {
+    let (_root, engine) = scanned_with_bulk_symbols("seed-cap", 550);
+
+    let mut req = task("review mn.pay.Bulk#m0");
+    req.purpose = Purpose::Review;
+    let pkg = engine
+        .context(&req)
+        .expect("a large seed set must be capped, not sent to SQLite whole");
+
+    assert!(
+        pkg.notes
+            .iter()
+            .any(|n| n.contains("memory was queried for the first 256")),
+        "notes must say the seed set was capped: {:?}",
+        pkg.notes
+    );
+}
+
 /// Run with: `cargo test -p nexus-core --test memory_scale -- --ignored --nocapture`
 ///
 /// Ignored because a timing assertion in CI is flaky. It exists anyway because nothing else
