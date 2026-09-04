@@ -1,0 +1,57 @@
+[
+  {
+    "fixture": "spring-payments",
+    "planted_at": "c3",
+    "bug": "duplicate-payment-under-concurrency",
+    "request": "a customer was charged twice for one order",
+    "ground_truth": "fix-diff",
+    "wanted": [
+      "src/main/java/mn/pay/PaymentController.java",
+      "src/main/java/mn/pay/PaymentDto.java",
+      "src/main/java/mn/pay/PaymentValidator.java",
+      "src/main/java/mn/pay/legacy/LegacyPaymentCalculator.java",
+      "src/main/java/mn/payments/Payment.java",
+      "src/main/java/mn/payments/PaymentController.java",
+      "src/main/java/mn/payments/PaymentDto.java",
+      "src/main/java/mn/payments/PaymentRepository.java",
+      "src/main/java/mn/payments/PaymentService.java",
+      "src/main/java/mn/payments/PaymentValidator.java",
+      "src/main/java/mn/payments/legacy/LegacyPaymentCalculator.java",
+      "src/main/resources/db/migration/V2__payment_unique_index.sql",
+      "src/test/java/mn/pay/PaymentServiceTest.java",
+      "src/test/java/mn/payments/PaymentServiceTest.java"
+    ],
+    "found": {},
+    "items_included": 0,
+    "tokens_estimated": 251,
+    "intent": "debug"
+  },
+  {
+    "fixture": "next-storefront",
+    "planted_at": "c3",
+    "bug": "orphaned-total-amount-field",
+    "request": "the order summary shows NaN where the amount should be",
+    "ground_truth": "anchor",
+    "wanted": [
+      "api/src/main/resources/graphql/order.graphqls"
+    ],
+    "found": {},
+    "items_included": 1,
+    "tokens_estimated": 272,
+    "intent": "debug"
+  },
+  {
+    "fixture": "spring-payments",
+    "planted_at": "c7",
+    "bug": "duplicate-payment-under-concurrency",
+    "request": "duplicate charges are happening again after the last release",
+    "ground_truth": "anchor",
+    "wanted": [
+      "src/main/resources/db/migration/V3__drop_unused_indexes.sql"
+    ],
+    "found": {},
+    "items_included": 0,
+    "tokens_estimated": 251,
+    "intent": "debug"
+  }
+]
