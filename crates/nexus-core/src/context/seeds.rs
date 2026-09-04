@@ -14,6 +14,26 @@ use crate::context::intent::Intent;
 use nexus_store::{Store, StoreError, SymbolRef};
 use std::collections::BTreeMap;
 
+/// Words a request uses *about* code rather than *as* code.
+///
+/// The Rust analyzer's PRELUDE deny-list solved this exact shape of problem the same way, and
+/// for the same reason: a hint that matches everything produces a *wrong* seed rather than a
+/// missing one. Deliberately short and boring — English function words, and the handful of
+/// code words that appear in almost every sentence about a defect.
+const STOPWORDS: &[&str] = &[
+    // English.
+    "that", "this", "with", "from", "when", "then", "than", "them", "they", "there", "these",
+    "those", "have", "does", "done", "into", "over", "only", "some", "same", "such", "were",
+    "will", "what", "which", "while", "would", "should", "could", "after", "before", "about",
+    "because", "returns", "return", "still", "just", "make", "made", "much", "more", "most",
+    "less", "very", "also", "even", "never", "always", "again",
+    // Code words a prompt uses about code.
+    "test", "tests", "error", "errors", "value", "values", "result", "results", "file", "files",
+    "line", "lines", "call", "calls", "type", "types", "data", "code", "name", "names", "case",
+    "cases", "item", "items", "list", "lists", "null", "none", "true", "false", "class", "method",
+    "function", "field", "module", "package", "project", "symbol",
+];
+
 /// How a seed was found, in priority order — `Ord` is the priority, so a symbol found twice
 /// keeps its best provenance by comparison rather than by a rule written in a comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
@@ -65,17 +85,23 @@ pub struct SeedResult {
 }
 
 /// Candidate words from the prompt that could name a symbol: anything containing a dot,
-/// slash, hash or `::` (an FQN or a path), an underscore (a `snake_case` identifier), or
-/// starting with a capital (a type name).
+/// slash, hash or `::` (an FQN or a path), an underscore (a `snake_case` identifier), a
+/// capital (a type name), or a plain lowercase word of four characters or more that is not a
+/// stopword.
 ///
-/// The capital rule alone was a Java rule wearing "every convention the indexed languages
-/// use". On a Rust or Python project it seeded nothing: `normalize_body`, `record_fact` and
-/// `fill` are all lowercase, so `nexus context --task "refactor normalize_body"` returned an
-/// empty package on the repository Nexus itself lives in.
+/// The plain-word arm is what lets a *symptom* find code. `cache` is indexed as
+/// `nexus_core::context::cache`, and refusing it because it carries no capital meant four
+/// real defects, handed to the context engine as their symptoms, produced zero hits and three
+/// empty packages.
 ///
-/// Filtering here rather than querying every word keeps the stage at a handful of indexed
-/// lookups instead of one per token, which is what ADR-024's 150 ms budget for a per-prompt
-/// hook can afford.
+/// It is affordable, measured rather than assumed: one word that passes this filter is one
+/// indexed lookup, and 3 target words cost 12 ms against 40 target words at 23 ms — about
+/// 0.3 ms each. A 25-word symptom adds roughly 7 ms to ADR-024's 150 ms budget. The previous
+/// comment here justified the narrow filter with that budget and was over-cautious by an
+/// order of magnitude.
+///
+/// Noise control is not this function's job: `resolve` accepts a plain word only when it
+/// names exactly one symbol whose own last segment *is* the word.
 pub(crate) fn targets(text: &str) -> Vec<String> {
     let mut out: Vec<String> = text
         .split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '"' | '\'' | '(' | ')'))
@@ -91,6 +117,7 @@ pub(crate) fn targets(text: &str) -> Vec<String> {
                 // do not both arrive as targets.
                 || w.trim_matches('_').contains('_')
                 || w.chars().next().is_some_and(char::is_uppercase)
+                || is_plain_word(w)
         })
         .map(str::to_string)
         .collect();
@@ -105,6 +132,67 @@ pub(crate) fn targets(text: &str) -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+/// A word with no shape a caller already qualified: no dot, slash, hash or `::` (an FQN or a
+/// path), no interior underscore (a `snake_case` identifier), no leading capital (a type
+/// name) — and, since none of those give it away, it only earns a lookup if it is long enough
+/// to be distinctive and is not a word every sentence about a defect contains.
+///
+/// One definition, called from both `targets` (is this word worth an indexed lookup at all?)
+/// and `resolve` (does this target need to prove uniqueness before it can seed?). The two
+/// questions must agree on what "plain" means, or they drift the way `subject_match` and
+/// `subject_prefixes` drifted on the module-boundary rule before `is_anchored_prefix` unified
+/// them — and a function that only answered *half* the question under a name that promised
+/// the whole thing is exactly how that kind of drift starts unnoticed.
+fn is_plain_word(w: &str) -> bool {
+    !w.contains('.')
+        && !w.contains('/')
+        && !w.contains('#')
+        && !w.contains("::")
+        && !w.trim_matches('_').contains('_')
+        && !w.chars().next().is_some_and(char::is_uppercase)
+        && w.len() >= 4
+        && !STOPWORDS.contains(&w.to_ascii_lowercase().as_str())
+}
+
+/// The last name in a qualified path, whichever separator wrote it.
+pub(crate) fn last_segment(fqn: &str) -> &str {
+    let after_member = fqn.rsplit('#').next().unwrap_or(fqn);
+    let after_member = after_member.split('(').next().unwrap_or(after_member);
+    let after_colons = after_member.rsplit("::").next().unwrap_or(after_member);
+    after_colons.rsplit('.').next().unwrap_or(after_colons)
+}
+
+/// The one indexed symbol a word names, if it names exactly one.
+///
+/// `find_symbols` matches by suffix, which is right for a name a person typed and wrong
+/// wherever the word came out of prose: without the last-segment check, "integration" once
+/// anchored six imported design claims on `NoContinuousIntegration`.
+///
+/// Two callers, one rule: the seed stage reading a request, and the graphify import reading a
+/// claim's label. Two copies of this would drift, and the copy further from the failure would
+/// be the one still wrong.
+pub(crate) fn uniquely_named_symbol(
+    store: &Store,
+    project_id: i64,
+    word: &str,
+) -> Result<Option<SymbolRef>, StoreError> {
+    let hits = store.find_symbols(project_id, word, 8)?;
+    // Filter before counting, not after. `find_symbols` matches through SQL `LIKE`, which
+    // SQLite treats case-insensitively for ASCII by default, so a word like "resolved" comes
+    // back with both `ResolveStats#resolved` and `report::Resolved` — two hits, neither of
+    // them wrong to return. Counting arity first would see 2 and refuse both, discarding the
+    // one piece of information, exact-case `last_segment`, that actually tells them apart. A
+    // real, unique match must not be hidden behind a mere case-variant elsewhere in the index.
+    let matches: Vec<&SymbolRef> = hits
+        .iter()
+        .filter(|s| last_segment(&s.fqn) == word)
+        .collect();
+    let [only] = matches.as_slice() else {
+        return Ok(None);
+    };
+    Ok(Some((*only).clone()))
 }
 
 /// Resolve the request to seeds. Sources run in priority order and a symbol keeps the best
@@ -171,6 +259,23 @@ pub fn resolve(
     // result is labelled.
     for target in targets(&req.text) {
         let exact_shape = target.contains('.') || target.contains('/') || target.contains('#');
+        // A plain lowercase word is weaker evidence than a name someone qualified, so it is
+        // accepted only when it identifies one symbol outright. Without that rule the word
+        // "integration" reaches `NoContinuousIntegration`, and a symptom seeds the wrong file
+        // with confidence. `is_plain_word` is the same predicate `targets` used to let this
+        // word through in the first place — re-deriving "what counts as plain" here would be
+        // a second copy of that rule, and the two would drift the moment either one changed.
+        if is_plain_word(&target) {
+            if let Some(s) = uniquely_named_symbol(store, project_id, &target)? {
+                offer(
+                    &mut found,
+                    s,
+                    SeedSource::NameMatch,
+                    format!("'{target}' in the request names exactly one symbol"),
+                );
+            }
+            continue;
+        }
         for s in store.find_symbols(project_id, &target, 10)? {
             let source = if exact_shape {
                 SeedSource::Exact
@@ -225,23 +330,24 @@ pub fn resolve(
         }
     }
 
-    // 6 — a fact's subject named in the text. The cheapest way to reach a module the project
-    // already recorded knowledge about.
+    // 6 — a fact's subject named in the text. Inverted from a scan of every fact: a subject
+    // the text names is, by construction, a target of that text, so the words `targets`
+    // already yields (the same list sources 2 and 4 above seed from) are asked of
+    // `facts_for_seeds` as seeds, rather than testing every live fact's subject against the
+    // text by hand. This narrows what source 6 matches to the same rule the rest of stage 2
+    // already applies — see the doc comment on `targets` for what that excludes.
     if !req.text.is_empty() {
-        let lower = req.text.to_lowercase();
-        for fact in store.facts(project_id, None)? {
+        for fact in store.facts_for_seeds(project_id, &targets(&req.text))? {
             let Some(subject) = fact.subject.as_deref() else {
                 continue;
             };
-            if subject.len() > 2 && lower.contains(&subject.to_lowercase()) {
-                for s in store.find_symbols(project_id, subject, 10)? {
-                    offer(
-                        &mut found,
-                        s,
-                        SeedSource::FactSubject,
-                        format!("subject of fact {}", fact.key),
-                    );
-                }
+            for s in store.find_symbols(project_id, subject, 10)? {
+                offer(
+                    &mut found,
+                    s,
+                    SeedSource::FactSubject,
+                    format!("subject of fact {}", fact.key),
+                );
             }
         }
     }

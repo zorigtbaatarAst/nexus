@@ -304,6 +304,66 @@ fn both_composition_roots_register_the_same_capabilities() {
     );
 }
 
+/// AGENTS.md's "Memory is queried by subject, never scanned" trap: `Store::facts(project_id,
+/// None)` loads every live fact, and only a named set of batch commands may call it that way
+/// — never a request path. The paragraph used to enumerate the callers and name a count, and
+/// the count was wrong three separate times; the third time, `Question::Facts` (`nexus ask
+/// facts`) was the caller nobody had added to it. A count in prose cannot fail a build, so
+/// this grep does the counting instead: every unscoped call in `query.rs` must sit inside one
+/// of the function bodies named below, or this fails and says which line is the problem.
+#[test]
+fn the_unscoped_facts_query_is_confined_to_the_allowlisted_callers() {
+    // Every function allowed to call the unscoped form. Add to this — and to the paragraph
+    // in AGENTS.md — in the same diff as a new caller, never after.
+    const ALLOWED: &[&str] = &[
+        "fn fact_states(",     // the fact lifecycle view, for the Markdown exporter
+        "fn memory_export(",   // the Markdown export itself
+        "fn export_portable(", // §7's portable document
+        "fn import_portable(", // reads the existing set once, to diff against the import
+        "fn ask(",             // `Question::Facts`, i.e. `nexus ask facts`
+    ];
+
+    let src = std::fs::read_to_string("../nexus-core/src/engine/query.rs").expect(
+        "query.rs should read — see dependency_graph's doc comment on the cwd this test runs with",
+    );
+
+    let unscoped = |line: &str| {
+        line.contains("facts(self.project_id, None)") || line.contains("self.facts(None)")
+    };
+
+    // Line-scan, not a parser: the file is a flat `impl Engine` of one function after
+    // another with no function nested inside another, so "the most recent `fn` line seen"
+    // is exactly the enclosing function for every line until the next one.
+    let mut current: Option<&str> = None;
+    let mut checked = 0;
+    for line in src.lines() {
+        let trimmed = line.trim_start();
+        if let Some(name) = ALLOWED.iter().find(|f| trimmed.contains(*f)) {
+            current = Some(name);
+        } else if trimmed.starts_with("fn ") || trimmed.starts_with("pub fn ") {
+            current = None;
+        }
+
+        if unscoped(line) {
+            checked += 1;
+            assert!(
+                current.is_some(),
+                "an unscoped facts query outside the allowlist, query.rs: {line}\n\
+                 Store::facts(project_id, None) loads every live fact — AGENTS.md's Traps \
+                 section says only a batch command may call it that way. Either scope this \
+                 call to a subject, or add its function to ALLOWED here and to the paragraph."
+            );
+        }
+    }
+    assert_eq!(
+        checked, 5,
+        "expected exactly the 5 known unscoped call sites (fact_states, memory_export, \
+         export_portable, import_portable, ask's Question::Facts arm) — a different count \
+         means one was added, removed, or renamed out from under this test without its \
+         allowlist or AGENTS.md's paragraph being touched"
+    );
+}
+
 /// Every rule names a `from` crate that must exist.
 ///
 /// `assert_forbidden` skips when `from` is absent from the graph, which is right for a `to`

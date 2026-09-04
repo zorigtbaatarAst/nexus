@@ -44,7 +44,7 @@ capability. Every tool stays callable; only the shorthand goes away.
 | `nexus_record_fact` | remember something for the next session |
 | `bughunter_analyze` | run BugHunter's deterministic rules |
 | `nexus_get_symbol` | one symbol's neighbourhood, following renames |
-| `nexus_get_graph` | how much of the dependency graph resolved, so you know what to trust |
+| `nexus_get_graph` | how much of the dependency graph exists — coverage, not accuracy |
 | `nexus_doctor` | what is misconfigured, and the command that fixes it |
 
 Nothing here runs tests, so no finding is verified by reproduction. The server says so in its

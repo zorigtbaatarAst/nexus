@@ -17,7 +17,7 @@ use nexus_types::*;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::Path;
 
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("../migrations/0001_init.sql")),
     (2, include_str!("../migrations/0002_graphql_seam.sql")),
@@ -26,6 +26,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (5, include_str!("../migrations/0005_capability_data.sql")),
     (6, include_str!("../migrations/0006_external_graph.sql")),
     (7, include_str!("../migrations/0007_fact_lifecycle.sql")),
+    (8, include_str!("../migrations/0008_memory_version.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -1262,15 +1263,36 @@ impl Store {
 
     /// Four counts rather than a tuple, because `(total, resolved, external, sibling)` at
     /// a call site is four chances to transpose two of them.
+    /// Counts **call sites**, not edge rows.
+    ///
+    /// The ambiguous tiers write one row per candidate for a single call site, so counting
+    /// rows let the metric rise as the resolver grew *less* certain — four candidates for
+    /// `x.save()` scored four times what one confident binding scored. Grouping by
+    /// `(src_symbol_id, site_line, dst_fqn_hint)` collapses a fan-out back to the one
+    /// question it answers, and `MAX(...)` over the group is the group's OR: a site counts
+    /// as resolved if any candidate bound a destination.
+    ///
+    /// `external-graph` rows carry NULL in both `site_line` and `dst_fqn_hint`, so they
+    /// group per source symbol rather than per site. They are excluded from `resolved`
+    /// regardless and reported on their own line, so the grouping does not distort a rate.
     pub fn edge_counts(&self, project_id: ProjectId) -> Result<EdgeCounts> {
         let mut stmt = self.conn.prepare(
             "SELECT
                COUNT(*),
-               SUM(dst_symbol_id IS NOT NULL AND resolution <> 'external-graph'),
-               SUM(resolution = 'external'),
-               SUM(resolution = 'sibling'),
-               SUM(resolution = 'external-graph')
-             FROM symbol_edges WHERE project_id = ?1",
+               SUM(resolved),
+               SUM(is_external),
+               SUM(is_sibling),
+               SUM(is_external_graph)
+             FROM (
+               SELECT
+                 MAX(dst_symbol_id IS NOT NULL AND resolution <> 'external-graph') AS resolved,
+                 MAX(resolution = 'external')       AS is_external,
+                 MAX(resolution = 'sibling')        AS is_sibling,
+                 MAX(resolution = 'external-graph') AS is_external_graph
+               FROM symbol_edges
+               WHERE project_id = ?1
+               GROUP BY src_symbol_id, site_line, dst_fqn_hint
+             )",
         )?;
         let row = stmt.query_row(params![project_id], |r| {
             Ok(EdgeCounts {
@@ -1284,10 +1306,44 @@ impl Store {
         Ok(row)
     }
 
+    /// The same call-site unit as [`Store::edge_counts`], so the breakdown sums to the
+    /// total. A test in `nexus-core` asserts the two agree; they cannot if one counts rows
+    /// and the other counts sites.
+    ///
+    /// A site is attributed to the strongest tier present on it. Within a fan-out every row
+    /// carries the tier that produced it, so the group is uniform in the ordinary case; the
+    /// ranking exists for the GraphQL coordinate arm, which can write `contract` for a
+    /// single match and `heuristic` for a fan-out, and attributing that site to `contract`
+    /// is right because that is the arm that resolved it.
     pub fn edges_by_resolution(&self, project_id: ProjectId) -> Result<Vec<(String, i64)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT resolution, COUNT(*) FROM symbol_edges WHERE project_id = ?1
-             GROUP BY resolution ORDER BY 2 DESC",
+            "WITH sites AS (
+               SELECT MIN(CASE resolution
+                   WHEN 'exact'          THEN 1
+                   WHEN 'contract'       THEN 2
+                   WHEN 'framework'      THEN 3
+                   WHEN 'heuristic'      THEN 4
+                   WHEN 'sibling'        THEN 5
+                   WHEN 'external'       THEN 6
+                   WHEN 'external-graph' THEN 7
+                   ELSE 8
+                 END) AS rank
+               FROM symbol_edges
+               WHERE project_id = ?1
+               GROUP BY src_symbol_id, site_line, dst_fqn_hint
+             )
+             SELECT CASE rank
+                 WHEN 1 THEN 'exact'
+                 WHEN 2 THEN 'contract'
+                 WHEN 3 THEN 'framework'
+                 WHEN 4 THEN 'heuristic'
+                 WHEN 5 THEN 'sibling'
+                 WHEN 6 THEN 'external'
+                 WHEN 7 THEN 'external-graph'
+                 ELSE 'unresolved'
+               END,
+               COUNT(*)
+             FROM sites GROUP BY rank ORDER BY 2 DESC",
         )?;
         let rows = stmt
             .query_map(params![project_id], |r| Ok((r.get(0)?, r.get(1)?)))?
@@ -1336,8 +1392,20 @@ impl Store {
                     kind: r.get(2)?,
                     file_path: r.get(3)?,
                     start_line: r.get(4)?,
-                    edge_type: EdgeType::parse(&edge_type).unwrap_or(EdgeType::Calls),
-                    resolution: Resolution::parse(&resolution).unwrap_or(Resolution::Heuristic),
+                    edge_type: EdgeType::parse(&edge_type).ok_or_else(|| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            5,
+                            rusqlite::types::Type::Text,
+                            unknown_value("edge_type", &edge_type),
+                        )
+                    })?,
+                    resolution: Resolution::parse(&resolution).ok_or_else(|| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            6,
+                            rusqlite::types::Type::Text,
+                            unknown_value("resolution", &resolution),
+                        )
+                    })?,
                     confidence: r.get(7)?,
                     site_line: r.get(8)?,
                 })
@@ -1628,6 +1696,7 @@ impl Store {
                     b.component
                 ],
             )?;
+            Self::bump_memory_version(tx, project_id)?;
             let next = next.to_string();
             return Ok(FindingUpsert {
                 id,
@@ -1672,6 +1741,7 @@ impl Store {
                 b.capability_data,
             ],
         )?;
+        Self::bump_memory_version(tx, project_id)?;
         Ok(FindingUpsert {
             id: tx.last_insert_rowid(),
             uid,
@@ -1710,11 +1780,20 @@ impl Store {
         scan_id: ScanId,
         commit: Option<&str>,
     ) -> Result<()> {
-        tx.execute(
+        let n = tx.execute(
             "UPDATE findings SET status = 'FIXED', fixed_commit = ?3, last_seen_scan_id = ?2
              WHERE id = ?1 AND status IN ('SUSPECTED','UNVERIFIED','VERIFIED','REGRESSED')",
             params![finding_id, scan_id, commit],
         )?;
+        if n > 0 {
+            // No `project_id` in scope here — derived from the finding itself rather than
+            // widening every caller's signature to carry one more id.
+            tx.execute(
+                "UPDATE projects SET memory_version = memory_version + 1
+                 WHERE id = (SELECT project_id FROM findings WHERE id = ?1)",
+                params![finding_id],
+            )?;
+        }
         Ok(())
     }
 
@@ -1724,10 +1803,18 @@ impl Store {
         uid: &str,
         status: &str,
     ) -> Result<bool> {
-        let n = self.conn.execute(
+        // `&self`, not `&mut self` — this is called through `&Engine` call sites this task
+        // does not touch. `unchecked_transaction` gets the same atomicity as `Self::transaction`
+        // without widening every caller's borrow.
+        let tx = self.conn.unchecked_transaction()?;
+        let n = tx.execute(
             "UPDATE findings SET status = ?3 WHERE project_id = ?1 AND finding_uid = ?2",
             params![project_id, uid, status],
         )?;
+        if n > 0 {
+            Self::bump_memory_version(&tx, project_id)?;
+        }
+        tx.commit()?;
         Ok(n > 0)
     }
 
@@ -2256,23 +2343,28 @@ impl Store {
         )?)
     }
 
-    /// How much this project remembers: (facts, findings), each as `count*1000 + newest id`.
+    /// What this project remembers, as one number that changes whenever memory does.
     ///
-    /// A single number per table that moves on an insert, an invalidation or a status change,
-    /// so a context cache keyed on it cannot serve an answer from before the memory existed.
-    pub fn memory_counters(&self, project_id: ProjectId) -> Result<(i64, i64)> {
-        let facts: i64 = self.conn.query_row(
-            "SELECT COUNT(*) * 1000 + COALESCE(MAX(id), 0) FROM facts
-              WHERE project_id = ?1 AND superseded_by IS NULL AND invalidated_at IS NULL",
+    /// Was `COUNT(*) * 1000 + MAX(id)` over every live fact and every finding, on every
+    /// request — the cache-validity check cost what the cache existed to save. A counter
+    /// bumped by the writers is a single indexed row read instead.
+    pub fn memory_version(&self, project_id: ProjectId) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT memory_version FROM projects WHERE id = ?1",
             params![project_id],
             |r| r.get(0),
-        )?;
-        let findings: i64 = self.conn.query_row(
-            "SELECT COUNT(*) * 1000 + COALESCE(MAX(id), 0) FROM findings WHERE project_id = ?1",
+        )?)
+    }
+
+    /// Record that this project's memory changed. Every statement that inserts or updates a
+    /// row in `facts` or `findings` calls this in the same transaction it wrote in — that is
+    /// what keeps [`Self::memory_version`] a true count instead of a stale approximation.
+    fn bump_memory_version(conn: &Connection, project_id: ProjectId) -> Result<()> {
+        conn.execute(
+            "UPDATE projects SET memory_version = memory_version + 1 WHERE id = ?1",
             params![project_id],
-            |r| r.get(0),
         )?;
-        Ok((facts, findings))
+        Ok(())
     }
 
     // ── commits: the history ledger ──────────────────────────
@@ -2349,6 +2441,7 @@ impl Store {
                 scan_id
             ],
         )?;
+        Self::bump_memory_version(&tx, project_id)?;
         let id: i64 = tx.query_row(
             "SELECT id FROM facts WHERE project_id = ?1 AND fact_key = ?2 AND created_scan_id = ?3",
             params![project_id, f.key, scan_id],
@@ -2359,6 +2452,7 @@ impl Store {
              WHERE project_id = ?1 AND fact_key = ?2 AND id <> ?3 AND superseded_by IS NULL",
             params![project_id, f.key, id],
         )?;
+        Self::bump_memory_version(&tx, project_id)?;
         tx.commit()?;
         Ok(id)
     }
@@ -2382,6 +2476,166 @@ impl Store {
         )?;
         let rows = stmt
             .query_map(params![project_id, subject], |r| {
+                Ok(FactRow {
+                    key: r.get(0)?,
+                    scope: r.get(1)?,
+                    subject: r.get(2)?,
+                    claim: r.get(3)?,
+                    source: r.get(4)?,
+                    confidence: r.get(5)?,
+                    evidence_json: r.get(6)?,
+                    validated_count: r.get(7)?,
+                    durable: r.get::<_, i64>(8)? == 1,
+                    created_scan_id: r.get(9)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// The facts that could match any of these seeds, and only those.
+    ///
+    /// `facts(project_id, None)` loads every live fact and lets `nexus_core::memory` discard
+    /// the irrelevant ones in Rust — 14 ms at zero facts, 274 ms at 200,000, on a path
+    /// ADR-024 budgets 150 ms for. This asks the question in SQL instead, over
+    /// `idx_facts_subject`, which has existed since `0001_init.sql` and was never used
+    /// because the hot path passed `None`.
+    ///
+    /// Two arms, written as a `UNION` rather than one `WHERE ... OR ...`:
+    ///   * equality against every seed and every ancestor of it — a fact about the module a
+    ///     seed lives in is a fact about the seed. This one mirrors `memory::subject_match`
+    ///     exactly, via [`subject_prefixes`].
+    ///   * a half-open range per seed — a fact about something *below* the seed. Written as a
+    ///     range rather than `LIKE seed || '%'` because a range on an indexed column is an
+    ///     index seek and `LIKE` with a bound parameter is not guaranteed to be.
+    ///
+    /// A single `WHERE` with `OR` between the `IN` arm and the range arms measured as a plan
+    /// over `idx_facts_key` instead — SQLite will not drive one index scan from a disjunction
+    /// of a set-membership test and N ranges, so every query walked the project's whole key
+    /// range regardless of how few seeds it carried. `UNION`, not `UNION ALL`, also removes
+    /// the duplicate a fact matching both arms would otherwise produce, which the `OR` form
+    /// left to the database to collapse for free.
+    ///
+    /// The `UNION` alone was not enough, confirmed with `EXPLAIN QUERY PLAN`: SQLite planned
+    /// both range arms over `idx_facts_subject` on their own, but kept the equality (`IN`)
+    /// arm on `idx_facts_key` — the same bias as the `OR` form, just narrowed to one arm.
+    /// `idx_facts_key` already yields `fact_key` order for free, and without table statistics
+    /// (`ANALYZE` has never run against this database, and running it did not change the
+    /// choice either — see Task 7's report) the planner weighs that saved sort above how
+    /// selective `subject IN (...)` actually is, even though every row it walks past is one a
+    /// seek would not touch at all. Measured on a 20,000-row table: 2.5 ms for the plain
+    /// `UNION` against 0.08 ms with the hint below — the difference is that one arm.
+    /// Every arm therefore carries `INDEXED BY idx_facts_subject` explicitly, per the brief's
+    /// documented fallback: a hint the planner disagrees with is a future regression waiting
+    /// for a schema change, but the measured alternative is worse, and it is the one already
+    /// running.
+    ///
+    /// The range arm is deliberately *wider* than `subject_match`, not anchored the same way:
+    /// it is a raw byte range, so a seed of `a::b` also pulls in a fact subject `a::bc`, which
+    /// is not really a descendant. Do not "fix" that to match — over-fetching here is safe,
+    /// because the Rust-side filter below still runs and throws the extra away; under-fetching
+    /// is not, because a fact the range arm failed to return never reaches that filter at all.
+    ///
+    /// The Rust-side filter still runs. This narrows what it has to look at; it does not
+    /// replace the one definition of a match.
+    pub fn facts_for_seeds(&self, project_id: ProjectId, seeds: &[String]) -> Result<Vec<FactRow>> {
+        if seeds.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Every seed adds one UNION arm below; a duplicate seed adds a byte-identical arm
+        // that still counts against SQLITE_MAX_COMPOUND_SELECT. The caller already
+        // deduplicates its seed list, but this query should not be the only thing standing
+        // between a caller and that hard limit.
+        let mut seeds: Vec<String> = seeds.to_vec();
+        let mut seen = std::collections::HashSet::with_capacity(seeds.len());
+        seeds.retain(|fqn| seen.insert(fqn.clone()));
+        let seeds = seeds.as_slice();
+
+        let exact: std::collections::BTreeSet<String> =
+            seeds.iter().flat_map(|s| subject_prefixes(s)).collect();
+        let exact: Vec<String> = exact.into_iter().collect();
+
+        // Every arm repeats both predicates: `project_id = ?1` (so `idx_facts_subject`'s
+        // leading column is bound in each independently-planned SELECT) and
+        // `invalidated_at IS NULL`, because the index is partial on exactly that condition —
+        // an arm missing it is an arm SQLite refuses to serve from the index at all.
+        const COLS: &str = "fact_key, scope, subject, claim, source, confidence, evidence_json,
+                    validated_count, durable, created_scan_id";
+        const PREDICATE: &str =
+            "project_id = ?1 AND superseded_by IS NULL AND invalidated_at IS NULL";
+
+        let mut sql = format!(
+            "SELECT {COLS} FROM facts INDEXED BY idx_facts_subject WHERE {PREDICATE} AND subject IN ("
+        );
+        sql.push_str(
+            &(0..exact.len())
+                .map(|i| format!("?{}", i + 2))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        sql.push(')');
+        let range_base = 2 + exact.len();
+        for i in 0..seeds.len() {
+            sql.push_str(&format!(
+                " UNION SELECT {COLS} FROM facts INDEXED BY idx_facts_subject WHERE {PREDICATE} \
+                 AND subject >= ?{} AND subject < ?{}",
+                range_base + i * 2,
+                range_base + i * 2 + 1
+            ));
+        }
+        sql.push_str(" ORDER BY fact_key");
+
+        let mut values: Vec<rusqlite::types::Value> =
+            Vec::with_capacity(1 + exact.len() + seeds.len() * 2);
+        values.push(rusqlite::types::Value::Integer(project_id));
+        for e in &exact {
+            values.push(rusqlite::types::Value::Text(e.clone()));
+        }
+        for s in seeds {
+            values.push(rusqlite::types::Value::Text(s.clone()));
+            // The largest code point, so the range covers every descendant and stops before
+            // the next distinct subject. SQLite compares TEXT byte-wise by default.
+            values.push(rusqlite::types::Value::Text(format!("{s}\u{10FFFF}")));
+        }
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(values), |r| {
+                Ok(FactRow {
+                    key: r.get(0)?,
+                    scope: r.get(1)?,
+                    subject: r.get(2)?,
+                    claim: r.get(3)?,
+                    source: r.get(4)?,
+                    confidence: r.get(5)?,
+                    evidence_json: r.get(6)?,
+                    validated_count: r.get(7)?,
+                    durable: r.get::<_, i64>(8)? == 1,
+                    created_scan_id: r.get(9)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Facts that have earned the highest retrieval weight: three surviving scans, or a
+    /// person wrote them.
+    ///
+    /// The session package is what a session starts from with no task in hand. Starting from
+    /// unverified guesses ordered by key is the trap §3's `Observed → dropped` edge exists to
+    /// prevent. Rides `idx_facts_state`.
+    pub fn durable_facts(&self, project_id: ProjectId) -> Result<Vec<FactRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT fact_key, scope, subject, claim, source, confidence, evidence_json,
+                    validated_count, durable, created_scan_id
+             FROM facts
+             WHERE project_id = ?1
+               AND superseded_by IS NULL AND invalidated_at IS NULL
+               AND durable = 1
+             ORDER BY fact_key",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id], |r| {
                 Ok(FactRow {
                     key: r.get(0)?,
                     scope: r.get(1)?,
@@ -2429,6 +2683,9 @@ impl Store {
             if n == 1 {
                 validated.insert(*id);
             }
+        }
+        if !validated.is_empty() {
+            Self::bump_memory_version(tx, project_id)?;
         }
         Ok(validated.into_iter().collect())
     }
@@ -2559,6 +2816,9 @@ impl Store {
             if changed == 1 {
                 invalidated.insert(anchor.fact_id);
             }
+        }
+        if !invalidated.is_empty() {
+            Self::bump_memory_version(tx, project_id)?;
         }
         Ok(invalidated.into_iter().collect())
     }
@@ -2885,6 +3145,19 @@ fn is_sibling(pkg: &str, root: Option<&str>) -> bool {
             .is_some_and(|rest| rest.starts_with('.'))
 }
 
+/// A column value the schema permits and the code cannot name.
+///
+/// Returned as an error rather than defaulted, because a default is indistinguishable from a
+/// real value: `resolution` defaulted to `heuristic`, so every `sibling` and `external-graph`
+/// edge claimed a tier that had resolved something against a symbol table when nothing had.
+/// A schema the code cannot read is a bug to see, not one to average over.
+fn unknown_value(column: &str, value: &str) -> Box<dyn std::error::Error + Send + Sync> {
+    Box::new(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        format!("unknown {column} {value:?} — schema and code disagree"),
+    ))
+}
+
 fn simple_key(fqn: &str) -> String {
     let (type_part, member) = match fqn.split_once('#') {
         Some((t, m)) => (t, Some(m)),
@@ -2895,6 +3168,38 @@ fn simple_key(fqn: &str) -> String {
         Some(m) => format!("{simple_type}#{}", m.split('(').next().unwrap_or(m)),
         None => simple_type.to_string(),
     }
+}
+
+/// A subject and every ancestor of it: `a::b::C#m` yields `a::b::C#m`, `a`, `a::b`, `a::b::C`.
+/// A signature is an ancestor cut too: `Type#m(String)` yields `Type#m` among its ancestors,
+/// since `(` is one of [`SUBJECT_ANCHORS`] — a fact recorded against the bare method name, the
+/// way a person writes it, is still an ancestor of the signature-bearing symbol the index
+/// stores.
+///
+/// `memory::subject_match` scores 0.6 when either string is a prefix of the other *and* the
+/// next character is one of [`SUBJECT_ANCHORS`]. This is the half of that rule SQL can answer
+/// with an equality set; the other half is a range scan (see `facts_for_seeds`, which is
+/// deliberately *not* anchored the same way — a wider descendant match there is safe, because
+/// the Rust-side filter discards what shouldn't have matched). Separators are ASCII, so every
+/// cut lands on a char boundary.
+pub(crate) fn subject_prefixes(fqn: &str) -> Vec<String> {
+    let mut out = vec![fqn.to_string()];
+    let bytes = fqn.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if SUBJECT_ANCHORS.contains(&bytes[i]) {
+            if i > 0 {
+                out.push(fqn[..i].to_string());
+            }
+            // Consume the whole run so a two-byte separator like `::` cuts once, not twice.
+            while i < bytes.len() && SUBJECT_ANCHORS.contains(&bytes[i]) {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
 }
 
 /// The last name in a qualified path, whichever separator the language writes it with.
@@ -3395,5 +3700,377 @@ mod tests {
             !is_sibling("mn.autoland.model", None),
             "without a majority owner nothing may be claimed as a sibling"
         );
+    }
+
+    /// A project with one open scan, so `record_fact`'s foreign key to `scans` holds.
+    /// Shape copied verbatim from `live_views_hide_soft_deleted_rows` in this same module —
+    /// do not invent a different one.
+    fn seeded_project(s: &mut Store) -> (ProjectId, ScanId) {
+        let pid = s.ensure_project("/tmp/t", "t", "git").expect("project");
+        let (scan, _) = s
+            .begin_scan(pid, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
+        (pid, scan)
+    }
+
+    #[test]
+    fn memory_version_moves_on_every_kind_of_memory_write() {
+        let mut s = Store::open_in_memory().expect("open");
+        let (pid, scan) = seeded_project(&mut s);
+        let v0 = s.memory_version(pid).expect("v0");
+
+        s.record_fact(
+            pid,
+            scan,
+            &NewFact {
+                key: "arch.a".into(),
+                scope: "symbol".into(),
+                subject: Some("a::B".into()),
+                claim: "x".into(),
+                source: "human".into(),
+                evidence_json: None,
+                confidence: 1.0,
+            },
+        )
+        .expect("record");
+        let v1 = s.memory_version(pid).expect("v1");
+        assert!(
+            v1 > v0,
+            "recording a fact must move the version: {v0} -> {v1}"
+        );
+
+        s.record_fact(
+            pid,
+            scan,
+            &NewFact {
+                key: "arch.a".into(),
+                scope: "symbol".into(),
+                subject: Some("a::B".into()),
+                claim: "y".into(),
+                source: "human".into(),
+                evidence_json: None,
+                confidence: 1.0,
+            },
+        )
+        .expect("supersede");
+        assert!(
+            s.memory_version(pid).expect("v2") > v1,
+            "superseding one must move it too"
+        );
+    }
+
+    #[test]
+    fn a_subject_yields_itself_and_every_ancestor() {
+        assert_eq!(
+            subject_prefixes("nexus_core::context::cache"),
+            vec![
+                "nexus_core::context::cache".to_string(),
+                "nexus_core".to_string(),
+                "nexus_core::context".to_string(),
+            ]
+        );
+        assert_eq!(
+            subject_prefixes("mn.pay.PaymentService#pay"),
+            vec![
+                "mn.pay.PaymentService#pay".to_string(),
+                "mn".to_string(),
+                "mn.pay".to_string(),
+                "mn.pay.PaymentService".to_string(),
+            ]
+        );
+        // A Java signature: '(' is a boundary too, so the bare method name — the way a fact
+        // is conventionally recorded — is among its own ancestors.
+        assert_eq!(
+            subject_prefixes("mn.pay.PaymentService#pay(String)"),
+            vec![
+                "mn.pay.PaymentService#pay(String)".to_string(),
+                "mn".to_string(),
+                "mn.pay".to_string(),
+                "mn.pay.PaymentService".to_string(),
+                "mn.pay.PaymentService#pay".to_string(),
+            ]
+        );
+        // A slash-separated TS/JS module path.
+        assert_eq!(
+            subject_prefixes("lib/router/index#Router"),
+            vec![
+                "lib/router/index#Router".to_string(),
+                "lib".to_string(),
+                "lib/router".to_string(),
+                "lib/router/index".to_string(),
+            ]
+        );
+        assert_eq!(subject_prefixes("bare"), vec!["bare".to_string()]);
+    }
+
+    #[test]
+    fn facts_for_seeds_finds_ancestors_and_descendants_and_nothing_else() {
+        let mut s = Store::open_in_memory().expect("open");
+        let (pid, scan) = seeded_project(&mut s);
+        for (key, subject) in [
+            ("arch.exact", "a::b::C"),
+            ("arch.ancestor", "a::b"),
+            ("arch.descendant", "a::b::C#m"),
+            ("arch.sibling", "a::b::D"),
+            ("arch.unrelated", "z::q"),
+        ] {
+            s.record_fact(
+                pid,
+                scan,
+                &NewFact {
+                    key: key.into(),
+                    scope: "symbol".into(),
+                    subject: Some(subject.into()),
+                    claim: format!("about {subject}"),
+                    source: "human".into(),
+                    evidence_json: None,
+                    confidence: 1.0,
+                },
+            )
+            .expect("record");
+        }
+
+        let got: Vec<String> = s
+            .facts_for_seeds(pid, &["a::b::C".to_string()])
+            .expect("query")
+            .into_iter()
+            .map(|f| f.key)
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                "arch.ancestor".to_string(),
+                "arch.descendant".to_string(),
+                "arch.exact".to_string(),
+            ],
+            "the seed itself, the module above it, and the method below it — not the sibling"
+        );
+
+        assert!(
+            s.facts_for_seeds(pid, &[]).expect("empty").is_empty(),
+            "no seeds is no query, not every fact"
+        );
+    }
+
+    #[test]
+    fn a_large_seed_set_stays_inside_sqlites_compound_select_limit() {
+        // Two SQLite compile-time limits are in play here, and only one of them binds.
+        // `facts_for_seeds` binds a handful of parameters per seed — nowhere near
+        // `SQLITE_MAX_VARIABLE_NUMBER` (32,766) — but it also emits one `UNION SELECT` arm
+        // per seed plus one for the base SELECT, and `SQLITE_MAX_COMPOUND_SELECT` (500 terms
+        // in a compound SELECT) is what that shape actually runs into. This test used to
+        // assert against the variable-number limit: 256 seeds looked like 128x headroom
+        // against 32,766, when it was really 2x headroom against 500 — and a caller that
+        // built its seed list from every symbol a Review intent's baseline reported as
+        // changed (1,813 on this repository) found the real ceiling with a query that failed
+        // to prepare at all, not a query that silently ran short. The failure mode of
+        // exceeding it is a runtime error on a large project and never on a fixture, so the
+        // bound is asserted rather than assumed.
+        let mut s = Store::open_in_memory().expect("open");
+        let (pid, _) = seeded_project(&mut s);
+        let seeds: Vec<String> = (0..256)
+            .map(|i| format!("crate{i}::module{i}::Type{i}#method{i}"))
+            .collect();
+        assert!(
+            s.facts_for_seeds(pid, &seeds).is_ok(),
+            "SEED_QUERY_CAP (256 seeds) must stay inside SQLITE_MAX_COMPOUND_SELECT (500 terms)"
+        );
+    }
+
+    #[test]
+    fn the_seed_ceiling_is_sqlites_compound_select_limit_not_the_variable_number_one() {
+        // One base SELECT plus one UNION arm per seed: 499 seeds is exactly 500 compound-select
+        // terms, the last size SQLite still accepts; 500 seeds is 501 and fails to prepare —
+        // at a parameter count nowhere near SQLITE_MAX_VARIABLE_NUMBER (32,766). This is the
+        // edge SEED_QUERY_CAP (256) has to stay inside, documented directly rather than left
+        // to whichever limit a comment happened to name.
+        let mut s = Store::open_in_memory().expect("open");
+        let (pid, _) = seeded_project(&mut s);
+        let seeds_at_the_limit: Vec<String> = (0..499)
+            .map(|i| format!("crate{i}::module{i}::Type{i}#method{i}"))
+            .collect();
+        assert!(
+            s.facts_for_seeds(pid, &seeds_at_the_limit).is_ok(),
+            "499 seeds is 500 compound-select terms, exactly SQLITE_MAX_COMPOUND_SELECT — \
+             the last seed count that must still work"
+        );
+
+        let seeds_one_past_the_limit: Vec<String> = (0..500)
+            .map(|i| format!("crate{i}::module{i}::Type{i}#method{i}"))
+            .collect();
+        assert!(
+            s.facts_for_seeds(pid, &seeds_one_past_the_limit).is_err(),
+            "500 seeds is 501 compound-select terms, one past SQLITE_MAX_COMPOUND_SELECT — \
+             this is the real ceiling a seed list must be capped before, not \
+             SQLITE_MAX_VARIABLE_NUMBER"
+        );
+    }
+
+    /// One call site, three candidate destinations — the shape the bare-member tier
+    /// produces for `x.save()` when three symbols answer to `save`.
+    ///
+    /// Counting rows made the metric rise as the resolver grew *less* certain, which is
+    /// exactly backwards. One site asks one question and has one right answer.
+    #[test]
+    fn a_fanned_out_call_site_counts_once_not_three_times() {
+        let mut s = Store::open_in_memory().expect("open");
+        let p = s.ensure_project("/tmp/x", "x", "git").expect("project");
+        let (scan, _) = s
+            .begin_scan(p, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
+
+        let tx = s.transaction().expect("tx");
+        let file = Store::upsert_file(
+            &tx,
+            p,
+            scan,
+            "a.rs",
+            Some("rust"),
+            "h1",
+            10,
+            Some(1),
+            None,
+            ParseStatus::Ok,
+            None,
+        )
+        .expect("upsert");
+
+        let sym = |fqn: &str| NewSymbol {
+            kind: SymbolKind::Method,
+            name: fqn.rsplit('#').next().unwrap_or(fqn).to_string(),
+            fqn: fqn.to_string(),
+            parent_fqn: None,
+            signature: None,
+            visibility: None,
+            start_line: 1,
+            end_line: 2,
+            sig_hash: "sig".into(),
+            body_hash: "body".into(),
+            annotations: Vec::new(),
+        };
+        Store::replace_symbols(
+            &tx,
+            p,
+            file,
+            scan,
+            &[
+                sym("app::Caller#run"),
+                sym("app::A#save"),
+                sym("app::B#save"),
+                sym("app::C#save"),
+            ],
+        )
+        .expect("symbols");
+
+        let id = |fqn: &str| -> i64 {
+            tx.query_row(
+                "SELECT id FROM live_symbols WHERE project_id = ?1 AND fqn = ?2",
+                params![p, fqn],
+                |r| r.get(0),
+            )
+            .expect("symbol id")
+        };
+        let src = id("app::Caller#run");
+        for dst in ["app::A#save", "app::B#save", "app::C#save"] {
+            tx.execute(
+                "INSERT INTO symbol_edges (project_id, src_symbol_id, dst_symbol_id, dst_fqn_hint,
+                                           edge_type, resolution, confidence, site_line,
+                                           last_seen_scan_id)
+                 VALUES (?1, ?2, ?3, 'save', 'calls', 'heuristic', 0.2, 42, ?4)",
+                params![p, src, id(dst), scan],
+            )
+            .expect("insert edge");
+        }
+        tx.commit().expect("commit");
+
+        let counts = s.edge_counts(p).expect("counts");
+        assert_eq!(
+            counts.total, 1,
+            "three rows for one call site are still one call site"
+        );
+        assert_eq!(counts.resolved, 1, "and one resolved call site, not three");
+
+        let by = s.edges_by_resolution(p).expect("by resolution");
+        let heuristic = by
+            .iter()
+            .find(|(r, _)| r == "heuristic")
+            .map(|(_, n)| *n)
+            .unwrap_or(0);
+        assert_eq!(
+            heuristic, 1,
+            "the breakdown must use the same unit as the total, or they cannot be compared"
+        );
+    }
+
+    /// Two genuinely distinct call sites in one caller are two sites, so the grouping key
+    /// must include `site_line`. Without it, a caller that calls the same method twice
+    /// would collapse to one and the metric would under-count instead of over-counting.
+    #[test]
+    fn two_call_sites_in_one_caller_stay_two() {
+        let mut s = Store::open_in_memory().expect("open");
+        let p = s.ensure_project("/tmp/x", "x", "git").expect("project");
+        let (scan, _) = s
+            .begin_scan(p, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
+
+        let tx = s.transaction().expect("tx");
+        let file = Store::upsert_file(
+            &tx,
+            p,
+            scan,
+            "a.rs",
+            Some("rust"),
+            "h1",
+            10,
+            Some(1),
+            None,
+            ParseStatus::Ok,
+            None,
+        )
+        .expect("upsert");
+        let sym = |fqn: &str| NewSymbol {
+            kind: SymbolKind::Method,
+            name: fqn.rsplit('#').next().unwrap_or(fqn).to_string(),
+            fqn: fqn.to_string(),
+            parent_fqn: None,
+            signature: None,
+            visibility: None,
+            start_line: 1,
+            end_line: 2,
+            sig_hash: "sig".into(),
+            body_hash: "body".into(),
+            annotations: Vec::new(),
+        };
+        Store::replace_symbols(
+            &tx,
+            p,
+            file,
+            scan,
+            &[sym("app::Caller#run"), sym("app::A#save")],
+        )
+        .expect("symbols");
+        let id = |fqn: &str| -> i64 {
+            tx.query_row(
+                "SELECT id FROM live_symbols WHERE project_id = ?1 AND fqn = ?2",
+                params![p, fqn],
+                |r| r.get(0),
+            )
+            .expect("symbol id")
+        };
+        for line in [42, 91] {
+            tx.execute(
+                "INSERT INTO symbol_edges (project_id, src_symbol_id, dst_symbol_id, dst_fqn_hint,
+                                           edge_type, resolution, confidence, site_line,
+                                           last_seen_scan_id)
+                 VALUES (?1, ?2, ?3, 'save', 'calls', 'exact', 1.0, ?4, ?5)",
+                params![p, id("app::Caller#run"), id("app::A#save"), line, scan],
+            )
+            .expect("insert edge");
+        }
+        tx.commit().expect("commit");
+
+        let counts = s.edge_counts(p).expect("counts");
+        assert_eq!(counts.total, 2, "two lines are two questions");
+        assert_eq!(counts.resolved, 2);
     }
 }

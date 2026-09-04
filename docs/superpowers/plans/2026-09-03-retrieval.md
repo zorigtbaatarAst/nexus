@@ -149,21 +149,24 @@ Add to the existing `mod tests` at the bottom of `crates/nexus-store/src/lib.rs`
 And the shared fixture helper, also inside `mod tests`:
 
 ```rust
-    /// A project with one completed scan, so `record_fact`'s foreign key to `scans` holds.
+    /// A project with one open scan, so `record_fact`'s foreign key to `scans` holds.
+    /// Shape copied verbatim from `live_views_hide_soft_deleted_rows` in this same module —
+    /// do not invent a different one.
     fn seeded_project(s: &mut Store) -> (ProjectId, ScanId) {
-        let pid = s.upsert_project("t", "/tmp/t").expect("project");
-        let scan = s.begin_scan(pid, "full", None, false).expect("scan");
-        s.finish_scan(scan, "ok").expect("finish");
+        let pid = s.ensure_project("/tmp/t", "t", "git").expect("project");
+        let (scan, _) = s
+            .begin_scan(pid, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan");
         (pid, scan)
     }
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cargo test -p nexus-store subject_prefixes facts_for_seeds parameter_limit`
+Run: `cargo test -p nexus-store -- a_subject_yields_itself a_large_seed_set facts_for_seeds_finds`
 Expected: FAIL — `cannot find function 'subject_prefixes'`, `no method named 'facts_for_seeds'`.
 
-If `seeded_project` fails to compile because `upsert_project`, `begin_scan` or `finish_scan` have different signatures, read the existing `mod tests` in that file and copy whatever shape the neighbouring tests already use to get a project and a scan. Do not invent a shape.
+`ScanKind` is already in scope inside `mod tests` via `use super::*`. If anything here still fails to compile, read `live_views_hide_soft_deleted_rows` in the same module and copy its shape exactly — do not invent one.
 
 - [ ] **Step 3: Write `subject_prefixes`**
 
@@ -298,8 +301,8 @@ If `ProjectId` is not a plain `i64`, replace `Value::Integer(project_id)` with `
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `cargo test -p nexus-store subject_prefixes facts_for_seeds parameter_limit`
-Expected: PASS, 3 tests.
+Run: `cargo test -p nexus-store -- a_subject_yields_itself a_large_seed_set facts_for_seeds_finds`
+Expected: PASS, 3 tests. (`cargo test` takes one positional filter; further filters go after `--`, and each must be a substring of a *test name*, not of the function under test.)
 
 - [ ] **Step 6: `make check`**
 
@@ -934,13 +937,23 @@ fn git(root: &Path, args: &[&str]) {
 fn scanned(name: &str) -> (PathBuf, Engine) {
     let root = std::env::temp_dir().join(format!("nexus-symptom-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
+    // The `mod.rs` files are load-bearing, not decoration. The Rust analyzer derives a
+    // module's *scope* from the file path but only emits a module *symbol* from a `mod_item`
+    // declaration — so without `pub mod cache;` this fixture holds `context::cache::put` and
+    // no symbol named `cache` at all, and every test below would fail for a fixture reason
+    // rather than a code one.
     for (path, body) in [
+        ("src/lib.rs", "pub mod context;\npub mod store;\npub mod util;\npub mod a;\npub mod b;\n"),
+        ("src/context/mod.rs", "pub mod cache;\n"),
         ("src/context/cache.rs", "pub fn put() {}\npub fn get() {}\n"),
+        ("src/store/mod.rs", "pub mod ledger;\n"),
         ("src/store/ledger.rs", "pub fn append() {}\n"),
-        ("src/a/handler.rs", "pub fn handler() {}\n"),
-        ("src/b/handler.rs", "pub fn handler() {}\n"),
-        ("src/util/error.rs", "pub fn error() {}\n"),
-        ("src/lib.rs", "pub mod context;\npub mod store;\npub mod util;\n"),
+        ("src/a/mod.rs", "pub mod handler;\n"),
+        ("src/a/handler.rs", "pub fn handle_it() {}\n"),
+        ("src/b/mod.rs", "pub mod handler;\n"),
+        ("src/b/handler.rs", "pub fn handle_it() {}\n"),
+        ("src/util/mod.rs", "pub mod error;\n"),
+        ("src/util/error.rs", "pub fn report() {}\n"),
     ] {
         let p = root.join(path);
         fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
@@ -1242,7 +1255,7 @@ Claude-Session: https://claude.ai/code/session_014cmQc2a8FrfdFr7WzGM4iC"
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `crates/nexus-core/tests/graphify_import.rs`. Also replace the `GRAPH` constant at the top of that file with this longer one, and update `imported()`'s two assertions from `3` to `2` — the new fixture has one node that must now be filtered:
+Append to `crates/nexus-core/tests/graphify_import.rs`. Also replace the `GRAPH` constant at the top of that file with this longer one, and change `imported()`'s assertions to `concepts_read == 3` (unchanged — the `tests/fixtures` node is dropped inside `read`, so it is never read as a concept) and `facts_recorded == 2` (the heading is now filtered):
 
 ```rust
 const GRAPH: &str = r#"{
@@ -1291,8 +1304,12 @@ fn a_heading_is_not_knowledge() {
         "a dependency name out of a fixture's package.json is not project knowledge: {claims:?}"
     );
     assert_eq!(
-        r.skipped_not_a_claim, 2,
-        "the heading and the fixture node, counted where a person can see them"
+        r.concepts_read, 3,
+        "the node from tests/fixtures is dropped inside graphify::read, before anything counts it"
+    );
+    assert_eq!(
+        r.skipped_not_a_claim, 1,
+        "only the heading reaches the claim filter; the fixture node never got that far"
     );
 }
 ```
@@ -1455,6 +1472,245 @@ Claude-Session: https://claude.ai/code/session_014cmQc2a8FrfdFr7WzGM4iC"
 
 ---
 
+## Task 8: The two call sites the plan missed, and the index it never used
+
+**Added after Task 7's measurement blocked.** The plan's headline goal is a flat curve. Measured
+on this repository after Tasks 1–6: **0 facts 17 ms, 10,000 35 ms, 200,000 360 ms** — 21×, not
+flat. Task 7 stopped rather than document a goal that is not met.
+
+Two causes. The first is a planning miss: `facts(project_id, None)` was audited in
+`engine/query.rs` only, and two more sit on the `--task` request path in `context/`. The second
+is that `facts_for_seeds` never used the index it was written for.
+
+**Files:**
+- Modify: `crates/nexus-core/src/context/signals.rs:129`
+- Modify: `crates/nexus-core/src/context/seeds.rs:337`
+- Modify: `crates/nexus-store/src/lib.rs` — `facts_for_seeds`'s SQL
+- Test: `crates/nexus-core/tests/memory_scale.rs`
+
+**Interfaces:** consumes `Store::facts_for_seeds` (Task 1) and `seeds::targets` (Task 5).
+
+- [ ] **Step 1: Make the index actually get used**
+
+`EXPLAIN QUERY PLAN` shows `facts_for_seeds` planned via `idx_facts_key`, not
+`idx_facts_subject`. The cause is the `OR` between the `IN` arm and the range arms: SQLite will
+not drive a single index scan from a disjunction of a set-membership test and N ranges.
+
+Rewrite the query as a `UNION` of index-seekable arms rather than one `WHERE ... OR ...`. Each
+arm then plans independently and can use `idx_facts_subject`:
+
+```sql
+SELECT <cols> FROM facts
+ WHERE project_id = ?1 AND superseded_by IS NULL AND invalidated_at IS NULL
+   AND subject IN (<exact set>)
+UNION
+SELECT <cols> FROM facts
+ WHERE project_id = ?1 AND superseded_by IS NULL AND invalidated_at IS NULL
+   AND subject >= ?a AND subject < ?b
+UNION
+ ... one arm per seed ...
+ORDER BY fact_key
+```
+
+`UNION` (not `UNION ALL`) also removes the duplicate rows a fact matching both arms currently
+produces, which the `OR` form relied on the database to collapse.
+
+**Verify with `EXPLAIN QUERY PLAN` that every arm reports `idx_facts_subject`, and put the
+output in your report.** If it still does not, fall back to `INDEXED BY idx_facts_subject` on
+each arm and say so — but try the `UNION` first, because a hint that the planner disagrees with
+is a future regression waiting for a schema change.
+
+Note `idx_facts_subject` is a **partial** index (`WHERE invalidated_at IS NULL`); every arm must
+keep that predicate or SQLite will refuse it.
+
+- [ ] **Step 2: Scope the signal index**
+
+`crates/nexus-core/src/context/signals.rs:129` loads every fact to build "is there a fact about
+this symbol" for the candidates in hand. It already knows those candidates. Pass their FQNs and
+call `facts_for_seeds` instead of `facts(project_id, None)`.
+
+Read the function to find what the candidate list is called at that point; do not guess a name.
+The filter immediately below the call (`let subject = f.subject?`) stays as it is.
+
+- [ ] **Step 3: Invert the fact-subject seed source**
+
+`crates/nexus-core/src/context/seeds.rs:337` asks "does the request text mention any fact's
+subject?" by scanning every fact and testing `lower.contains(&subject.to_lowercase())`. That is
+the inverse of an indexed query, and it is why it costs 223 ms at 200,000 facts.
+
+Invert it: take the words the request already yields from `targets(&req.text)` — the same list
+stage 2 uses everywhere else — and ask `facts_for_seeds` for facts whose subject matches any of
+them. A subject the text names is, by construction, a target of that text.
+
+**This narrows behaviour and you must say so in the report.** The old form matched a subject
+appearing anywhere in the text, including one that `targets` filters out — a stopword, a word
+under four characters, or a bare lowercase word matching more than one symbol. The new form
+matches what the request actually seeds on. That is the intended trade: an unbounded scan of
+every fact on every request, for the same rule the rest of stage 2 already applies. If a test
+depends on the old breadth, report it rather than widening `targets` to accommodate it.
+
+- [ ] **Step 4: Prove the curve is flat**
+
+Task 7 Step 1b's `#[ignore]`d test is the gate. Add it now if Task 7 has not landed it, then
+run the measurement again:
+
+```
+cargo test -p nexus-core --test memory_scale -- --ignored --nocapture
+```
+
+Then re-run Task 7's Step 1 measurement by hand at 0 / 10,000 / 200,000 facts. **Report all
+three numbers whatever they are.** The target is within 20% of the 0-fact baseline. If it is
+still not flat, stop and report which call site is still dominating — `EXPLAIN QUERY PLAN` and
+a profile beat another guess.
+
+- [ ] **Step 5: `make check` and commit**
+
+```bash
+make check
+git add crates/nexus-store/src/lib.rs crates/nexus-core/src/context/signals.rs crates/nexus-core/src/context/seeds.rs crates/nexus-core/tests/memory_scale.rs
+git commit -m "perf(context): the last two unscoped fact loads, and the index that was never used
+
+The plan that removed the O(all facts) scan from the task path left two of them
+behind, in SignalIndex::build and in stage 2's fact-subject seed source. Both
+are on every --task request and each cost ~223ms at 200,000 facts — the same
+number the plan was written to remove, still paid twice. They were missed
+because the audit grepped engine/query.rs and not the crate.
+
+facts_for_seeds also never used idx_facts_subject: SQLite will not drive one
+index scan from an OR of a set-membership test and N ranges, so it fell back to
+idx_facts_key. Written as a UNION of index-seekable arms it plans correctly.
+
+Measured on this repository, 0 / 10,000 / 200,000 facts: <fill in from Step 4>.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+## Task 9: The cache key that scans what it is trying to avoid
+
+**Added after Task 8.** `Store::memory_counters` runs `COUNT(*)` over every live fact and every
+finding, on **every** `--task` request, because the context cache key must change when memory
+changes. It already uses the best index available, so this is a design problem rather than a
+planning one: the query that decides whether the cache is valid costs what the cache exists to
+save. It is now the dominant remaining term — 200,000 facts sit at 1.4× baseline and the
+`#[ignore]`d scaling gate lands at 3.0–3.6× against its own `< 3.0` assertion.
+
+**Files:**
+- Create: `crates/nexus-store/migrations/0008_memory_version.sql`
+- Modify: `crates/nexus-store/src/lib.rs` — `memory_counters`, and every statement that writes a fact or a finding
+- Test: `crates/nexus-store/src/lib.rs`'s `mod tests`
+
+- [ ] **Step 1: A version column, bumped on write**
+
+```sql
+-- Every fact or finding write bumps this. The context cache key reads it to decide whether
+-- what the project remembers has changed since the package it cached.
+--
+-- It replaces `COUNT(*) + MAX(id)` over every live fact, which ran on every request: the
+-- query deciding whether the cache was still valid cost what the cache existed to save.
+ALTER TABLE projects ADD COLUMN memory_version INTEGER NOT NULL DEFAULT 0;
+```
+
+Bump `SCHEMA_VERSION` to 8. **This adds a column, not a table** — `all_twenty_one_tables_exist`
+must still pass unchanged; if it fails you have added a table.
+
+- [ ] **Step 2: Bump it wherever memory changes**
+
+Find every statement that inserts or updates a row in `facts` or `findings` — at the time of
+writing there are four on `facts` (the insert in `record_fact`, its supersede `UPDATE`, the
+promotion in `validate_facts`, and the invalidation) plus the finding writes. **Grep for them
+rather than trusting that list**; a missed one is a cache that goes stale silently, which is
+the exact defect this plan already fixed once.
+
+After each, in the same transaction:
+
+```sql
+UPDATE projects SET memory_version = memory_version + 1 WHERE id = ?1
+```
+
+Consider a small private helper so each call site is one line and none can drift.
+
+- [ ] **Step 3: Read it in O(1)**
+
+```rust
+    /// What this project remembers, as one number that changes whenever memory does.
+    ///
+    /// Was `COUNT(*) * 1000 + MAX(id)` over every live fact and every finding, on every
+    /// request — the cache-validity check cost what the cache existed to save. A counter
+    /// bumped by the writers is a single indexed row read instead.
+    pub fn memory_version(&self, project_id: ProjectId) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT memory_version FROM projects WHERE id = ?1",
+                params![project_id],
+                |r| r.get(0),
+            )?)
+    }
+```
+
+Replace `memory_counters` with it and update the one caller in
+`crates/nexus-core/src/engine/query.rs` (`memory_fingerprint`). Delete `memory_counters`; two
+ways to ask the same question is what this plan spent three fix rounds on in Task 1.
+
+- [ ] **Step 4: Test that it actually invalidates**
+
+```rust
+    #[test]
+    fn memory_version_moves_on_every_kind_of_memory_write() {
+        let mut s = Store::open_in_memory().expect("open");
+        let (pid, scan) = seeded_project(&mut s);
+        let v0 = s.memory_version(pid).expect("v0");
+
+        s.record_fact(pid, scan, &NewFact {
+            key: "arch.a".into(), scope: "symbol".into(),
+            subject: Some("a::B".into()), claim: "x".into(), source: "human".into(),
+            evidence_json: None, confidence: 1.0,
+        }).expect("record");
+        let v1 = s.memory_version(pid).expect("v1");
+        assert!(v1 > v0, "recording a fact must move the version: {v0} -> {v1}");
+
+        s.record_fact(pid, scan, &NewFact {
+            key: "arch.a".into(), scope: "symbol".into(),
+            subject: Some("a::B".into()), claim: "y".into(), source: "human".into(),
+            evidence_json: None, confidence: 1.0,
+        }).expect("supersede");
+        assert!(s.memory_version(pid).expect("v2") > v1, "superseding one must move it too");
+    }
+```
+
+- [ ] **Step 5: Re-measure, then commit**
+
+Re-run the 0 / 10,000 / 200,000 timing and the `#[ignore]`d gate:
+
+```
+cargo test -p nexus-core --test memory_scale -- --ignored --nocapture
+```
+
+**Report all numbers whatever they are.** If the gate still exceeds its `< 3.0` assertion,
+report the residual and where it is — do not change the threshold; that is my call, not yours.
+
+```bash
+make check
+git add crates/nexus-store/migrations/0008_memory_version.sql crates/nexus-store/src/lib.rs crates/nexus-core/src/engine/query.rs
+git commit -m "perf(store): the cache key stops scanning what the cache exists to avoid
+
+memory_counters ran COUNT(*) over every live fact and every finding on every
+--task request, because the context cache key must change when memory changes.
+It used the right index; the query itself was the problem. After Task 8 removed
+the other unscoped loads it became the dominant term.
+
+A counter on projects, bumped by every fact and finding write, answers the same
+question in one indexed row read.
+
+Measured 0 / 10,000 / 200,000 facts: <fill in from Step 5>.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ## Task 7: Record what changed, and measure that it worked
 
 **Files:**
@@ -1498,15 +1754,71 @@ PY
 
 Expected: all three rows within 20% of each other. Record the numbers — they go in the commit message. If 200,000 is materially slower than 0, `facts_for_seeds` is not using the index; run `EXPLAIN QUERY PLAN` on the generated SQL before going further.
 
+- [ ] **Step 1b: Make the measurement a gate, not an eyeball**
+
+The Task 2 review established that no automated test fails if retrieval goes back to loading
+every fact: `subject_match` floors at 0.3 and the pre-existing guard already dropped unrelated
+facts before they became candidates, so the candidate set is identical either way. One of that
+task's three tests gates the change; the other two gate a property that was already true. The
+performance goal — the entire point of this plan — is currently protected by code inspection
+alone.
+
+A timing assertion in CI is flaky, so this is `#[ignore]`d: it is run deliberately, and it is
+runnable, which "read the numbers and squint" is not.
+
+Append to `crates/nexus-core/tests/memory_scale.rs`:
+
+```rust
+/// Run with: `cargo test -p nexus-core --test memory_scale -- --ignored --nocapture`
+///
+/// Ignored because a timing assertion in CI is flaky. It exists anyway because nothing else
+/// in the suite fails if retrieval goes back to loading every live fact: the candidate set is
+/// identical either way, so only the clock can tell the difference. Ratio, not absolute time,
+/// so it means the same thing on a slow machine.
+#[test]
+#[ignore]
+fn retrieval_does_not_slow_down_as_memory_grows() {
+    use std::time::Instant;
+    let (_root, mut engine) = scanned("scaling");
+    let ask = |e: &Engine| {
+        let t = Instant::now();
+        for _ in 0..20 {
+            e.context(&task("refactor mn.pay.PaymentService#pay")).expect("context");
+        }
+        t.elapsed()
+    };
+
+    let small = ask(&engine);
+    for i in 0..20_000 {
+        record(&mut engine, &format!("arch.bulk-{i:06}"), &format!("unrelated.Mod{i}"));
+    }
+    let large = ask(&engine);
+
+    let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-9);
+    assert!(
+        ratio < 3.0,
+        "retrieval scaled with total memory rather than with the request: \
+         {small:?} at 0 facts, {large:?} at 20,000 — {ratio:.1}x. \
+         That is the O(all facts) path returning."
+    );
+}
+```
+
+Run it once to confirm it passes, and once with `facts_for_seeds` temporarily reverted to
+`facts(self.project_id, None)` to confirm it fails. Record both numbers in the report. If it
+does not fail on the revert, the test is worthless — say so rather than keeping it.
+
 - [ ] **Step 2: Add the trap to `AGENTS.md`**
 
 Under `## Traps`, above the cache-key entry:
 
 ```markdown
 - **Memory is queried by subject, never scanned.** `Store::facts(project_id, None)` loads
-  every live fact; only `memory_export` may, because its job is everything. Every request
-  path calls `facts_for_seeds` or `durable_facts`. The unscoped form cost 274 ms at 200,000
-  facts on a path ADR-024 budgets 150 ms for, and memory is append-only by design.
+  every live fact. Four callers may: `fact_states`, `memory_export`, `export_portable`, and
+  the portable importer — all batch commands whose job genuinely is everything. **No request
+  path may.** `task_package` calls `facts_for_seeds`, `session_package` calls
+  `durable_facts`. The unscoped form cost 274 ms at 200,000 facts on a path ADR-024 budgets
+  150 ms for, and memory is append-only by design, so that number only grows.
 ```
 
 - [ ] **Step 3: Correct the seed rule in the spec of record**

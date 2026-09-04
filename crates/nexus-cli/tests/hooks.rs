@@ -188,11 +188,16 @@ fn the_prompt_hook_command_also_fails_open() {
 }
 
 #[test]
-fn all_four_hooks_are_installed_and_every_one_fails_open() {
-    // ADR-024's table, entire. Fail-open is not a property of one of them: a single hook that
-    // hangs or errors is enough for someone to disable the lot, and then none of them run.
-    let root = fixture("allfour");
-    assert!(run(&root, &["init", "--hooks"]).status.success());
+fn every_installed_hook_fails_open() {
+    // ADR-024's table. Fail-open is not a property of one of them: a single hook that hangs
+    // or errors is enough for someone to disable the lot, and then none of them run.
+    //
+    // `--verify` is passed so the Stop gate is covered too — it is the hook most likely to
+    // fail in the field, because it is the only one that runs a build.
+    let root = fixture("failopen");
+    assert!(run(&root, &["init", "--hooks", "--verify"])
+        .status
+        .success());
     let v = settings(&root).expect("written");
 
     for event in ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"] {
@@ -220,7 +225,162 @@ fn all_four_hooks_are_installed_and_every_one_fails_open() {
     }
 
     // And installing again adds none of them a second time.
-    assert!(run(&root, &["init", "--hooks"]).status.success());
+    assert!(run(&root, &["init", "--hooks", "--verify"])
+        .status
+        .success());
     assert_eq!(settings(&root).expect("written"), v);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_edit_hook_names_the_tools_that_change_files() {
+    // Without a matcher, `PostToolUse` fires for every tool the agent calls — every Read,
+    // Grep and Bash — so the index is rescanned after work that cannot have changed it, on
+    // the developer's critical path. ADR-024's table always said `PostToolUse (Edit|Write)`;
+    // the installer just never said it to the harness.
+    let root = fixture("matcher");
+    let out = run(&root, &["init", "--hooks"]);
+    assert!(out.status.success(), "{out:?}");
+    let v = settings(&root).expect("settings.json written");
+
+    let post = v["hooks"]["PostToolUse"]
+        .as_array()
+        .expect("a PostToolUse array");
+    let matcher = post[0]["matcher"].as_str().expect("a matcher");
+    for tool in ["Edit", "Write"] {
+        assert!(
+            matcher.contains(tool),
+            "{tool} must trigger a rescan: {matcher}"
+        );
+    }
+    assert!(
+        !matcher.contains("Read") && !matcher.contains("Grep") && !matcher.contains("Bash"),
+        "reading a file cannot change the index: {matcher}"
+    );
+}
+
+#[test]
+fn the_context_hooks_carry_no_matcher() {
+    // `SessionStart` and `UserPromptSubmit` have no tool to match on. An empty string is a
+    // value the harness is entitled to interpret; absence is not.
+    let root = fixture("no-matcher");
+    run(&root, &["init", "--hooks"]);
+    let v = settings(&root).expect("settings.json written");
+    for event in ["SessionStart", "UserPromptSubmit"] {
+        let entries = v["hooks"][event].as_array().expect("an array");
+        assert!(
+            entries[0].get("matcher").is_none(),
+            "{event} must carry no matcher: {entries:?}"
+        );
+    }
+}
+
+#[test]
+fn the_verification_gate_is_not_installed_by_default() {
+    // `verify --changed` accepts the flag and ignores it, so the Stop hook runs a full build
+    // of the whole project at the end of every turn. That is worth choosing; it is not worth
+    // acquiring as a side effect of turning on a context hook.
+    let root = fixture("no-verify");
+    run(&root, &["init", "--hooks"]);
+    let v = settings(&root).expect("settings.json written");
+    assert!(
+        v["hooks"].get("Stop").is_none(),
+        "the build gate must be opted into separately: {v}"
+    );
+}
+
+#[test]
+fn the_verification_gate_installs_when_asked_for() {
+    let root = fixture("verify");
+    let out = run(&root, &["init", "--hooks", "--verify"]);
+    assert!(out.status.success(), "{out:?}");
+    let v = settings(&root).expect("settings.json written");
+    let stop = v["hooks"]["Stop"].as_array().expect("a Stop array");
+    let cmd = stop[0]["hooks"][0]["command"].as_str().expect("a command");
+    assert!(cmd.contains("verify"), "{cmd}");
+    // Its budget is a build, not a context lookup.
+    let timeout = stop[0]["hooks"][0]["timeout"].as_u64().expect("a timeout");
+    assert!(
+        timeout > 60,
+        "a build gate needs more than a context timeout: {timeout}"
+    );
+}
+
+#[test]
+fn asking_for_the_gate_without_the_hooks_is_refused() {
+    // `--verify` alone would silently do nothing. Better to say so than to exit 0 having
+    // installed neither.
+    let root = fixture("verify-alone");
+    let out = run(&root, &["init", "--verify"]);
+    assert!(
+        !out.status.success(),
+        "--verify without --hooks must not succeed"
+    );
+}
+
+/// `doctor` output as a map of check name to (level, detail).
+fn doctor_hooks(root: &Path, path_env: Option<&str>) -> (String, String) {
+    let mut cmd = Command::new(nexus());
+    cmd.args(["doctor", "--json"]).arg("--project").arg(root);
+    if let Some(p) = path_env {
+        cmd.env("PATH", p);
+    }
+    let out = cmd.output().expect("run doctor");
+    let doc: Value = serde_json::from_slice(&out.stdout).expect("doctor --json emits one document");
+    let checks = doc["result"].as_array().expect("an array of checks");
+    let hooks = checks
+        .iter()
+        .find(|c| c["name"] == "hooks")
+        .unwrap_or_else(|| panic!("doctor reported no hooks check: {doc}"));
+    (
+        hooks["level"].as_str().expect("level").to_string(),
+        hooks["detail"].as_str().expect("detail").to_string(),
+    )
+}
+
+#[test]
+fn doctor_reports_uninstalled_hooks_as_fine() {
+    // Off is a supported state, not a fault: ADR-024 ships them off by default. Reporting a
+    // warning for the default configuration is how a doctor teaches people to ignore it.
+    let root = fixture("doc-none");
+    run(&root, &["init"]);
+    let (level, detail) = doctor_hooks(&root, None);
+    assert_eq!(level, "ok", "{detail}");
+    assert!(detail.contains("not installed"), "{detail}");
+}
+
+#[test]
+fn doctor_reports_installed_hooks() {
+    let root = fixture("doc-some");
+    run(&root, &["init", "--hooks"]);
+    let (level, detail) = doctor_hooks(&root, None);
+    assert_eq!(level, "ok", "{detail}");
+    for event in ["SessionStart", "UserPromptSubmit", "PostToolUse"] {
+        assert!(detail.contains(event), "{event} missing from: {detail}");
+    }
+}
+
+#[test]
+fn doctor_catches_the_failure_that_fail_open_hides() {
+    // Every hook ends `2>/dev/null || true`, so a hook whose binary is not on PATH looks
+    // exactly like a hook that ran and found nothing — forever, with no error anywhere.
+    // This is the single failure the check exists for.
+    let root = fixture("doc-nopath");
+    run(&root, &["init", "--hooks"]);
+    // The binary is invoked by absolute path, so it still runs; what it cannot find is
+    // itself, which is precisely the situation a hook's shell would be in.
+    let (level, detail) = doctor_hooks(&root, Some("/nonexistent"));
+    assert_eq!(level, "error", "{detail}");
+    assert!(detail.contains("silently does nothing"), "{detail}");
+}
+
+#[test]
+fn doctor_refuses_to_guess_at_unreadable_settings() {
+    let root = fixture("doc-broken");
+    run(&root, &["init"]);
+    std::fs::create_dir_all(root.join(".claude")).expect("mkdir");
+    std::fs::write(root.join(".claude/settings.json"), "{not json").expect("write");
+    let (level, detail) = doctor_hooks(&root, None);
+    assert_eq!(level, "error", "{detail}");
+    assert!(detail.contains("not valid JSON"), "{detail}");
 }

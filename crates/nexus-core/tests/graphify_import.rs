@@ -23,18 +23,19 @@ public class PaymentService {
 }
 "#;
 
-/// Two claims about a symbol the index holds, one about a symbol it does not, and one whose
-/// only identifying word is an English noun — the case that anchored design claims on
-/// whatever symbol happened to end with the word.
+/// Two claims about a symbol the index holds, a heading that names nothing, a dependency name
+/// out of a fixture's `package.json`, and a code node that is not prose at all.
 const GRAPH: &str = r#"{
   "nodes": [
     {"id": "n1", "label": "PaymentService settles a payment exactly once",
      "file_type": "concept", "source_file": "docs/design.md", "source_location": "L12"},
     {"id": "n2", "label": "PaymentService retries are the caller's job",
      "file_type": "rationale", "source_file": "docs/design.md", "source_location": null},
-    {"id": "n3", "label": "Payment is a domain concept",
+    {"id": "n3", "label": "Golden Fixture Repositories",
      "file_type": "concept", "source_file": "docs/design.md", "source_location": null},
-    {"id": "n4", "label": "Structural", "file_type": "code", "source_file": "src/x.java"}
+    {"id": "n4", "label": "next", "file_type": "concept",
+     "source_file": "tests/fixtures/specs/blobs/package.json", "source_location": null},
+    {"id": "n5", "label": "Structural", "file_type": "code", "source_file": "src/x.java"}
   ],
   "links": []
 }"#;
@@ -86,9 +87,13 @@ fn imported(name: &str) -> (PathBuf, Engine) {
         .expect("import");
     assert_eq!(
         r.concepts_read, 3,
-        "three prose nodes, the code node is not one"
+        "three prose nodes; the fixture node is dropped inside graphify::read before anything \
+         counts it, and the code node was never one"
     );
-    assert_eq!(r.facts_recorded, 3);
+    assert_eq!(
+        r.facts_recorded, 2,
+        "the heading is not a claim and names no symbol"
+    );
     (root, engine)
 }
 
@@ -122,7 +127,25 @@ fn a_claim_naming_a_symbol_is_anchored_on_the_code_not_on_the_document() {
 
 #[test]
 fn a_claim_that_names_no_symbol_still_anchors_on_the_document_that_states_it() {
-    let (_root, engine) = imported("document");
+    // The shared GRAPH's unanchored node is a heading (n3) and a fixture node dropped before
+    // it is even read (n4) — neither becomes a fact. This needs a node that clears the claim
+    // filter by reading as a sentence, and still names no symbol: "Payment" alone is a
+    // sentence word, the same reason n1 and n2 anchor on `PaymentService` and this does not.
+    let (root, mut engine) = scanned("document");
+    fs::write(
+        root.join("graph.json"),
+        r#"{
+  "nodes": [
+    {"id": "n1", "label": "Payment is a domain concept",
+     "file_type": "concept", "source_file": "docs/design.md", "source_location": null}
+  ],
+  "links": []
+}"#,
+    )
+    .expect("write");
+    engine
+        .import_graphify(&root.join("graph.json"))
+        .expect("import");
     let f = engine
         .facts(None)
         .expect("facts")
@@ -207,4 +230,46 @@ fn a_graph_that_is_not_there_is_a_report_not_a_failure() {
         .expect("a missing graph is not an error");
     assert_eq!(r.facts_recorded, 0);
     assert!(r.warnings.iter().any(|w| w.contains("does not exist")));
+}
+
+#[test]
+fn a_heading_is_not_knowledge() {
+    let (root, mut engine) = scanned("claims");
+    let r = engine
+        .import_graphify(&root.join("graph.json"))
+        .expect("import");
+    let claims: Vec<String> = engine
+        .facts(None)
+        .expect("facts")
+        .into_iter()
+        .map(|f| f.claim)
+        .collect();
+    assert!(
+        claims
+            .iter()
+            .any(|c| c.contains("settles a payment exactly once")),
+        "a sentence is a claim: {claims:?}"
+    );
+    assert!(
+        claims
+            .iter()
+            .any(|c| c.contains("retries are the caller's job")),
+        "a rationale node is a claim by construction: {claims:?}"
+    );
+    assert!(
+        !claims.iter().any(|c| c == "Golden Fixture Repositories"),
+        "a title-case heading names a thing, it does not assert one: {claims:?}"
+    );
+    assert!(
+        !claims.iter().any(|c| c == "next"),
+        "a dependency name out of a fixture's package.json is not project knowledge: {claims:?}"
+    );
+    assert_eq!(
+        r.concepts_read, 3,
+        "the node from tests/fixtures is dropped inside graphify::read, before anything counts it"
+    );
+    assert_eq!(
+        r.skipped_not_a_claim, 1,
+        "only the heading reaches the claim filter; the fixture node never got that far"
+    );
 }

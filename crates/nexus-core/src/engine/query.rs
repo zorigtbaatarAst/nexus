@@ -9,6 +9,14 @@ use crate::context::{
     ItemKind, PackageBasis, ProjectSummary, Purpose, Seed, SeedResult, SignalIndex, TaskRequest,
 };
 
+/// How many symbols the memory query may name.
+///
+/// Expansion runs to `max_depth: 5` with no node cap — a four-symbol prompt on this
+/// repository already reaches 189 — and each seed becomes bound parameters. The cap is
+/// generous enough never to bite in practice and low enough that it cannot surprise SQLite.
+/// When it does bite the package says so, because a silently narrowed query is an error.
+const SEED_QUERY_CAP: usize = 256;
+
 impl Engine {
     pub fn status(&self) -> Result<StatusReport> {
         let (commit, dirty) = self.head();
@@ -191,12 +199,13 @@ impl Engine {
             });
         }
 
-        // Durable facts: what previous sessions worked out.
+        // Durable facts: what previous sessions worked out and the project kept.
         //
-        // The lifecycle states are Phase 3.1, so "durable" is approximated by the order the
-        // store already returns — human, then deterministic, then AI, each by confidence.
-        // The approximation gets better when the lifecycle lands; it does not get unwound.
-        for row in self.store.facts(self.project_id, None)? {
+        // Durability is now asked for rather than approximated. It was approximated by store
+        // order while the lifecycle was Phase 3.1; the lifecycle landed and the approximation
+        // outlived it, which is how 671 imported claims came to buy the session budget nine
+        // at a time in alphabetical order.
+        for row in self.store.durable_facts(self.project_id)? {
             let anchor = row
                 .evidence_json
                 .as_deref()
@@ -300,18 +309,51 @@ impl Engine {
         );
         // 3 — expand.
         let reached = expand::run(&self.store, self.project_id, &seeded.seeds, intent.intent)?;
-        // 4 — signals, once.
+        // 4 — signals, once. `candidate_fqns` is every seed plus everything expansion
+        // reached, deduplicated and capped at SEED_QUERY_CAP right here — the one list stage
+        // 5 below ranks, `index.for_candidate` looks up against, and the facts-by-subject
+        // query further down runs against. Built once so there is exactly one cap: this used
+        // to be built a second time down at the facts query, deduplicated and capped there
+        // but not here, so the copy that reached `SignalIndex::build` (and its own fact read
+        // via `facts_for_seeds`) was unbounded — a Review intent's changed-symbol seed set
+        // blew that copy past SQLITE_MAX_COMPOUND_SELECT before the capped copy downstream
+        // ever ran.
         let findings = self.findings(None, None, None)?;
+        let mut candidate_fqns: Vec<String> = seeded
+            .seeds
+            .iter()
+            .map(|s| s.symbol.fqn.clone())
+            .chain(reached.items.iter().map(|i| i.fqn.clone()))
+            .collect();
+        // Seeds and what they reach can name the same symbol twice; dedup with a seen-set
+        // (not a `BTreeSet`, which would reorder) so seeds stay ahead of expansion items —
+        // the cap below truncates the tail, so order decides what survives it.
+        let mut seen = std::collections::HashSet::with_capacity(candidate_fqns.len());
+        candidate_fqns.retain(|fqn| seen.insert(fqn.clone()));
+        let mut cap_note = None;
+        if candidate_fqns.len() > SEED_QUERY_CAP {
+            cap_note = Some(format!(
+                "{} symbols are relevant here; memory was queried for the first \
+                 {SEED_QUERY_CAP}, so a fact about the outer edge of the expansion may be \
+                 missing",
+                candidate_fqns.len()
+            ));
+            candidate_fqns.truncate(SEED_QUERY_CAP);
+        }
         let index = SignalIndex::build(
             &self.store,
             self.project_id,
             &findings,
+            &candidate_fqns,
             self.churn(),
             profile_anchors(&status),
         )?;
 
         let mut notes = seeded.notes.clone();
         notes.extend(index.notes().iter().cloned());
+        if let Some(n) = cap_note {
+            notes.push(n);
+        }
         if let Some(n) = loaded.note {
             notes.push(n);
         }
@@ -414,21 +456,17 @@ impl Engine {
         }
         // Facts about anything the request reached. Knowledge competes with code on the same
         // scale, which is the point of one formula: a fact that answers the question outranks
-        // a symbol that merely mentions it.
-        // Seeds *and* what they reach. A fact about a method the change calls is exactly as
-        // relevant as one about the method being changed — that is what expansion is for, and
-        // matching on seeds alone dropped the idempotency fact from a package about the
-        // controller that enforces it.
-        let relevant: Vec<String> = seeded
-            .seeds
-            .iter()
-            .map(|s| s.symbol.fqn.clone())
-            .chain(reached.items.iter().map(|i| i.fqn.clone()))
-            .collect();
+        // a symbol that merely mentions it. Seeds *and* what they reach: a fact about a
+        // method the change calls is exactly as relevant as one about the method being
+        // changed — that is what expansion is for, and matching on seeds alone dropped the
+        // idempotency fact from a package about the controller that enforces it. Runs against
+        // `candidate_fqns` from stage 4 above, already deduplicated and capped — not a second
+        // seed list with its own cap to keep in sync with the first.
         let current_scan = self.current_scan_id()?;
         for row in crate::memory::rank(
-            self.store.facts(self.project_id, None)?,
-            &relevant,
+            self.store
+                .facts_for_seeds(self.project_id, &candidate_fqns)?,
+            &candidate_fqns,
             current_scan,
         ) {
             let Some(subject) = row.subject.clone() else {
@@ -443,13 +481,13 @@ impl Engine {
             // fact about this symbol", which is trivially true of a fact asked about its own
             // subject — and that let a fact about an unrelated module into every package
             // until a test asked whether it belonged there.
-            let to_seeds = crate::memory::subject_match(Some(&subject), &relevant);
-            if !relevant.is_empty() && to_seeds <= 0.3 {
+            let to_seeds = crate::memory::subject_match(Some(&subject), &candidate_fqns);
+            if !candidate_fqns.is_empty() && to_seeds <= 0.3 {
                 continue;
             }
             let text = format!("{}  {}  [{}]", row.key, row.claim, row.source);
             let signals = crate::context::Signals {
-                fact: crate::memory::relevance(&row, &relevant, current_scan),
+                fact: crate::memory::relevance(&row, &candidate_fqns, current_scan),
                 ..Default::default()
             };
             let (score, terms) = crate::context::rank::score(
@@ -535,13 +573,11 @@ impl Engine {
 
     /// A fingerprint of what this project remembers, for the cache key.
     ///
-    /// Counts, not contents: recording a fact or a finding must invalidate the cache, and a
-    /// count plus the newest row id changes whenever either does. Cheap enough to run on
-    /// every request, which is the point — the alternative is a cache that serves an answer
-    /// from before the thing it should have known.
+    /// A single counter, bumped by every fact and finding write — not a `COUNT(*)` over
+    /// them. Cheap enough to run on every request, which is the point — the alternative is a
+    /// cache that serves an answer from before the thing it should have known.
     fn memory_fingerprint(&self) -> Result<String> {
-        let (facts, findings) = self.store.memory_counters(self.project_id)?;
-        Ok(format!("{facts}:{findings}"))
+        Ok(self.store.memory_version(self.project_id)?.to_string())
     }
 
     /// A fingerprint of the uncommitted state, for the cache key.

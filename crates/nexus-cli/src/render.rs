@@ -244,12 +244,15 @@ pub fn scan(w: &mut impl Write, st: &Style, r: &ScanReport) -> std::io::Result<(
         } else {
             100.0
         };
+        // "coverage", not "resolved": this is the share of call sites that found *a*
+        // destination, and nothing here checks that it is the right one. See
+        // docs/superpowers/specs/2026-09-03-resolution-accuracy-harness-design.md.
         writeln!(
             w,
-            "  edges        {} {}",
+            "  call sites   {} {}",
             r.edges_total,
             st.dim(&format!(
-                "({pct:.0}% of {in_scope} in-project resolved, {} external)",
+                "({pct:.0}% coverage of {in_scope} in-project, {} external)",
                 r.edges_external
             ))
         )?;
@@ -628,7 +631,7 @@ pub fn ambiguous(
 
 pub fn graph(w: &mut impl Write, st: &Style, g: &GraphReport) -> std::io::Result<()> {
     writeln!(w, "{}", st.head("Dependency graph"))?;
-    writeln!(w, "  {} edges total", g.edges_total)?;
+    writeln!(w, "  {} call sites total", g.edges_total)?;
     let in_scope = g.edges_total - g.edges_external;
     let pct = if in_scope > 0 {
         (g.edges_resolved as f64 / in_scope as f64) * 100.0
@@ -639,7 +642,7 @@ pub fn graph(w: &mut impl Write, st: &Style, g: &GraphReport) -> std::io::Result
         w,
         "  {in_scope} in-project · {} resolved {}",
         g.edges_resolved,
-        st.good(&format!("({pct:.0}%)"))
+        st.good(&format!("({pct:.0}% coverage)"))
     )?;
     writeln!(
         w,
@@ -665,6 +668,15 @@ pub fn graph(w: &mut impl Write, st: &Style, g: &GraphReport) -> std::io::Result
             writeln!(w, "  {:<12} {n}", st.dim(res))?;
         }
     }
+    // Said once, plainly, on the surface that reports the number. Coverage answers "how
+    // much of the graph exists", never "how much of it is correct" — and this project's own
+    // documents read it as the second for long enough that a decision gate was wired to it.
+    writeln!(w)?;
+    writeln!(
+        w,
+        "  {}",
+        st.dim("coverage, not accuracy: nothing here checks a destination is the right one")
+    )?;
     Ok(())
 }
 

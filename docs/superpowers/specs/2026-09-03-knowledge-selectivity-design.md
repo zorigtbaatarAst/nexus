@@ -1,7 +1,7 @@
 # Knowledge Selectivity — Design
 
 **Status:** approved; **absorbed into** [`2026-09-03-retrieval-design.md`](2026-09-03-retrieval-design.md),
-which is what gets built. This document remains the record of what was measured about
+which is what gets built; implemented. This document remains the record of what was measured about
 graphify's prose and the four prose-to-code joins that carry no signal.
 **Date:** 2026-09-03
 **Supersedes nothing.** Corrects a regression introduced by `012782d`

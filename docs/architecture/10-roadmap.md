@@ -373,7 +373,8 @@ Success criteria, each against the code:
   yet. `nexus context --weights` reads what the packages say and refuses to recommend below
   thirty of them.
 
-**What is honest about its limits.** Rust resolution is 547 of 4,158, far below Java's 96 %.
+**What is honest about its limits.** Rust resolution is 1,659 of 3,632 call sites — 46 % at
+`2a86560`, far below Java's 96 %.
 The cause is measured: most of the remainder are bare method names, which need the receiver's
 type, and std or third-party paths that no owner-root inference can classify because Rust has
 no reverse-DNS convention. That is the LSP-sidecar trigger in the table below, and it now has
@@ -413,7 +414,7 @@ measurement.
 | Item | Trigger | Status |
 |---|---|---|
 | `nexusd` daemon + watcher | no-op `rescan` > 2 s, or `impact` p95 > 250 ms | **not fired** — 641 ms full scan, 880 files |
-| LSP sidecars | impact recall < 85 % for a language | **fired for Rust** — 13 % resolved (547/4,158); 96 % for Java. Bare method hints need a receiver type, which needs a type checker |
+| LSP sidecars | impact recall < 85 % for a language | **fired for Rust** — 46 % of call sites resolved (1,659/3,632 at `2a86560`); 96 % for Java. Bare method hints need a receiver type, which needs a type checker. Note the trigger names *recall* and the evidence is *coverage*: see [the resolution-accuracy spec](../superpowers/specs/2026-09-03-resolution-accuracy-harness-design.md) §1.6 |
 | Vector search / embeddings | ledger misses clustering on semantic similarity | **not fired** — no evidence gathered |
 | Team-shared store (server) | >1 developer maintaining the same findings, *and* export/import proving insufficient | not fired |
 | Monorepo sharding | full scan > 30 min, or CI write contention | not fired |

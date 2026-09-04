@@ -29,7 +29,7 @@ itself** — 1,831 symbols where it once reported zero.
 
 Still absent, and every surface says so rather than leaving anyone to infer it: any direct
 LLM provider, and `investigate`. Two things are honest about being weaker than they look —
-Rust edge resolution is 13 % against Java's 96 % (bare method hints need a receiver type),
+Rust edge resolution is 46 % against Java's 96 % (bare method hints need a receiver type),
 and no ranking weight has been tuned, because tuning without ledger evidence is the folklore
 `docs/architecture/11-risks.md` R8 names. `docs/architecture/10-roadmap.md` records what each
 phase delivered and what it left undone.
@@ -147,6 +147,16 @@ that is hard to attribute.
   253 tokens shipped 11,113 — because the estimate counted item text and the payload is
   mostly everything else.
 
+- **Memory is queried by subject, never scanned.** `Store::facts(project_id, None)` loads
+  every live fact. Only batch commands may — the exporters, the portable importer, and
+  `nexus ask facts`. **No request path may.** `task_package` calls `facts_for_seeds`,
+  `session_package` calls `durable_facts`. The unscoped form cost 274 ms at 200,000 facts on
+  a path ADR-024 budgets 150 ms for, and memory is append-only by design, so that number only
+  grows. This paragraph named the callers as a count three separate times and was wrong every
+  time, so the count is gone: `crates/nexus-cli/tests/boundaries.rs` greps every call site in
+  `query.rs` against a named allowlist instead, and a caller missing from it fails CI rather
+  than aging the prose.
+
 - **The context cache key must include everything that changes an answer.** Intent, seeds,
   commit, dirty hash, budget, weights, `explain`, the memory fingerprint, and the build
   version. It has been wrong in three separate ways: a recorded fact was invisible until an
@@ -255,6 +265,14 @@ that is hard to attribute.
   `orderStatus()`. Without emitting those accessors, every `dto.orderStatus()` in the
   codebase is an unresolvable call — this alone was most of the gap between 68 % and 96 %
   resolution on a real project.
+
+- **A Rust struct field is not indexed, and a symptom routinely names one.** Java record
+  components become accessor methods and get indexed for free (above); a plain Rust field
+  never becomes a symbol at all. `ContextPackage::tokens_estimated` cannot be a seed target no
+  matter how a symptom is worded — nothing in the index is named that — while the unrelated
+  method `Candidate::tokens` is, so a symptom that says "tokens_estimated" seeds on `tokens`
+  by accident instead. This caps how often the widened seed rule in
+  `docs/superpowers/specs/2026-09-03-retrieval-design.md` can fire at all.
 
 - **Codegen output must not be indexed.** `graphql-generated.ts` is thousands of symbols
   nobody wrote and nobody can change. `walk::is_excluded` drops it, along with

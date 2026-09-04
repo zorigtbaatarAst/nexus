@@ -15,6 +15,21 @@ pub type ScanId = i64;
 pub type FileId = i64;
 pub type SymbolId = i64;
 
+/// The five characters that end an identifier and start the next segment, across every
+/// language this project indexes: `:` (Rust `::`, `graphql:`), `#` (member), `.` (Java
+/// package, TS `Class.method`), `/` (TS/JS module path), `(` (a signature). Measured across
+/// two real indexes rather than guessed — `-` deliberately did not make this set: it sits
+/// *inside* identifiers (`some-file`, `nexus-cli`), and treating it as a boundary would let
+/// `some` match `some-file`.
+///
+/// Defined once, here, because it already drifted once: `nexus_core::memory::subject_match`
+/// (ranking) and `nexus_store::subject_prefixes` (the SQL that narrows candidates before
+/// ranking) both decide what counts as a module boundary, and a fix applied to one and not the
+/// other is exactly the class of bug this whole task exists to close. Neither crate may depend
+/// on the other, so a shared constant needs a crate neither of them owns — which is what this
+/// one is for (see the module doc above).
+pub const SUBJECT_ANCHORS: &[u8; 5] = b":.#/(";
+
 // ─────────────────────────── language ───────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -221,10 +236,20 @@ pub enum Resolution {
     Framework,
     Contract,
     Heuristic,
-    /// The target is genuinely outside the indexed project — a third-party library, or a
-    /// sibling module that was not scanned. Distinct from `Unresolved`, which means
-    /// BugHunter looked and failed. Conflating them makes the resolution rate a lie.
+    /// The target is genuinely outside the indexed project — a third-party library.
+    /// Distinct from `Unresolved`, which means BugHunter looked and failed. Conflating
+    /// them makes the resolution rate a lie.
     External,
+    /// Code this project owns that was not scanned — a sibling module of the same
+    /// monorepo. Outside the index like `External`, but for a reason the caller can fix by
+    /// widening the scan. ADR-017.
+    Sibling,
+    /// Imported from an external knowledge graph, never resolved against a symbol table.
+    /// Capped at 0.5 confidence so an imported claim cannot outrank a parsed edge — a
+    /// ceiling that was defeated for as long as this variant was missing and the stored
+    /// value read back as `Heuristic`, claiming a tier that had resolved something.
+    #[serde(rename = "external-graph")]
+    ExternalGraph,
     Unresolved,
 }
 
@@ -236,6 +261,8 @@ impl Resolution {
             Resolution::Contract => "contract",
             Resolution::Heuristic => "heuristic",
             Resolution::External => "external",
+            Resolution::Sibling => "sibling",
+            Resolution::ExternalGraph => "external-graph",
             Resolution::Unresolved => "unresolved",
         }
     }
@@ -246,6 +273,8 @@ impl Resolution {
             "contract" => Resolution::Contract,
             "heuristic" => Resolution::Heuristic,
             "external" => Resolution::External,
+            "sibling" => Resolution::Sibling,
+            "external-graph" => Resolution::ExternalGraph,
             "unresolved" => Resolution::Unresolved,
             _ => return None,
         })
@@ -643,5 +672,51 @@ mod change_kind_tests {
     fn an_unknown_change_type_yields_nothing_rather_than_a_default() {
         // Defaulting would put a wrong kind in front of a rule that acts on it.
         assert_eq!(ChangeKind::from_ledger("teleported", None), None);
+    }
+}
+
+#[cfg(test)]
+mod resolution_tests {
+    use super::Resolution;
+
+    #[test]
+    fn every_stored_resolution_value_round_trips() {
+        // The CHECK constraint in migrations 0006_external_graph.sql permits exactly these.
+        // A value the database can hold but the enum cannot name is reported as the wrong
+        // tier: `sibling` and `external-graph` both read back as `heuristic`, claiming a
+        // tier that had resolved something when nothing had.
+        for s in [
+            "exact",
+            "framework",
+            "contract",
+            "heuristic",
+            "external",
+            "sibling",
+            "external-graph",
+            "unresolved",
+        ] {
+            let parsed = Resolution::parse(s)
+                .unwrap_or_else(|| panic!("{s} is a stored value the enum cannot name"));
+            assert_eq!(parsed.as_str(), s, "{s} did not round-trip");
+        }
+    }
+
+    #[test]
+    fn an_unknown_resolution_is_none_rather_than_a_guess() {
+        assert!(Resolution::parse("invented").is_none());
+    }
+
+    #[test]
+    fn the_hyphenated_variant_keeps_its_hyphen() {
+        // `rename_all = "lowercase"` alone would render this as `externalgraph`, which no
+        // migration permits and no `parse` accepts, so the variant carries an explicit
+        // `#[serde(rename)]`. Asserted through `as_str` rather than through serde, because
+        // this crate depends on nothing but serde and one assertion does not justify
+        // pulling `serde_json` in to check it.
+        assert_eq!(Resolution::ExternalGraph.as_str(), "external-graph");
+        assert_eq!(
+            Resolution::parse(Resolution::ExternalGraph.as_str()),
+            Some(Resolution::ExternalGraph)
+        );
     }
 }
