@@ -1,0 +1,96 @@
+{
+  "oracle": "rust-analyzer 1.98.0",
+  "file_coverage": {
+    "value": 1.0,
+    "low": 0.9637042523922542,
+    "high": 1.0,
+    "k": 102,
+    "n": 102
+  },
+  "partial": false,
+  "scores": {
+    "precision": {
+      "value": 0.7231675392670157,
+      "low": 0.7001942250022446,
+      "high": 0.7450215205422033,
+      "k": 1105,
+      "n": 1528
+    },
+    "recall": {
+      "value": 0.8033625730994152,
+      "low": 0.781463310098956,
+      "high": 0.8235628095346809,
+      "k": 1099,
+      "n": 1368
+    },
+    "strict": {
+      "value": 0.7149122807017544,
+      "low": 0.6904126812546745,
+      "high": 0.7382082324134924,
+      "k": 978,
+      "n": 1368
+    },
+    "f1": 0.7611585653255245
+  },
+  "brier": 0.18738874345549883,
+  "ece": 0.11341623036649218,
+  "tiers": [
+    {
+      "tier": "heuristic",
+      "claimed": 0.7,
+      "measured": {
+        "value": 0.8650904033379694,
+        "low": 0.8381696254431805,
+        "high": 0.8881305764267728,
+        "k": 622,
+        "n": 719
+      },
+      "verdict": "Miscalibrated",
+      "proposed": 0.8645833333333334
+    },
+    {
+      "tier": "heuristic",
+      "claimed": 0.6,
+      "measured": {
+        "value": 0.6568807339449542,
+        "low": 0.6160484697032081,
+        "high": 0.6955168343845287,
+        "k": 358,
+        "n": 545
+      },
+      "verdict": "Miscalibrated",
+      "proposed": 0.6565934065934066
+    },
+    {
+      "tier": "heuristic",
+      "claimed": 0.3,
+      "measured": {
+        "value": 0.3853211009174312,
+        "low": 0.32323342451030324,
+        "high": 0.45138053427831004,
+        "k": 84,
+        "n": 218
+      },
+      "verdict": "Miscalibrated",
+      "proposed": 0.3858447488584475
+    },
+    {
+      "tier": "exact",
+      "claimed": 1.0,
+      "measured": {
+        "value": 0.8913043478260869,
+        "low": 0.7696189698736853,
+        "high": 0.9526692391725731,
+        "k": 41,
+        "n": 46
+      },
+      "verdict": "UnderPowered",
+      "proposed": null
+    }
+  ],
+  "excluded_non_project": 391,
+  "excluded_oracle_blind": 3218,
+  "sites_total": 4232,
+  "inconclusive": false,
+  "coverage_denominator_is_complete": true
+}

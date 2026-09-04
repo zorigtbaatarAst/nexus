@@ -130,8 +130,22 @@ Four tiers, with every edge recording which tier produced it and how confident i
 | nothing matched | `dst_fqn_hint` retained for later | `unresolved` | 0.00 |
 | LSP sidecar | `jdtls`, `rust-analyzer` — designed, not built | `exact` | 1.00 |
 
-**None of these confidences has been measured.** They were chosen, and the tier that
-produces most of them is the newest. See
+**Four of these confidences are now measured**, against a `rust-analyzer` SCIP oracle on this
+repository at `0ded6b3` — 1,528 judged edges, Rust only. The bins are claimed *values*, not
+mechanisms, because `resolution` records `heuristic` for six of them:
+
+| Claimed | Measured | 95 % interval | n | Verdict |
+|---|---|---|---|---|
+| 0.70 (unique simple name) | 0.865 | 0.838 – 0.888 | 719 | miscalibrated — under-claims |
+| 0.60 (bare member name) | 0.657 | 0.616 – 0.696 | 545 | miscalibrated — under-claims |
+| 0.30 (`0.9 / n`, n = 3) | 0.385 | 0.323 – 0.451 | 218 | miscalibrated — under-claims |
+| 1.00 (exact FQN) | 0.891 | 0.770 – 0.953 | 46 | under-powered — no proposal |
+
+The rest carry no judged edges in this repository and remain **chosen, not measured**. No
+constant has been changed on this evidence: three of the four are pessimistic, and a
+measurement and a behaviour change in one diff cannot be reviewed independently. Overall
+precision is 0.723 [0.700–0.745] per edge and 0.715 [0.690–0.738] per site strictly. Full
+run, method and caveats: [`docs/eval/`](eval/README.md). Harness design:
 [the resolution-accuracy harness spec](superpowers/specs/2026-09-03-resolution-accuracy-harness-design.md).
 
 ### Alternatives considered
