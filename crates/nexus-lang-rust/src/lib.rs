@@ -58,7 +58,7 @@ impl LanguageAnalyzer for RustAnalyzer {
         // grammar silently keeps the symbols the old one produced, forever, with no error.
         // The `+fqn2` suffix is the crate-qualified FQN: identity changed, so every cache
         // keyed on this must miss rather than keep symbols the old scheme named.
-        "tree-sitter-rust 0.24+fqn2"
+        "tree-sitter-rust 0.24+fqn2+sig3"
     }
 
     fn parse(&self, src: &SourceFile<'_>) -> Result<ParsedFile, LangError> {
@@ -251,7 +251,7 @@ fn push_symbol(
         ),
         start_line: line(node),
         end_line: node.end_position().row as u32 + 1,
-        sig_hash: hash(&[&sig, &attrs.join(",")]),
+        sig_hash: nexus_lang::sig_hash(&sig, &attrs),
         body_hash: hash(&[&body]),
         annotations: attrs,
     });

@@ -1190,7 +1190,6 @@ impl Engine {
             remedy: (v != nexus_store::SCHEMA_VERSION).then(|| "upgrade bughunter".into()),
         });
 
-        let langs = self.registry.tool_versions();
         checks.push(Check {
             name: "languages",
             level: if self.registry.is_empty() {
@@ -1198,11 +1197,24 @@ impl Engine {
             } else {
                 "ok"
             },
-            detail: langs
-                .iter()
-                .map(|(k, v)| format!("{} ({v})", k.trim_start_matches("grammar:")))
-                .collect::<Vec<_>>()
-                .join(", "),
+            // Read off the analyzers, not off `tool_versions()`: that map is keyed for cache
+            // invalidation, and a key shaped to be unique is not a name to show anyone.
+            // Grouped by language because two analyzers may claim one — the GraphQL schema
+            // reader reports TypeScript — and listing it twice reads as a bug in the build.
+            detail: {
+                let mut by_language: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+                for a in self.registry.analyzers() {
+                    by_language
+                        .entry(a.language().as_str())
+                        .or_default()
+                        .push(a.grammar_version());
+                }
+                by_language
+                    .iter()
+                    .map(|(lang, versions)| format!("{lang} ({})", versions.join(", ")))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
             remedy: None,
         });
 

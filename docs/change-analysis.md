@@ -144,9 +144,23 @@ proportional to the number of changed FQNs, not to graph size.
 `scans.tool_versions_json` records the version of every component whose output is cached:
 
 ```json
-{ "schema": 3, "nexus-lang-java": "0.4.1", "grammar:java": "0.21.0",
-  "grammar:tsx": "0.20.4", "normalizer:java": 2 }
+{ "grammar:java:java": "tree-sitter-java/0.23.5+extract10",
+  "grammar:javascript:js,jsx,mjs,cjs": "tree-sitter-typescript/0.23+extract2",
+  "grammar:python:py": "tree-sitter-python 0.25+extract2",
+  "grammar:rust:rs": "tree-sitter-rust 0.24+fqn2+sig3",
+  "grammar:typescript:graphqls,graphql,gql": "graphql-schema/2",
+  "grammar:typescript:ts,tsx,mts,cts": "tree-sitter-typescript/0.23+extract2",
+  "schema": "8" }
 ```
+
+That is the whole map, copied from a real scan: one entry per registered analyzer plus the
+store schema, and nothing else. `Engine::tool_versions` builds it from
+`Registry::tool_versions()` and adds `schema` — there is no per-crate or per-normalizer key.
+
+The key carries the analyzer's extensions as well as its language because two analyzers may
+report the same `Language` — the GraphQL schema reader calls itself TypeScript, having no
+language of its own — and a language-keyed map kept only whichever registered last. Bumping
+the TypeScript analyzer then invalidated nothing at all.
 
 On rescan, any component whose version differs from the baseline scan forces **all files
 in its scope** to be re-parsed, hashes notwithstanding, and the scan is recorded as `full`

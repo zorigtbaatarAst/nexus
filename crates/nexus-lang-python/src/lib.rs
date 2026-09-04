@@ -50,7 +50,7 @@ impl LanguageAnalyzer for PythonAnalyzer {
     }
 
     fn grammar_version(&self) -> &'static str {
-        "tree-sitter-python 0.25"
+        "tree-sitter-python 0.25+extract2"
     }
 
     fn parse(&self, src: &SourceFile<'_>) -> Result<ParsedFile, LangError> {
@@ -246,7 +246,7 @@ fn push_symbol(
         ),
         start_line: line(node),
         end_line: node.end_position().row as u32 + 1,
-        sig_hash: hash(&[&sig, &annotations.join(",")]),
+        sig_hash: nexus_lang::sig_hash(&sig, &annotations),
         body_hash: hash(&[&body]),
         annotations,
     });

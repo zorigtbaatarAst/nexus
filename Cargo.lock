@@ -882,6 +882,7 @@ dependencies = [
 name = "nexus-lang"
 version = "0.3.0"
 dependencies = [
+ "blake3",
  "nexus-types",
  "thiserror 2.0.20",
 ]

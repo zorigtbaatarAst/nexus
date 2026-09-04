@@ -43,7 +43,7 @@ impl LanguageAnalyzer for GraphQlSchemaAnalyzer {
     }
 
     fn grammar_version(&self) -> &'static str {
-        "graphql-schema/1"
+        "graphql-schema/2"
     }
 
     fn parse(&self, src: &SourceFile<'_>) -> Result<ParsedFile, LangError> {
@@ -64,9 +64,9 @@ impl LanguageAnalyzer for GraphQlSchemaAnalyzer {
                 end_line: def.line,
                 // The signature is the contract: a changed argument list or return type is
                 // an API change on this field, which is exactly what sig_hash should catch.
-                sig_hash: hash(&def.signature),
+                sig_hash: nexus_lang::sig_hash(&def.signature, &def.directives),
                 body_hash: hash(""),
-                annotations: Vec::new(),
+                annotations: def.directives,
             });
         }
         Ok(out)
@@ -77,7 +77,11 @@ impl LanguageAnalyzer for GraphQlSchemaAnalyzer {
 pub struct FieldDef {
     pub type_name: String,
     pub field: String,
+    /// The declaration without its directives — those are `directives`, so that reordering
+    /// two of them is not a change to this.
     pub signature: String,
+    /// GraphQL's annotations: `@deprecated`, `@auth(role: ADMIN)`.
+    pub directives: Vec<String>,
     pub line: u32,
 }
 
@@ -121,10 +125,12 @@ pub fn root_fields(text: &str) -> Vec<FieldDef> {
         let Some(field) = field_name(&line) else {
             continue;
         };
+        let (signature, directives) = split_directives(&line);
         out.push(FieldDef {
             type_name,
             field,
-            signature: line.clone(),
+            signature,
+            directives,
             line: i as u32 + 1,
         });
     }
@@ -158,6 +164,48 @@ fn field_name(line: &str) -> Option<String> {
     (!name.is_empty() && (next == ':' || next == '(')).then_some(name)
 }
 
+/// A field declaration split into its signature and its directives.
+///
+/// A directive is GraphQL's annotation, and it belongs where every other language's
+/// annotations are: `@deprecated` appearing or vanishing is a contract change, and two
+/// directives swapping places is not. Left in the signature, the swap read as an API break.
+///
+/// Only top-level directives are taken. One inside an argument list — `f(a: String
+/// @deprecated): Int` — describes the argument, so it stays part of the signature, and one
+/// inside a string is not a directive at all.
+fn split_directives(line: &str) -> (String, Vec<String>) {
+    let mut cuts = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut depth = 0i32;
+    for (i, c) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' if in_string => escaped = true,
+            '"' => in_string = !in_string,
+            _ if in_string => {}
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            '@' if depth <= 0 => cuts.push(i),
+            _ => {}
+        }
+    }
+    let Some(&first) = cuts.first() else {
+        return (line.to_string(), Vec::new());
+    };
+    let mut directives = Vec::new();
+    for (n, &start) in cuts.iter().enumerate() {
+        let end = cuts.get(n + 1).copied().unwrap_or(line.len());
+        // Whitespace-free, for the same reason Java's annotations are: a directive that
+        // wraps across a line must hash the same as one that does not.
+        directives.push(line[start..end].split_whitespace().collect());
+    }
+    (line[..first].trim_end().to_string(), directives)
+}
+
 fn strip_comment(line: &str) -> &str {
     match line.find('#') {
         Some(p) => &line[..p],
@@ -167,6 +215,41 @@ fn strip_comment(line: &str) -> &str {
 
 fn hash(s: &str) -> String {
     blake3::hash(s.as_bytes()).to_hex()[..32].to_string()
+}
+
+#[cfg(test)]
+mod directive_tests {
+    use super::split_directives;
+
+    #[test]
+    fn directives_come_out_of_the_signature() {
+        let (sig, dirs) = split_directives("go(id: ID!): String @a @b(reason: \"x\")");
+        assert_eq!(sig, "go(id: ID!): String");
+        assert_eq!(dirs, ["@a", "@b(reason:\"x\")"]);
+    }
+
+    #[test]
+    fn an_at_sign_inside_a_string_is_not_a_directive() {
+        // `@deprecated(reason: "use @newField")` is one directive, not two.
+        let (sig, dirs) = split_directives("go: String @deprecated(reason: \"use @newField\")");
+        assert_eq!(sig, "go: String");
+        assert_eq!(dirs.len(), 1);
+    }
+
+    #[test]
+    fn a_directive_on_an_argument_stays_part_of_the_signature() {
+        // It describes the argument, not the field, so moving it *is* a signature change.
+        let (sig, dirs) = split_directives("go(a: String @deprecated): Int");
+        assert_eq!(sig, "go(a: String @deprecated): Int");
+        assert!(dirs.is_empty());
+    }
+
+    #[test]
+    fn a_field_without_directives_is_untouched() {
+        let (sig, dirs) = split_directives("vehicles(pagination: AntPageable): AntPage!");
+        assert_eq!(sig, "vehicles(pagination: AntPageable): AntPage!");
+        assert!(dirs.is_empty());
+    }
 }
 
 #[cfg(test)]

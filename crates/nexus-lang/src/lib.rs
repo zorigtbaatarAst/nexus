@@ -35,11 +35,52 @@ pub struct RawSymbol {
     pub visibility: Option<String>,
     pub start_line: u32,
     pub end_line: u32,
-    /// blake3 of signature + sorted annotations. Moving means an API break.
+    /// The signature hash, from `sig_hash` below — never hand-rolled. Moving means an API
+    /// break.
     pub sig_hash: String,
     /// blake3 of the normalized body. Moving alone means a behaviour change.
     pub body_hash: String,
     pub annotations: Vec<String>,
+}
+
+/// The one construction for `RawSymbol::sig_hash`, in every language.
+///
+/// Annotations are sorted, so reordering them is not a change; every one of them
+/// contributes, so adding or removing one is. Each is hashed under its own separator rather
+/// than joined into a string, because annotation arguments contain commas —
+/// `@RequestMapping(value="/x", method=GET)` is one annotation, and a join would let it hash
+/// the same as two.
+///
+/// Analyzers supply the signature and the annotations; they do not hash. There were four
+/// independent constructions here, and they disagreed with this contract and with each
+/// other: Java sorted and Rust and Python did not, so reordering two attributes read as an
+/// API break, and TypeScript omitted annotations entirely, so a decorator appearing or
+/// vanishing produced no ripple at all. `nexus-lang-pack/tests/sig_hash_conformance.rs`
+/// holds every registered analyzer to this.
+pub fn sig_hash(signature: &str, annotations: &[String]) -> String {
+    let sorted = canonical_annotations(annotations);
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(signature.as_bytes());
+    // The count, so the separator cannot be impersonated: a signature that happens to
+    // contain a 0x1f byte would otherwise hash like one annotation fewer.
+    hasher.update(&(sorted.len() as u64).to_le_bytes());
+    for annotation in sorted {
+        hasher.update(b"\x1f");
+        hasher.update(annotation.as_bytes());
+    }
+    hasher.finalize().to_hex()[..32].to_string()
+}
+
+/// Annotations in the order the contract sees them: sorted, so that reordering is not a
+/// change.
+///
+/// `sig_hash` hashes this and the ledger compares it — one rule, one place. They were two
+/// implementations of it, and the ledger's was order-sensitive, so a swap was reported as
+/// `CONTRACT_CHANGED` while the hash said nothing had moved.
+pub fn canonical_annotations(annotations: &[String]) -> Vec<&str> {
+    let mut sorted: Vec<&str> = annotations.iter().map(String::as_str).collect();
+    sorted.sort_unstable();
+    sorted
 }
 
 /// A dependency as an analyzer sees it: two names and a kind. Turning `dst_hint` into a
@@ -118,6 +159,12 @@ impl Registry {
         self.analyzers.is_empty()
     }
 
+    /// Every registered analyzer, so a conformance suite can hold all of them to a contract
+    /// rather than whichever one someone remembered to test.
+    pub fn analyzers(&self) -> impl Iterator<Item = &dyn LanguageAnalyzer> {
+        self.analyzers.iter().map(|a| a.as_ref())
+    }
+
     /// The languages this build actually analyzes.
     ///
     /// The profile's `analyzed` flag was a hardcoded `["java", "typescript"]`, so a Rust
@@ -135,12 +182,18 @@ impl Registry {
     }
 
     /// The version map recorded on every scan, keyed for cache invalidation.
+    ///
+    /// Keyed by extension as well as language, because two analyzers may report the same
+    /// `Language` — the GraphQL schema reader calls itself TypeScript — and a
+    /// language-keyed map silently dropped one of their versions. Whichever registered
+    /// last won, so bumping the TypeScript analyzer invalidated nothing and the index kept
+    /// the symbols the old extraction produced, forever, with no error anywhere.
     pub fn tool_versions(&self) -> BTreeMap<String, String> {
         self.analyzers
             .iter()
             .map(|a| {
                 (
-                    format!("grammar:{}", a.language()),
+                    format!("grammar:{}:{}", a.language(), a.extensions().join(",")),
                     a.grammar_version().to_string(),
                 )
             })
@@ -170,6 +223,61 @@ pub fn module_of(path: &str) -> &str {
         Some(i) => &path[..i],
         // A leading `src/` means the module *is* the repository root.
         None => "",
+    }
+}
+
+#[cfg(test)]
+mod sig_hash_tests {
+    use super::sig_hash;
+
+    fn anns(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn reordering_annotations_is_not_a_change() {
+        assert_eq!(
+            sig_hash("void go()", &anns(&["@A", "@B"])),
+            sig_hash("void go()", &anns(&["@B", "@A"])),
+        );
+    }
+
+    #[test]
+    fn adding_or_removing_an_annotation_is_a_change() {
+        let one = sig_hash("void go()", &anns(&["@A"]));
+        let two = sig_hash("void go()", &anns(&["@A", "@Transactional"]));
+        let none = sig_hash("void go()", &[]);
+        assert_ne!(one, two);
+        assert_ne!(one, none);
+        assert_ne!(two, none);
+    }
+
+    #[test]
+    fn an_annotation_holding_a_comma_is_still_one_annotation() {
+        // A join on "," would let these two hash alike, and `@RequestMapping(value="/x",
+        // method=GET)` is exactly that shape.
+        assert_ne!(
+            sig_hash("void go()", &anns(&["@M(a,b)"])),
+            sig_hash("void go()", &anns(&["@M(a", "b)"])),
+        );
+    }
+
+    #[test]
+    fn the_signature_still_decides() {
+        assert_ne!(
+            sig_hash("void go()", &anns(&["@A"])),
+            sig_hash("void go(int)", &anns(&["@A"])),
+        );
+        // And the boundary between the two is real, separator included: a signature holding
+        // the separator byte itself must not hash like one annotation fewer.
+        assert_ne!(
+            sig_hash("void go()@A", &[]),
+            sig_hash("void go()", &anns(&["@A"]))
+        );
+        assert_ne!(
+            sig_hash("void go()\u{1f}@A", &[]),
+            sig_hash("void go()", &anns(&["@A"]))
+        );
     }
 }
 

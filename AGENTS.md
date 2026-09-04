@@ -20,7 +20,7 @@ The hard part of the second is *anchoring*, which the first has no concept of. *
 is designed and not built**; the anchoring half of it now exists as the Context Engine's text
 seeding over `ui_strings`. See [`docs/investigation.md`](docs/investigation.md).
 
-**Status: all six roadmap phases ship.** Eighteen crates, ~32k lines, 394 tests. On top of
+**Status: all six roadmap phases ship.** Eighteen crates, ~32k lines, 495 tests. On top of
 the original cascade — `scan`, `rescan`, `status`, `changes`, `impact`, `graph`, `ask`,
 `analyze`, `doctor` — the Context Engine (`context`), the fact lifecycle with Markdown export
 and file-based sharing (`fact`, `memory`, `share`), and the verification gate (`verify`) all
@@ -173,7 +173,25 @@ that is hard to attribute.
 - **Cache invalidation must include tool versions.** `scans.tool_versions_json` holds grammar
   and analyzer versions. Upgrade `tree-sitter-java` without bumping it and the content hashes
   still match, nothing re-parses, and the index keeps the old wrong symbols forever, with no
-  error anywhere. This is the single easiest thing to get wrong here.
+  error anywhere. This is the single easiest thing to get wrong here. The map is keyed by
+  language *and* extensions because two analyzers may report the same `Language` — the
+  GraphQL schema reader calls itself TypeScript, having none of its own — and a
+  language-keyed map kept only whichever registered last, so bumping the TypeScript analyzer
+  invalidated nothing at all. `nexus doctor` reads the analyzers for its language line, not
+  this map: a key shaped to be unique is not a name to show anyone.
+
+- **`sig_hash` has one construction, and it lives in `nexus-lang`.** Analyzers supply the
+  signature and the annotations; none of them hashes. There were four implementations and
+  they disagreed with the interface's stated contract and with each other — Java sorted its
+  annotations and Rust and Python did not, so swapping two attributes read as an API break,
+  and TypeScript extracted no decorators at all, so `@Roles` appearing rippled nowhere. The
+  ledger held a fifth opinion: `symbol_change` compared annotation lists with an
+  order-sensitive `!=`, so a reorder was reported as `CONTRACT_CHANGED` while the hash said
+  nothing had moved. Both go through `nexus_lang::canonical_annotations` now — one rule, one
+  place. `nexus-lang-pack/tests/sig_hash_conformance.rs` runs off `Registry::analyzers()` and
+  checks coverage by dispatch rather than by extension string, so a new analyzer either
+  brings a case that `for_path` actually reaches or fails the suite. It cannot join quietly
+  disagreeing.
 
 - **`normalize_body` is per-language and is the most dangerous function in the codebase.**
   Strip too much and real changes become invisible. It is guarded by a fixture assertion: the

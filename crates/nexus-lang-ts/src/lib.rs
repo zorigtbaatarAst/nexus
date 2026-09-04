@@ -59,7 +59,7 @@ impl LanguageAnalyzer for JavaScriptAnalyzer {
     }
 
     fn grammar_version(&self) -> &'static str {
-        "tree-sitter-typescript/0.23+extract1"
+        "tree-sitter-typescript/0.23+extract2"
     }
 
     fn parse(&self, src: &SourceFile<'_>) -> Result<ParsedFile, LangError> {
@@ -77,7 +77,7 @@ impl LanguageAnalyzer for TypeScriptAnalyzer {
     }
 
     fn grammar_version(&self) -> &'static str {
-        "tree-sitter-typescript/0.23+extract1"
+        "tree-sitter-typescript/0.23+extract2"
     }
 
     fn parse(&self, src: &SourceFile<'_>) -> Result<ParsedFile, LangError> {
@@ -321,6 +321,7 @@ fn symbol(
     node: Node,
     src: &[u8],
 ) -> RawSymbol {
+    let annotations = decorators(node, src);
     RawSymbol {
         kind,
         name: name.to_string(),
@@ -330,10 +331,49 @@ fn symbol(
         visibility: None,
         start_line: node.start_position().row as u32 + 1,
         end_line: node.end_position().row as u32 + 1,
-        sig_hash: hash(signature),
+        sig_hash: nexus_lang::sig_hash(signature, &annotations),
         body_hash: hash(&normalize_body(node, src)),
-        annotations: Vec::new(),
+        annotations,
     }
+}
+
+/// Decorators on a declaration: `@Injectable()`, `@Get('/x')`, `@Input()`.
+///
+/// Three positions, reached two ways, because that is how the grammar stores them. A
+/// non-exported class's and a field's decorators are its own children; a method's are
+/// siblings in the class body that precede it, and so are an exported class's, which belong
+/// to the `export_statement` rather than to the class. Both ways are read, since a decorator
+/// that reaches neither is a contract change nothing can see.
+///
+/// Canonical form drops whitespace, as Java's does and for the same reason: a line-wrapped
+/// `@Get(\n  '/x'\n)` must hash the same as `@Get('/x')`.
+fn decorators(node: Node, src: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut sibling = node.prev_named_sibling();
+    while let Some(s) = sibling {
+        if s.kind() != "decorator" {
+            break;
+        }
+        if let Some(t) = text(s, src) {
+            out.push(canonical_decorator(&t));
+        }
+        sibling = s.prev_named_sibling();
+    }
+    out.reverse();
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "decorator" {
+            if let Some(t) = text(child, src) {
+                out.push(canonical_decorator(&t));
+            }
+        }
+    }
+    out
+}
+
+fn canonical_decorator(text: &str) -> String {
+    text.split_whitespace().collect()
 }
 
 // ─────────────────────────── the seam ───────────────────────────
@@ -368,16 +408,24 @@ fn push_operations(doc: &str, export_fqn: &str, module: &str, node: Node, out: &
             .clone()
             .unwrap_or_else(|| export_fqn.rsplit('#').next().unwrap_or("anon").to_string());
         let op_fqn = format!("graphql:op:{op_name}");
+        let signature = format!(
+            "{} {op_name}({})",
+            op.op_type.to_lowercase(),
+            op.fields.join(",")
+        );
         out.symbols.push(RawSymbol {
             kind: SymbolKind::Route,
             name: op_name.clone(),
             fqn: op_fqn.clone(),
             parent_fqn: Some(module.to_string()),
-            signature: Some(format!("{} {op_name}", op.op_type.to_lowercase())),
+            // The selected root fields are the operation's contract, so they belong in
+            // the signature rather than only in the hash — otherwise the signature shown
+            // to a reader and the hash that decides an API break describe different things.
+            signature: Some(signature.clone()),
             visibility: Some("public".into()),
             start_line: line,
             end_line: node.end_position().row as u32 + 1,
-            sig_hash: hash(&format!("{op_fqn}:{}", op.fields.join(","))),
+            sig_hash: nexus_lang::sig_hash(&signature, &[]),
             body_hash: hash(doc),
             annotations: Vec::new(),
         });
@@ -608,6 +656,62 @@ mod tests {
 
     fn has_symbol(p: &ParsedFile, fqn: &str) -> bool {
         p.symbols.iter().any(|s| s.fqn == fqn)
+    }
+
+    #[test]
+    fn a_decorator_is_found_in_all_three_places_the_grammar_puts_it() {
+        // The placements are not obvious and getting one wrong is silent: an exported
+        // class's decorators belong to the `export_statement`, a method's are siblings in
+        // the class body, and only a field's are its own children.
+        let p = parse(
+            "src/nest/user.controller.ts",
+            r#"
+            @Controller('/users')
+            export class UserController {
+              @Input() page: number;
+
+              @Get('/:id')
+              @Roles('admin')
+              find(id: string) {}
+            }
+            "#,
+        );
+        let anns = |fqn: &str| {
+            p.symbols
+                .iter()
+                .find(|s| s.fqn == fqn)
+                .map(|s| s.annotations.clone())
+                .unwrap_or_else(|| panic!("no symbol {fqn}"))
+        };
+        let module = "src/nest/user.controller";
+        assert_eq!(
+            anns(&format!("{module}#UserController")),
+            ["@Controller('/users')"]
+        );
+        assert_eq!(anns(&format!("{module}#UserController.page")), ["@Input()"]);
+        assert_eq!(
+            anns(&format!("{module}#UserController.find")),
+            ["@Get('/:id')", "@Roles('admin')"]
+        );
+    }
+
+    #[test]
+    fn a_line_wrapped_decorator_hashes_like_the_one_line_form() {
+        // Token-stream normalization would join with a space and make these differ, which
+        // is why annotations get their own whitespace-free canonical form.
+        let one = parse("src/a.ts", "export class C { @Get('/x') go() {} }");
+        let wrapped = parse(
+            "src/a.ts",
+            "export class C {\n  @Get(\n    '/x'\n  )\n  go() {}\n}",
+        );
+        let sig = |p: &ParsedFile| {
+            p.symbols
+                .iter()
+                .find(|s| s.name == "go")
+                .map(|s| s.sig_hash.clone())
+                .expect("go")
+        };
+        assert_eq!(sig(&one), sig(&wrapped));
     }
 
     #[test]

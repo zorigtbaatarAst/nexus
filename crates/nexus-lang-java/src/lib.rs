@@ -1,7 +1,8 @@
 //! Java analyzer.
 //!
 //! Extracts types, methods, constructors and fields with two hashes each, per ADR-010:
-//! `sig_hash` over the signature and annotations, `body_hash` over the normalized body.
+//! `sig_hash` over the signature and annotations — `nexus_lang::sig_hash`, shared with
+//! every other analyzer — and `body_hash` over the normalized body.
 //! Which one moves decides how far a change ripples.
 
 #![forbid(unsafe_code)]
@@ -9,7 +10,9 @@
 // an assertion that cannot unwrap is not an assertion.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-use nexus_lang::{LangError, LanguageAnalyzer, ParsedFile, RawEdge, RawSymbol, SourceFile};
+use nexus_lang::{
+    sig_hash, LangError, LanguageAnalyzer, ParsedFile, RawEdge, RawSymbol, SourceFile,
+};
 use nexus_types::{EdgeType, Language, SymbolKind};
 use std::collections::HashMap;
 use tree_sitter::{Node, Parser};
@@ -40,7 +43,7 @@ impl LanguageAnalyzer for JavaAnalyzer {
     fn grammar_version(&self) -> &'static str {
         // Bump on any change to extraction or normalization, not only on a grammar upgrade:
         // this value forces a re-parse when content hashes would otherwise say "unchanged".
-        "tree-sitter-java/0.23.5+extract9"
+        "tree-sitter-java/0.23.5+extract10"
     }
 
     fn parse(&self, src: &SourceFile<'_>) -> Result<ParsedFile, LangError> {
@@ -450,18 +453,26 @@ fn push_method(
     if let Some(field) = graphql_field(&annotations, &name, params, src) {
         // Namespaced identically to the schema that declares it, or the two stop meeting.
         let route_fqn = nexus_types::graphql_fqn(ctx.module, &field);
+        let route_sig = format!("graphql {field}");
         out.symbols.push(RawSymbol {
             kind: SymbolKind::Route,
             name: field.clone(),
             fqn: route_fqn.clone(),
             parent_fqn: Some(owner.to_string()),
-            signature: Some(format!("graphql {field}")),
+            signature: Some(route_sig.clone()),
             visibility: Some("public".into()),
             start_line: line,
             end_line: line,
-            sig_hash: hash(&route_fqn),
+            // The coordinate, not the fqn: a route that moves between modules keeps its
+            // hash, which is what lets the rename matcher recognize it as the same route.
+            sig_hash: sig_hash(&route_sig, &[]),
             body_hash: hash(""),
-            annotations: annotations.clone(),
+            // Not the handler's annotations. The schema is the contract here (ADR-014), the
+            // `.graphqls` analyzer writes this same FQN, and the handler carries its own
+            // annotations on its own symbol — reachable across the `Routes` edge. Copying
+            // them here made `@Transactional` on a resolver read as a contract change on the
+            // schema field.
+            annotations: Vec::new(),
         });
         out.edges.push(RawEdge {
             src_fqn: route_fqn,
@@ -1182,14 +1193,6 @@ fn type_signature(node: Node, src: &[u8], name: &str) -> String {
 
 fn hash(s: &str) -> String {
     blake3::hash(s.as_bytes()).to_hex()[..32].to_string()
-}
-
-/// Annotations are sorted so reordering them is not a change, but adding or removing one is.
-/// `@Transactional` appearing or vanishing carries more meaning than most signatures.
-fn sig_hash(signature: &str, annotations: &[String]) -> String {
-    let mut anns: Vec<&str> = annotations.iter().map(String::as_str).collect();
-    anns.sort_unstable();
-    hash(&format!("{signature}\u{0}{}", anns.join(",")))
 }
 
 #[cfg(test)]

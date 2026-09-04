@@ -621,7 +621,13 @@ pub(super) fn symbol_change(old: &nexus_store::SymbolRow, new: &NewSymbol) -> Op
         .as_deref()
         .and_then(|j| serde_json::from_str(j).ok())
         .unwrap_or_default();
-    let ann_changed = old_anns != new.annotations;
+    // Through the same function the hash uses, because reordering annotations is not a
+    // change and that rule belongs in one place. This comparison was a second implementation
+    // of it and was order-sensitive, so a swap was reported as CONTRACT_CHANGED while the
+    // hash said nothing had moved — the ledger and the hash disagreeing about what a
+    // contract is.
+    let ann_changed = nexus_lang::canonical_annotations(&old_anns)
+        != nexus_lang::canonical_annotations(&new.annotations);
     let body_changed = old.body_hash != new.body_hash;
 
     match (sig_text_changed, ann_changed, body_changed) {
@@ -634,6 +640,78 @@ pub(super) fn symbol_change(old: &nexus_store::SymbolRow, new: &NewSymbol) -> Op
         (false, false, true) => Some(ChangeKind::BodyChanged),
     }
 }
+#[cfg(test)]
+mod symbol_change_tests {
+    use super::symbol_change;
+    use nexus_types::{ChangeKind, SymbolKind};
+
+    fn stored(signature: &str, annotations: &[&str], body: &str) -> nexus_store::SymbolRow {
+        nexus_store::SymbolRow {
+            id: 1,
+            kind: "method".into(),
+            name: "go".into(),
+            fqn: "p.C#go()".into(),
+            signature: Some(signature.into()),
+            start_line: 1,
+            end_line: 2,
+            sig_hash: "unused-here".into(),
+            body_hash: body.into(),
+            annotations_json: Some(
+                serde_json::to_string(annotations).unwrap_or_else(|_| "[]".into()),
+            ),
+        }
+    }
+
+    fn parsed(signature: &str, annotations: &[&str], body: &str) -> nexus_store::NewSymbol {
+        nexus_store::NewSymbol {
+            kind: SymbolKind::Method,
+            name: "go".into(),
+            fqn: "p.C#go()".into(),
+            parent_fqn: Some("p.C".into()),
+            signature: Some(signature.into()),
+            visibility: Some("public".into()),
+            start_line: 1,
+            end_line: 2,
+            sig_hash: "unused-here".into(),
+            body_hash: body.into(),
+            annotations: annotations.iter().map(|a| (*a).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn reordering_annotations_is_not_a_change() {
+        assert_eq!(
+            symbol_change(
+                &stored("void go()", &["@A", "@B"], "b1"),
+                &parsed("void go()", &["@B", "@A"], "b1"),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn removing_an_annotation_is_a_contract_change() {
+        assert_eq!(
+            symbol_change(
+                &stored("void go()", &["@A", "@Transactional"], "b1"),
+                &parsed("void go()", &["@A"], "b1"),
+            ),
+            Some(ChangeKind::ContractChanged)
+        );
+    }
+
+    #[test]
+    fn the_signature_still_decides_an_api_change() {
+        assert_eq!(
+            symbol_change(
+                &stored("void go()", &["@A"], "b1"),
+                &parsed("void go(int)", &["@A"], "b1"),
+            ),
+            Some(ChangeKind::ApiChanged)
+        );
+    }
+}
+
 /// One symbol that appeared or disappeared during a rescan.
 #[derive(Debug, Clone)]
 pub(super) struct SymbolDelta {
