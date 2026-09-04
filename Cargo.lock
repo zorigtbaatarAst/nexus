@@ -824,7 +824,6 @@ dependencies = [
  "cap-review",
  "clap",
  "nexus-core",
- "nexus-eval",
  "nexus-fixtures",
  "nexus-lang-pack",
  "nexus-mcp",
