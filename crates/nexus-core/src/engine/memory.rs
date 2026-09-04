@@ -47,32 +47,6 @@ impl Engine {
     }
 }
 
-/// The last segment of a qualified name, whichever separator wrote it.
-fn last_segment(fqn: &str) -> &str {
-    let after_member = fqn.rsplit('#').next().unwrap_or(fqn);
-    let after_member = after_member.split('(').next().unwrap_or(after_member);
-    let after_colons = after_member.rsplit("::").next().unwrap_or(after_member);
-    after_colons.rsplit('.').next().unwrap_or(after_colons)
-}
-
-/// Whether a word from a claim is worth looking up at all.
-///
-/// A prompt is typed by someone who means the code, so "starts with a capital" is a fair
-/// guess there. A design document is English prose: `Integration`, `Agent` and `Hooks` are
-/// sentence words, and looking them up anchored design claims on whatever symbol happened to
-/// end with them. An identifier here means a separator or an internal capital.
-fn looks_like_an_identifier(w: &str) -> bool {
-    if w.len() < 4 {
-        return false;
-    }
-    if w.contains("::") || w.contains('#') || w.contains('_') || w.contains('/') || w.contains('.')
-    {
-        return true;
-    }
-    // `BugHunter`, not `Hunter`. One capital is a sentence; two is a name.
-    w.chars().filter(|c| c.is_uppercase()).count() >= 2
-}
-
 /// The confidence an imported claim carries.
 ///
 /// A model wrote it, so §5's model ceiling of 0.75 applies, and it sits below that: nothing
@@ -184,16 +158,23 @@ impl Engine {
     /// would anchor a design claim on the wrong function.
     fn symbol_named_in(&self, label: &str) -> Result<Option<nexus_store::SymbolRef>> {
         for target in crate::context::seeds::targets(label) {
-            if !looks_like_an_identifier(&target) {
+            // A word out of prose is only worth looking up when it is shaped like an
+            // identifier: `Integration`, `Agent` and `Hooks` are sentence words, and looking
+            // them up anchored design claims on whatever symbol happened to end with them.
+            let distinctive = target.len() >= 4
+                && (target.contains("::")
+                    || target.contains('#')
+                    || target.contains('_')
+                    || target.contains('/')
+                    || target.contains('.')
+                    || target.chars().filter(|c| c.is_uppercase()).count() >= 2);
+            if !distinctive {
                 continue;
             }
-            let hits = self.store.find_symbols(self.project_id, &target, 2)?;
-            let [only] = hits.as_slice() else { continue };
-            // `find_symbols` matches by suffix, which is right for a prompt and wrong here: a
-            // claim about integration is not a claim about `NoContinuousIntegration`. The
-            // symbol's own last segment has to *be* the word, or the anchor is invented.
-            if last_segment(&only.fqn) == target {
-                return Ok(Some(only.clone()));
+            if let Some(sym) =
+                crate::context::seeds::uniquely_named_symbol(&self.store, self.project_id, &target)?
+            {
+                return Ok(Some(sym));
             }
         }
         Ok(None)

@@ -107,6 +107,39 @@ pub(crate) fn targets(text: &str) -> Vec<String> {
     out
 }
 
+/// The last name in a qualified path, whichever separator wrote it.
+pub(crate) fn last_segment(fqn: &str) -> &str {
+    let after_member = fqn.rsplit('#').next().unwrap_or(fqn);
+    let after_member = after_member.split('(').next().unwrap_or(after_member);
+    let after_colons = after_member.rsplit("::").next().unwrap_or(after_member);
+    after_colons.rsplit('.').next().unwrap_or(after_colons)
+}
+
+/// The one indexed symbol a word names, if it names exactly one.
+///
+/// `find_symbols` matches by suffix, which is right for a name a person typed and wrong
+/// wherever the word came out of prose: without the last-segment check, "integration" once
+/// anchored six imported design claims on `NoContinuousIntegration`.
+///
+/// Two callers, one rule: the seed stage reading a request, and the graphify import reading a
+/// claim's label. Two copies of this would drift, and the copy further from the failure would
+/// be the one still wrong.
+pub(crate) fn uniquely_named_symbol(
+    store: &Store,
+    project_id: i64,
+    word: &str,
+) -> Result<Option<SymbolRef>, StoreError> {
+    let hits = store.find_symbols(project_id, word, 2)?;
+    let [only] = hits.as_slice() else {
+        return Ok(None);
+    };
+    if last_segment(&only.fqn) == word {
+        Ok(Some(only.clone()))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Resolve the request to seeds. Sources run in priority order and a symbol keeps the best
 /// source that found it.
 pub fn resolve(
