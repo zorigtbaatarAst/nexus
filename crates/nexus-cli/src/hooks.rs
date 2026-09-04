@@ -184,3 +184,127 @@ fn install_one(
     std::fs::write(&path, body)?;
     Ok(Outcome::Installed)
 }
+
+/// What `doctor` reports about the hooks.
+///
+/// This lives in the CLI beside `install`, not in `nexus-core`, for the reason the module
+/// doc gives: `.claude/settings.json` is one agent's format, and the core's analysis path
+/// stays agent-agnostic. `Engine::doctor` returns a `Vec<Check>` and the CLI appends this
+/// one, which keeps the format knowledge on this side of the boundary.
+///
+/// **Why this check has to exist at all.** Every hook command ends `2>/dev/null || true`, so
+/// a hook that cannot run looks exactly like a hook that ran and found nothing. ADR-024
+/// accepts that trade and names `doctor` as the compensating control; without this function
+/// the control was documented and not built.
+///
+/// It checks presence and reachability rather than executing the hooks. Running them would
+/// be a side effect — `nexus rescan` writes to the database — and the dominant field failure
+/// is not a hook that errors but a hook whose binary is not on `PATH`, which presence alone
+/// cannot see.
+pub fn health(root: &Path) -> nexus_core::report::Check {
+    let path = root.join(".claude").join("settings.json");
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        // Not installed is a supported state, not a fault: ADR-024 ships them off.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return check(
+                "ok",
+                "not installed (hooks are opt-in)".to_string(),
+                Some(format!("{} init --hooks", crate::render::binary_name())),
+            )
+        }
+        Err(e) => {
+            return check("warn", format!("cannot read {}: {e}", path.display()), None);
+        }
+    };
+    let settings: Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return check(
+                "error",
+                format!("{} is not valid JSON ({e})", path.display()),
+                Some("fix or move the file; nexus will not overwrite it".into()),
+            )
+        }
+    };
+
+    let mut found = Vec::new();
+    let mut missing = Vec::new();
+    for (event, command) in [
+        ("SessionStart", SESSION_START_COMMAND),
+        ("UserPromptSubmit", USER_PROMPT_COMMAND),
+        ("PostToolUse", POST_TOOL_USE_COMMAND),
+    ] {
+        if has_command(&settings, event, command) {
+            found.push(event);
+        } else {
+            missing.push(event);
+        }
+    }
+    let gate = has_command(&settings, "Stop", STOP_COMMAND);
+
+    if found.is_empty() {
+        return check(
+            "ok",
+            "not installed (hooks are opt-in)".to_string(),
+            Some(format!("{} init --hooks", crate::render::binary_name())),
+        );
+    }
+
+    // The failure fail-open is built to hide: the hook fires, the shell cannot find `nexus`,
+    // `|| true` swallows it, and the session looks normal forever.
+    if !on_path() {
+        return check(
+            "error",
+            format!(
+                "{} hook(s) installed but `nexus` is not on PATH — every one silently does nothing",
+                found.len()
+            ),
+            Some(
+                "install nexus to a directory on PATH, or edit the commands to an absolute path"
+                    .into(),
+            ),
+        );
+    }
+
+    let mut detail = format!("{} installed", found.join(", "));
+    if gate {
+        detail.push_str(", Stop (runs a full build each turn)");
+    }
+    if missing.is_empty() {
+        check("ok", detail, None)
+    } else {
+        check(
+            "warn",
+            format!("{detail}; {} not installed", missing.join(", ")),
+            Some(format!("{} init --hooks", crate::render::binary_name())),
+        )
+    }
+}
+
+fn check(level: &'static str, detail: String, remedy: Option<String>) -> nexus_core::report::Check {
+    nexus_core::report::Check {
+        name: "hooks",
+        level,
+        detail,
+        remedy,
+    }
+}
+
+fn has_command(settings: &Value, event: &str, command: &str) -> bool {
+    settings["hooks"][event].as_array().is_some_and(|entries| {
+        entries.iter().any(|e| {
+            e["hooks"]
+                .as_array()
+                .is_some_and(|hs| hs.iter().any(|h| h["command"] == json!(command)))
+        })
+    })
+}
+
+/// Is `nexus` resolvable the way a hook's shell would resolve it?
+fn on_path() -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| dir.join("nexus").is_file())
+}

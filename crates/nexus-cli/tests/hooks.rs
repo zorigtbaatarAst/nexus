@@ -317,3 +317,70 @@ fn asking_for_the_gate_without_the_hooks_is_refused() {
         "--verify without --hooks must not succeed"
     );
 }
+
+/// `doctor` output as a map of check name to (level, detail).
+fn doctor_hooks(root: &Path, path_env: Option<&str>) -> (String, String) {
+    let mut cmd = Command::new(nexus());
+    cmd.args(["doctor", "--json"]).arg("--project").arg(root);
+    if let Some(p) = path_env {
+        cmd.env("PATH", p);
+    }
+    let out = cmd.output().expect("run doctor");
+    let doc: Value = serde_json::from_slice(&out.stdout).expect("doctor --json emits one document");
+    let checks = doc["result"].as_array().expect("an array of checks");
+    let hooks = checks
+        .iter()
+        .find(|c| c["name"] == "hooks")
+        .unwrap_or_else(|| panic!("doctor reported no hooks check: {doc}"));
+    (
+        hooks["level"].as_str().expect("level").to_string(),
+        hooks["detail"].as_str().expect("detail").to_string(),
+    )
+}
+
+#[test]
+fn doctor_reports_uninstalled_hooks_as_fine() {
+    // Off is a supported state, not a fault: ADR-024 ships them off by default. Reporting a
+    // warning for the default configuration is how a doctor teaches people to ignore it.
+    let root = fixture("doc-none");
+    run(&root, &["init"]);
+    let (level, detail) = doctor_hooks(&root, None);
+    assert_eq!(level, "ok", "{detail}");
+    assert!(detail.contains("not installed"), "{detail}");
+}
+
+#[test]
+fn doctor_reports_installed_hooks() {
+    let root = fixture("doc-some");
+    run(&root, &["init", "--hooks"]);
+    let (level, detail) = doctor_hooks(&root, None);
+    assert_eq!(level, "ok", "{detail}");
+    for event in ["SessionStart", "UserPromptSubmit", "PostToolUse"] {
+        assert!(detail.contains(event), "{event} missing from: {detail}");
+    }
+}
+
+#[test]
+fn doctor_catches_the_failure_that_fail_open_hides() {
+    // Every hook ends `2>/dev/null || true`, so a hook whose binary is not on PATH looks
+    // exactly like a hook that ran and found nothing — forever, with no error anywhere.
+    // This is the single failure the check exists for.
+    let root = fixture("doc-nopath");
+    run(&root, &["init", "--hooks"]);
+    // The binary is invoked by absolute path, so it still runs; what it cannot find is
+    // itself, which is precisely the situation a hook's shell would be in.
+    let (level, detail) = doctor_hooks(&root, Some("/nonexistent"));
+    assert_eq!(level, "error", "{detail}");
+    assert!(detail.contains("silently does nothing"), "{detail}");
+}
+
+#[test]
+fn doctor_refuses_to_guess_at_unreadable_settings() {
+    let root = fixture("doc-broken");
+    run(&root, &["init"]);
+    std::fs::create_dir_all(root.join(".claude")).expect("mkdir");
+    std::fs::write(root.join(".claude/settings.json"), "{not json").expect("write");
+    let (level, detail) = doctor_hooks(&root, None);
+    assert_eq!(level, "error", "{detail}");
+    assert!(detail.contains("not valid JSON"), "{detail}");
+}

@@ -976,7 +976,11 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
 
         Command::Doctor => {
             let engine = open(&root)?;
-            let checks = engine.doctor()?;
+            let mut checks = engine.doctor()?;
+            // Appended here rather than produced by the core: `.claude/settings.json` is one
+            // agent's format, and the core must not learn it. ADR-024 names `doctor` as the
+            // compensating control for fail-open hiding hook failures by construction.
+            checks.push(hooks::health(&root));
             let worst = checks.iter().any(|c| c.level == "error");
             emit!(&checks, {
                 writeln!(out, "{}", st.head("BugHunter doctor"))?;
