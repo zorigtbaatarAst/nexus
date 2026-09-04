@@ -19,6 +19,13 @@ fn nexus() -> PathBuf {
     p.join("nexus")
 }
 
+/// A directory of this test's own.
+///
+/// The name must be unique across this file: every test in a binary shares a pid, so two
+/// tests passing the same name get the same path — and this function begins by deleting it.
+/// `every_installed_hook_fails_open` and `the_hook_command_fails_open_when_nexus_is_not_on_path`
+/// both said "failopen", and `make check` failed roughly one run in five with an `init` that
+/// had had its directory removed underneath it.
 fn fixture(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("nexus-hooks-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -194,7 +201,7 @@ fn every_installed_hook_fails_open() {
     //
     // `--verify` is passed so the Stop gate is covered too — it is the hook most likely to
     // fail in the field, because it is the only one that runs a build.
-    let root = fixture("failopen");
+    let root = fixture("every-hook-failopen");
     assert!(run(&root, &["init", "--hooks", "--verify"])
         .status
         .success());
