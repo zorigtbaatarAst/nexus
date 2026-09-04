@@ -64,6 +64,9 @@ pub struct ExternalConcept {
     pub source_file: String,
     /// From `source_location` when graphify recorded one, which is rare — 23 of 681 here.
     pub line: u32,
+    /// Whether this asserts something on its own. A node that does not may still be imported
+    /// when its label names an indexed symbol — a check only the engine can make.
+    pub is_claim: bool,
 }
 
 /// What one read produced. A missing or malformed file is an empty graph plus a note, never
@@ -120,6 +123,30 @@ fn line_of(loc: Option<&str>) -> u32 {
         .unwrap_or(1)
 }
 
+/// Whether a prose node asserts something, rather than naming something.
+///
+/// graphify's `concept` nodes are mostly titles: of 681 prose nodes on this repository the
+/// imported facts included `next`, `react` and `Golden Fixture Repositories`. A `rationale`
+/// is an assertion by construction; a `concept` has to earn it, by being the thing some node
+/// is a `rationale_for`, by reading as a sentence, or — checked by the caller, which is the
+/// only place the index is reachable — by naming a symbol.
+///
+/// The sentence test is a guess about English and will be wrong sometimes. It is kept because
+/// without it the import loses the claims identifiable only as prose, and those are the ones
+/// with the most to say.
+fn is_a_claim(n: &NodeRow, justified: &std::collections::HashSet<&str>) -> bool {
+    if n.file_type == "rationale" || justified.contains(n.id.as_str()) {
+        return true;
+    }
+    let words: Vec<&str> = n.label.split_whitespace().collect();
+    words.len() >= 4
+        && words
+            .iter()
+            .filter(|w| w.chars().next().is_some_and(char::is_lowercase))
+            .count()
+            >= 2
+}
+
 /// What a scan should do with an external graph, decided from config alone.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mode {
@@ -172,6 +199,13 @@ pub fn read(path: &Path) -> Graph {
         Err(e) => return note(format!("{} could not be read ({e})", path.display())),
     };
 
+    let justified: std::collections::HashSet<&str> = file
+        .links
+        .iter()
+        .filter(|l| l.relation.as_deref() == Some("rationale_for"))
+        .map(|l| l.target.as_str())
+        .collect();
+
     let mut concepts = Vec::new();
     let mut file_of: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
     for n in &file.nodes {
@@ -185,11 +219,16 @@ pub fn read(path: &Path) -> Graph {
             if src.is_empty() {
                 continue;
             }
+            // Test data is not this project's design.
+            if src.starts_with("tests/") || src.contains("/blobs/") {
+                continue;
+            }
             concepts.push(ExternalConcept {
                 label: n.label.trim().to_string(),
                 kind: n.file_type.clone(),
                 source_file: src.to_string(),
                 line: line_of(n.source_location.as_deref()),
+                is_claim: is_a_claim(n, &justified),
             });
         }
     }

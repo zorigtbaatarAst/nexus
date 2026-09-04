@@ -338,6 +338,10 @@ pub struct ImportReport {
     /// it ever surfaces while someone is editing.
     pub anchored_on_code: usize,
     pub skipped: usize,
+    /// Nodes that were prose but not a claim — a heading, a label, a dependency name out of a
+    /// fixture. graphify's `concept` nodes are mostly *names of things*, and importing them
+    /// put `next`, `react` and `Golden Fixture Repositories` in project memory.
+    pub skipped_not_a_claim: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }

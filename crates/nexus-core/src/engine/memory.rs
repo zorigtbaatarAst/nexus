@@ -90,6 +90,7 @@ impl Engine {
             facts_recorded: 0,
             anchored_on_code: 0,
             skipped: 0,
+            skipped_not_a_claim: 0,
             warnings: graph.note.into_iter().collect(),
         };
 
@@ -97,6 +98,14 @@ impl Engine {
             let key = slug(&c.label);
             if key.is_empty() {
                 report.skipped += 1;
+                continue;
+            }
+            // Rule four, and it is not redundant: rules one to three drop
+            // `nexus-cli::main composition root`, a heading by shape that names code, which
+            // is the entire reason to keep a claim.
+            let anchor = self.symbol_named_in(&c.label)?;
+            if !c.is_claim && anchor.is_none() {
+                report.skipped_not_a_claim += 1;
                 continue;
             }
             // A rationale is a reason for a decision; a concept is a description of how
@@ -111,7 +120,6 @@ impl Engine {
             // document that states it otherwise. graphify's own prose-to-code edges cannot do
             // this job: only 34 of 681 prose nodes here touch a code node at all, and those
             // point at ids derived from the citing document rather than at the code.
-            let anchor = self.symbol_named_in(&c.label)?;
             let (scope, subject, evidence) = match &anchor {
                 Some(sym) => (
                     "symbol",

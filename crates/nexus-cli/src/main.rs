@@ -768,8 +768,8 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                 writeln!(out, "{}", st.head("Imported"))?;
                 writeln!(
                     out,
-                    "  {} claim(s) read, {} recorded, {} anchored on code, {} skipped",
-                    r.concepts_read, r.facts_recorded, r.anchored_on_code, r.skipped
+                    "  {} claim(s) read, {} recorded, {} anchored on code, {} not a claim, {} skipped",
+                    r.concepts_read, r.facts_recorded, r.anchored_on_code, r.skipped_not_a_claim, r.skipped
                 )?;
                 for w in &r.warnings {
                     writeln!(out, "  {}", st.dim(w))?;
