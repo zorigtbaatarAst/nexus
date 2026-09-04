@@ -18,6 +18,7 @@ members = [
   "crates/nexus-verify",
   "crates/nexus-mcp",
   "crates/nexus-fixtures",
+  "crates/nexus-eval",
   "crates/nexus-cli",
 ]
 

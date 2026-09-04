@@ -1,0 +1,18 @@
+[package]
+name = "nexus-eval"
+description = "Measures whether a resolved edge points at the right symbol, against a SCIP oracle. Development only; never shipped."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+scip = "0.9"
+# rust-protobuf, not prost, and pinned exactly: `scip` pins `=3.7.2` and the generated
+# types must unify or they are different types with the same name.
+protobuf = "=3.7.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+thiserror = { workspace = true }

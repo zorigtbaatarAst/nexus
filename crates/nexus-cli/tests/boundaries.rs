@@ -253,6 +253,28 @@ fn the_fixture_generator_cannot_index_what_it_builds() {
     }
 }
 
+/// `nexus-eval` marks the graph's homework. Nothing may depend on it — a crate that both
+/// produces a number and grades it has nothing checking it, which is the same argument
+/// `nexus-fixtures` makes in the other direction: the generator must not index its own work.
+///
+/// It also drags in protobuf and the `scip` types, which have no business in a binary whose
+/// whole claim is that it is deterministic and dependency-light.
+#[test]
+fn nothing_depends_on_the_evaluator() {
+    let g = dependency_graph();
+    for crate_name in g.keys() {
+        if crate_name == "nexus-eval" {
+            continue;
+        }
+        assert_forbidden(
+            &g,
+            crate_name,
+            "nexus-eval",
+            "the evaluator must not be reachable from anything it measures",
+        );
+    }
+}
+
 #[test]
 fn nothing_but_the_composition_root_depends_on_the_fixture_generator() {
     let g = dependency_graph();
