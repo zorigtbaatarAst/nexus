@@ -463,6 +463,8 @@ pub fn doctor(w: &mut impl Write, st: &Style, checks: &[Check]) -> std::io::Resu
         };
         writeln!(w, "  {mark} {name:<16} {}", c.detail)?;
         if let Some(r) = &c.remedy {
+            // Already substituted by the caller, which has to do it for `--json` as well;
+            // done again here costs nothing and keeps this function correct on its own.
             writeln!(w, "    {}", st.dim(&format!("run: {}", with_binary(r))))?;
         }
     }

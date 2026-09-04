@@ -1051,6 +1051,14 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             // compensating control for fail-open hiding hook failures by construction.
             checks.push(hooks::health(&root));
             checks.push(plugin::health());
+            // Before *either* emit path, not inside the renderer: `--json` is an interface
+            // too, and a machine-readable `{bin} scan` is worse advice than the wrong binary
+            // name it replaced, because at least that one ran.
+            for c in &mut checks {
+                if let Some(r) = &c.remedy {
+                    c.remedy = Some(render::with_binary(r));
+                }
+            }
             let worst = checks.iter().any(|c| c.level == "error");
             emit!(&checks, {
                 writeln!(

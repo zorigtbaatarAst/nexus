@@ -746,7 +746,18 @@ impl Nexus {
             .with_engine(|e| e.doctor().map_err(|e| e.to_string()))
             .await
         {
-            Ok(checks) => Ok(ok(json!({"status": "ok", "checks": checks}))),
+            Ok(mut checks) => {
+                // The core writes `{bin}` because it cannot know which name is running. Over
+                // MCP the answer is always `nexus`: an agent never invokes the capability's
+                // CLI. Unsubstituted, the agent would be told to run a command that does not
+                // exist.
+                for c in &mut checks {
+                    if let Some(r) = &c.remedy {
+                        c.remedy = Some(r.replace("{bin}", "nexus"));
+                    }
+                }
+                Ok(ok(json!({"status": "ok", "checks": checks})))
+            }
             Err(m) => Ok(failure("no_project", m, &[])),
         }
     }

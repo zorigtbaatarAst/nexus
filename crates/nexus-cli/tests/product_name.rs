@@ -94,3 +94,32 @@ fn a_remedy_names_the_binary_the_reader_invoked() {
         "at least one remedy should name `nexus`:\n{text}"
     );
 }
+
+#[test]
+fn the_placeholder_never_reaches_a_reader_in_any_format() {
+    // The core writes `{bin}` because it cannot know which name is running, and exactly one
+    // place may fill it. The first version of this filled it in the *renderer*, so `--json`
+    // — an interface, and the one a machine reads — emitted the literal `{bin} scan`. That is
+    // worse advice than the wrong binary name it replaced, because the wrong name at least
+    // ran. Both formats are asserted here for that reason.
+    let root = project("placeholder");
+    let exe = bin("nexus");
+
+    let human = doctor(&exe, &root);
+    assert!(
+        !human.contains("{bin}"),
+        "rendering leaked a hole:\n{human}"
+    );
+
+    let out = Command::new(&exe)
+        .args(["doctor", "--json", "--project"])
+        .arg(&root)
+        .output()
+        .expect("run doctor --json");
+    let json = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(!json.contains("{bin}"), "--json leaked a hole:\n{json}");
+    assert!(
+        json.contains("nexus scan") || json.contains("nexus rescan"),
+        "and the remedy should name the invoked binary:\n{json}"
+    );
+}
