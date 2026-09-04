@@ -89,6 +89,106 @@ pub fn score(c: &Comparison) -> Scores {
     }
 }
 
+/// The Brier score: mean squared error of a probability claim.
+///
+/// It is a **strictly proper scoring rule** — minimised only by reporting one's true belief.
+/// That is what makes it safe to track: the score cannot be improved by inflating confidences
+/// to look decisive, or deflating them to look cautious.
+pub fn brier(c: &Comparison) -> f64 {
+    if c.judged.is_empty() {
+        return 0.0;
+    }
+    let sum: f64 = c
+        .judged
+        .iter()
+        .map(|j| {
+            let y = if j.correct { 1.0 } else { 0.0 };
+            (j.confidence - y).powi(2)
+        })
+        .sum();
+    sum / c.judged.len() as f64
+}
+
+/// Above this an interval is too wide to justify changing a constant.
+const MAX_HALF_WIDTH: f64 = 0.15;
+/// Below this a tier gets no verdict at all. §5.7: ±0.05 at p≈0.8 needs about 246 samples.
+const POWER_FLOOR: u64 = 100;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum Verdict {
+    Ok,
+    Miscalibrated,
+    UnderPowered,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TierResult {
+    pub tier: String,
+    pub claimed: f64,
+    pub measured: Rate,
+    pub verdict: Verdict,
+    /// The Jeffreys posterior mean, offered only when the evidence can carry it.
+    pub proposed: Option<f64>,
+}
+
+pub fn calibrate(c: &Comparison) -> Vec<TierResult> {
+    // Bins are tiers, not equal-width buckets: confidence here is a set of discrete
+    // constants, so calibration is a hypothesis test per tier rather than a smoothing
+    // exercise. A tier carrying more than one claimed value is keyed by both.
+    let mut groups: HashMap<(String, u64), (u64, u64)> = HashMap::new();
+    for j in &c.judged {
+        let key = (j.tier.clone(), (j.confidence * 1000.0).round() as u64);
+        let e = groups.entry(key).or_insert((0, 0));
+        e.1 += 1;
+        if j.correct {
+            e.0 += 1;
+        }
+    }
+
+    let mut out: Vec<TierResult> = groups
+        .into_iter()
+        .map(|((tier, claimed_milli), (k, n))| {
+            let claimed = claimed_milli as f64 / 1000.0;
+            let measured = Rate::new(k, n);
+            let half = (measured.high - measured.low) / 2.0;
+            let (verdict, proposed) = if n < POWER_FLOOR || half > MAX_HALF_WIDTH {
+                (Verdict::UnderPowered, None)
+            } else if claimed < measured.low || claimed > measured.high {
+                // Jeffreys posterior mean under Beta(1/2, 1/2). Not k/n, which proposes
+                // 1.00 off a 12-for-12 run.
+                (
+                    Verdict::Miscalibrated,
+                    Some((k as f64 + 0.5) / (n as f64 + 1.0)),
+                )
+            } else {
+                (Verdict::Ok, None)
+            };
+            TierResult {
+                tier,
+                claimed,
+                measured,
+                verdict,
+                proposed,
+            }
+        })
+        .collect();
+    // Biggest sample first: the tiers whose verdicts are worth acting on lead the report.
+    out.sort_by_key(|t| std::cmp::Reverse(t.measured.n));
+    out
+}
+
+/// Expected calibration error, weighted by each tier's share of the edges.
+pub fn ece(tiers: &[TierResult]) -> f64 {
+    let total: u64 = tiers.iter().map(|t| t.measured.n).sum();
+    if total == 0 {
+        return 0.0;
+    }
+    tiers
+        .iter()
+        .map(|t| (t.measured.n as f64 / total as f64) * (t.measured.value - t.claimed).abs())
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,6 +196,15 @@ mod tests {
 
     fn close(a: f64, b: f64, msg: &str) {
         assert!((a - b).abs() < 5e-4, "{msg}: got {a}, expected {b}");
+    }
+
+    fn with_conf(tier: &str, confidence: f64, correct: bool) -> crate::matcher::Judged {
+        crate::matcher::Judged {
+            site: (format!("{tier}.rs"), 1),
+            tier: tier.into(),
+            confidence,
+            correct,
+        }
     }
 
     fn judged(file: &str, line: i64, correct: bool) -> crate::matcher::Judged {
@@ -176,5 +285,108 @@ mod tests {
         };
         let s = score(&c);
         close(s.strict.value, 1.0, "one candidate, correct");
+    }
+
+    #[test]
+    fn brier_matches_the_hand_computed_score() {
+        // Three edges: 0.9 correct, 0.6 wrong, 1.0 correct.
+        //   (0.9-1)² + (0.6-0)² + (1.0-1)² = 0.01 + 0.36 + 0 = 0.37; /3 = 0.123333
+        let c = Comparison {
+            judged: vec![
+                with_conf("heuristic", 0.9, true),
+                with_conf("heuristic", 0.6, false),
+                with_conf("exact", 1.0, true),
+            ],
+            sites_total: 3,
+            ..Default::default()
+        };
+        close(brier(&c), 0.123333, "brier");
+    }
+
+    #[test]
+    fn a_tier_whose_claim_falls_outside_its_interval_is_miscalibrated() {
+        // 200 bare-member edges claiming 0.60, of which 80 are right. Measured 0.40, and
+        // 0.60 is nowhere near the interval.
+        let mut judged = Vec::new();
+        for i in 0..200 {
+            judged.push(with_conf("heuristic", 0.6, i < 80));
+        }
+        let c = Comparison {
+            judged,
+            sites_total: 200,
+            ..Default::default()
+        };
+        let tiers = calibrate(&c);
+        let t = tiers
+            .iter()
+            .find(|t| t.tier == "heuristic")
+            .expect("tier present");
+        assert_eq!(t.verdict, Verdict::Miscalibrated);
+        // Jeffreys posterior mean: (80 + 0.5) / (200 + 1) = 0.400498
+        close(t.proposed.expect("a proposal"), 0.400498, "jeffreys estimate");
+    }
+
+    #[test]
+    fn a_tier_with_too_little_evidence_proposes_nothing() {
+        // Nine edges cannot justify a config change. Under-powered measurement laundering
+        // itself into a constant is R8 wearing a lab coat.
+        let judged: Vec<_> = (0..9).map(|i| with_conf("heuristic", 0.6, i < 3)).collect();
+        let c = Comparison {
+            judged,
+            sites_total: 9,
+            ..Default::default()
+        };
+        let t = &calibrate(&c)[0];
+        assert_eq!(t.verdict, Verdict::UnderPowered);
+        assert!(t.proposed.is_none(), "no proposal below the power floor");
+    }
+
+    #[test]
+    fn a_well_calibrated_tier_is_left_alone() {
+        // 200 edges claiming 0.90, 180 right. Measured 0.90; the claim sits in the interval.
+        let judged: Vec<_> = (0..200)
+            .map(|i| with_conf("overload", 0.9, i < 180))
+            .collect();
+        let c = Comparison {
+            judged,
+            sites_total: 200,
+            ..Default::default()
+        };
+        let t = &calibrate(&c)[0];
+        assert_eq!(t.verdict, Verdict::Ok);
+        assert!(t.proposed.is_none());
+    }
+
+    #[test]
+    fn a_tier_that_has_never_been_wrong_may_claim_certainty() {
+        // The `exact` tier claims 1.00, and Wilson's upper bound is *exactly* 1.0 when
+        // k == n — the p(1-p) term vanishes and centre + half collapses to (1+z²/n)/(1+z²/n).
+        // Without that, a tier with a perfect record would be reported as overclaiming for
+        // ever, and a gate that cries wolf on its own best tier gets switched off.
+        let judged: Vec<_> = (0..200).map(|_| with_conf("exact", 1.0, true)).collect();
+        let c = Comparison {
+            judged,
+            sites_total: 200,
+            ..Default::default()
+        };
+        let t = &calibrate(&c)[0];
+        assert_eq!(t.verdict, Verdict::Ok, "200 for 200 does not refute p = 1.0");
+    }
+
+    #[test]
+    fn one_wrong_edge_refutes_a_claim_of_certainty() {
+        // 199 of 200 claiming 1.00. The plan's own draft expected `Ok` here; it is not.
+        // Confidence 1.00 asserts "never wrong", and a single counter-example ends that
+        // claim — the interval [0.9722, 0.9991] excludes 1.0 for exactly that reason.
+        let judged: Vec<_> = (0..200).map(|i| with_conf("exact", 1.0, i < 199)).collect();
+        let c = Comparison {
+            judged,
+            sites_total: 200,
+            ..Default::default()
+        };
+        let t = &calibrate(&c)[0];
+        assert_eq!(t.verdict, Verdict::Miscalibrated);
+        // Jeffreys, not k/n: (199 + 0.5) / (200 + 1) = 0.992537
+        close(t.proposed.expect("a proposal"), 0.992537, "jeffreys estimate");
     }
 }
