@@ -133,7 +133,12 @@ enum Command {
         limit: usize,
     },
     /// Dependency graph size and how much of it resolved
-    Graph,
+    Graph {
+        /// Also write every edge row to this path as NDJSON, for `nexus-eval`.
+        /// Not stdout: `--json` is exactly one document, and an edge list is not it.
+        #[arg(long, value_name = "PATH")]
+        edges: Option<PathBuf>,
+    },
     /// Run a capability over the project
     #[command(alias = "hunt")]
     Analyze {
@@ -551,8 +556,20 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             }
         }
 
-        Command::Graph => {
+        Command::Graph { edges } => {
             let engine = open(&root)?;
+            if let Some(path) = edges {
+                use std::io::Write as _;
+                let file = std::fs::File::create(path)?;
+                let mut w = std::io::BufWriter::new(file);
+                for rec in engine.edge_records()? {
+                    // One object per line, streamed rather than collected and serialized as a
+                    // whole: this is the one output whose size is proportional to the
+                    // repository rather than to the answer.
+                    writeln!(w, "{}", serde_json::to_string(&rec)?)?;
+                }
+                w.flush()?;
+            }
             let report = engine.graph()?;
             emit!(&report, {
                 render::banner(&mut out, &st)?;
@@ -1070,7 +1087,7 @@ fn envelope<T: Serialize>(cli: &Cli, value: T) -> Result<String, serde_json::Err
             Command::Status => "status",
             Command::Changes { .. } => "changes",
             Command::Impact { .. } => "impact",
-            Command::Graph => "graph",
+            Command::Graph { .. } => "graph",
             Command::Findings { .. } => "findings",
             Command::Finding { .. } => "finding",
             Command::Analyze { .. } => "analyze",

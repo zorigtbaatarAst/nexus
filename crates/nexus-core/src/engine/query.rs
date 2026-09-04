@@ -1123,6 +1123,31 @@ impl Engine {
             by_resolution: self.store.edges_by_resolution(self.project_id)?,
         })
     }
+
+    /// The uncollapsed edge list, for out-of-band accuracy measurement.
+    ///
+    /// [`Engine::graph`] reports how many call sites resolved; this reports what each
+    /// candidate actually bound to, which is the only unit in which "is it the *right*
+    /// symbol" can be asked.
+    pub fn edge_records(&self) -> Result<Vec<EdgeRecord>> {
+        Ok(self
+            .store
+            .all_edges(self.project_id)?
+            .into_iter()
+            .map(|e| EdgeRecord {
+                src_fqn: e.src_fqn,
+                src_file: e.src_file,
+                site_line: e.site_line,
+                edge_type: e.edge_type,
+                dst_fqn: e.dst_fqn,
+                dst_file: e.dst_file,
+                dst_start_line: e.dst_start_line,
+                dst_end_line: e.dst_end_line,
+                resolution: e.resolution,
+                confidence: e.confidence,
+            })
+            .collect())
+    }
     pub fn doctor(&self) -> Result<Vec<Check>> {
         let mut checks = Vec::new();
 

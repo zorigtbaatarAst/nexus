@@ -137,6 +137,25 @@ pub struct EdgeCounts {
     pub external_graph: i64,
 }
 
+/// One edge row, uncollapsed, with both endpoints' positions.
+///
+/// Deliberately *not* the call-site unit [`EdgeCounts`] uses: this feeds accuracy
+/// measurement, where a fan-out of three candidates is three separate chances to be wrong
+/// and precision must be able to see all three.
+#[derive(Debug, Clone)]
+pub struct EdgeRow {
+    pub src_fqn: String,
+    pub src_file: String,
+    pub site_line: Option<i64>,
+    pub edge_type: String,
+    pub dst_fqn: Option<String>,
+    pub dst_file: Option<String>,
+    pub dst_start_line: Option<i64>,
+    pub dst_end_line: Option<i64>,
+    pub resolution: String,
+    pub confidence: f64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ResolveStats {
     pub total: usize,
@@ -1304,6 +1323,43 @@ impl Store {
             })
         })?;
         Ok(row)
+    }
+
+    /// Every edge row, uncollapsed, with both endpoints' positions.
+    ///
+    /// The counterpart to [`Store::edge_counts`], which answers "how many questions found an
+    /// answer". This answers "which answers were given", because whether an answer is *right*
+    /// can only be judged one candidate at a time.
+    pub fn all_edges(&self, project_id: ProjectId) -> Result<Vec<EdgeRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.fqn, sf.path, e.site_line, e.edge_type,
+                    d.fqn, df.path, d.start_line, d.end_line,
+                    e.resolution, e.confidence
+             FROM symbol_edges e
+             JOIN symbols s  ON s.id = e.src_symbol_id AND s.deleted = 0
+             JOIN files   sf ON sf.id = s.file_id
+             LEFT JOIN symbols d  ON d.id = e.dst_symbol_id AND d.deleted = 0
+             LEFT JOIN files   df ON df.id = d.file_id
+             WHERE e.project_id = ?1
+             ORDER BY sf.path, e.site_line",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id], |r| {
+                Ok(EdgeRow {
+                    src_fqn: r.get(0)?,
+                    src_file: r.get(1)?,
+                    site_line: r.get(2)?,
+                    edge_type: r.get(3)?,
+                    dst_fqn: r.get(4)?,
+                    dst_file: r.get(5)?,
+                    dst_start_line: r.get(6)?,
+                    dst_end_line: r.get(7)?,
+                    resolution: r.get(8)?,
+                    confidence: r.get(9)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     /// The same call-site unit as [`Store::edge_counts`], so the breakdown sums to the

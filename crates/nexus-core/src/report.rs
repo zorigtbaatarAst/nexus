@@ -213,6 +213,24 @@ pub struct GraphReport {
     pub by_resolution: Vec<(String, i64)>,
 }
 
+/// One edge row as the accuracy harness consumes it.
+///
+/// Serialized one per line as NDJSON to a file, never into stdout: `--json` is exactly one
+/// document, and an edge list is not it.
+#[derive(Debug, Clone, Serialize)]
+pub struct EdgeRecord {
+    pub src_fqn: String,
+    pub src_file: String,
+    pub site_line: Option<i64>,
+    pub edge_type: String,
+    pub dst_fqn: Option<String>,
+    pub dst_file: Option<String>,
+    pub dst_start_line: Option<i64>,
+    pub dst_end_line: Option<i64>,
+    pub resolution: String,
+    pub confidence: f64,
+}
+
 /// A result that may not be one thing.
 ///
 /// `Ambiguous` is not an error and not a guess: it hands back the candidates so the caller
