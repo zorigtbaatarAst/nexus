@@ -1336,10 +1336,10 @@ impl Store {
                     d.fqn, df.path, d.start_line, d.end_line,
                     e.resolution, e.confidence
              FROM symbol_edges e
-             JOIN symbols s  ON s.id = e.src_symbol_id AND s.deleted = 0
-             JOIN files   sf ON sf.id = s.file_id
-             LEFT JOIN symbols d  ON d.id = e.dst_symbol_id AND d.deleted = 0
-             LEFT JOIN files   df ON df.id = d.file_id
+             JOIN live_symbols s  ON s.id = e.src_symbol_id
+             JOIN files        sf ON sf.id = s.file_id
+             LEFT JOIN live_symbols d  ON d.id = e.dst_symbol_id
+             LEFT JOIN files        df ON df.id = d.file_id
              WHERE e.project_id = ?1
              ORDER BY sf.path, e.site_line",
         )?;
@@ -1358,6 +1358,21 @@ impl Store {
                     confidence: r.get(9)?,
                 })
             })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Every file in the index, as the accuracy harness's coverage denominator.
+    ///
+    /// Not derivable from the edge dump: a file Nexus indexed but produced no edges from
+    /// never appears there, so a denominator built from edges reports "97 of 123" for a
+    /// project of 261 files and an oracle that skipped half of them reads clean.
+    pub fn file_paths(&self, project_id: ProjectId) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM live_files WHERE project_id = ?1 ORDER BY path")?;
+        let rows = stmt
+            .query_map(params![project_id], |r| r.get(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }

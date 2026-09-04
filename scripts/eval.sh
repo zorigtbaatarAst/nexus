@@ -37,5 +37,6 @@ case "${LANG_KIND:-rust}" in
 esac
 
 nexus --project "$PROJECT" scan >/dev/null
-nexus --project "$PROJECT" graph --edges "$OUT/edges.ndjson" >/dev/null
-nexus-eval --edges "$OUT/edges.ndjson" --scip "$OUT/index.scip" --oracle "$ORACLE" "${@:2}"
+nexus --project "$PROJECT" graph --edges "$OUT/edges.ndjson" --files "$OUT/files.txt" >/dev/null
+nexus-eval --edges "$OUT/edges.ndjson" --scip "$OUT/index.scip" --files "$OUT/files.txt" \
+           --oracle "$ORACLE" "${@:2}"

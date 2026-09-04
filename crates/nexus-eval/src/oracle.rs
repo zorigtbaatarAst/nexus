@@ -39,12 +39,28 @@ pub struct Oracle {
     pub files: HashSet<String>,
 }
 
-/// The start line of an occurrence, handling both encodings.
+/// SCIP counts lines from zero; Nexus counts from one.
+///
+/// Converting here, at the one place SCIP data enters this crate, is the whole reason the
+/// conversion is a single line. It was missing on the first run and cost the entire
+/// measurement: every site lookup missed by one, so 3,462 of 4,208 sites fell out of the
+/// comparable set and precision came back 0.001 with `exact` scoring zero — a number that
+/// looks like a catastrophic resolver and was a catastrophic ruler.
+///
+/// The unit tests could not catch it. Both sides of them are hand-built, so they agreed with
+/// each other in whichever convention they were written in. Only a real index disagrees.
+const SCIP_LINES_ARE_ZERO_BASED: i64 = 1;
+
+/// The start line of an occurrence, handling both encodings, in Nexus's 1-based numbering.
 ///
 /// `Occurrence.range` is deprecated in the proto in favour of `typed_range`, and every
 /// current indexer still emits the deprecated form. A reader that handles only one silently
 /// sees zero occurrences — which would read as "Nexus resolved nothing correctly".
 fn start_line(occ: &scip::types::Occurrence) -> Option<i64> {
+    Some(raw_start_line(occ)? + SCIP_LINES_ARE_ZERO_BASED)
+}
+
+fn raw_start_line(occ: &scip::types::Occurrence) -> Option<i64> {
     if let Some(first) = occ.range.first() {
         return Some(*first as i64);
     }
@@ -160,7 +176,7 @@ mod tests {
             .get("rust-analyzer cargo demo 0.1.0 Alpha#save().")
             .expect("definition found");
         assert_eq!(pos.file, "src/a.rs");
-        assert_eq!(pos.line, 41);
+        assert_eq!(pos.line, 42, "SCIP's 0-based 41 is file line 42");
     }
 
     #[test]
@@ -182,6 +198,25 @@ mod tests {
         // no cross-file edges anyway.
         let o = Oracle::load(&write(&index(), "locals")).expect("load");
         assert!(o.defs.keys().all(|k| !k.starts_with("local ")));
+    }
+
+    #[test]
+    fn a_scip_line_is_read_into_nexus_numbering() {
+        // SCIP: "Line numbers and characters are always 0-based". Nexus emits `row + 1`.
+        // The occurrence below is written at SCIP line 41, which is file line 42.
+        //
+        // This is the test that was missing. Without it both halves of every other test
+        // agreed with each other in one convention and the harness disagreed with reality.
+        let o = Oracle::load(&write(&index(), "base")).expect("load");
+        let pos = o
+            .defs
+            .get("rust-analyzer cargo demo 0.1.0 Alpha#save().")
+            .expect("definition found");
+        assert_eq!(pos.line, 42, "SCIP line 41 is file line 42");
+        assert_eq!(
+            o.refs[0].line, 8,
+            "and a reference at SCIP 7 is file line 8"
+        );
     }
 
     #[test]

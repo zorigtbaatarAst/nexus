@@ -29,26 +29,34 @@ pub fn run(
         .about("Measure whether a resolved edge points at the right symbol")
         .arg(clap::arg!(--edges <PATH> "NDJSON from `nexus graph --edges`").required(true))
         .arg(clap::arg!(--scip <PATH> "index.scip from a SCIP indexer").required(true))
+        .arg(clap::arg!(--files <PATH> "the indexed file list from `nexus graph --files`"))
         .arg(clap::arg!(--oracle <NAME> "what produced the index, recorded in the report"))
         .arg(clap::arg!(--json "emit the run as JSON"))
         .get_matches_from(args);
 
     let edges = edges::load(std::path::Path::new(
-        m.get_one::<String>("edges").ok_or("--edges")?,
+        m.get_one::<String>("edges").ok_or("--edges is required")?,
     ))?;
     let oracle = oracle::Oracle::load(std::path::Path::new(
-        m.get_one::<String>("scip").ok_or("--scip")?,
+        m.get_one::<String>("scip").ok_or("--scip is required")?,
     ))?;
-    // Every file Nexus indexed, so the coverage cross-check compares like with like.
-    let files: Vec<String> = {
-        let mut v: Vec<String> = edges.iter().map(|e| e.src_file.clone()).collect();
-        v.sort();
-        v.dedup();
-        v
+    // Every file Nexus indexed, so §8.1's cross-check compares like with like. Falling back
+    // to the edge dump's source files understates the denominator — a file Nexus indexed and
+    // produced no edges from is invisible there — so the fallback says so rather than
+    // reporting a flattering coverage figure as if it were the real one.
+    let (files, denominator_is_complete) = match m.get_one::<String>("files") {
+        Some(path) => (read_lines(std::path::Path::new(path))?, true),
+        None => {
+            let mut v: Vec<String> = edges.iter().map(|e| e.src_file.clone()).collect();
+            v.sort();
+            v.dedup();
+            (v, false)
+        }
     };
     let comparison = matcher::compare(&edges, &oracle);
     let name = m.get_one::<String>("oracle").map_or("scip", String::as_str);
-    let run = report::build(name, &files, &oracle.files, &comparison);
+    let mut run = report::build(name, &files, &oracle.files, &comparison);
+    run.coverage_denominator_is_complete = denominator_is_complete;
 
     if m.get_flag("json") {
         println!("{}", serde_json::to_string_pretty(&run)?);
@@ -56,4 +64,14 @@ pub fn run(
         print!("{}", report::render(&run));
     }
     Ok(())
+}
+
+/// One non-empty trimmed line per entry.
+fn read_lines(path: &std::path::Path) -> std::io::Result<Vec<String>> {
+    Ok(std::fs::read_to_string(path)?
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
 }

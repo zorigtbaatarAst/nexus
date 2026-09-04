@@ -138,6 +138,11 @@ enum Command {
         /// Not stdout: `--json` is exactly one document, and an edge list is not it.
         #[arg(long, value_name = "PATH")]
         edges: Option<PathBuf>,
+        /// Also write every indexed file path to this path, one per line. The accuracy
+        /// harness's coverage denominator, which the edge dump cannot supply: a file with
+        /// no edges is still a file the oracle was supposed to index.
+        #[arg(long, value_name = "PATH")]
+        files: Option<PathBuf>,
     },
     /// Run a capability over the project
     #[command(alias = "hunt")]
@@ -556,17 +561,22 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             }
         }
 
-        Command::Graph { edges } => {
+        Command::Graph { edges, files } => {
             let engine = open(&root)?;
             if let Some(path) = edges {
-                use std::io::Write as _;
-                let file = std::fs::File::create(path)?;
-                let mut w = std::io::BufWriter::new(file);
+                // One JSON object per line rather than one document: this is the only output
+                // whose size is proportional to the repository rather than to the answer,
+                // and a consumer should be able to read it a line at a time.
+                let mut w = create(path)?;
                 for rec in engine.edge_records()? {
-                    // One object per line, streamed rather than collected and serialized as a
-                    // whole: this is the one output whose size is proportional to the
-                    // repository rather than to the answer.
                     writeln!(w, "{}", serde_json::to_string(&rec)?)?;
+                }
+                w.flush()?;
+            }
+            if let Some(path) = files {
+                let mut w = create(path)?;
+                for f in engine.indexed_files()? {
+                    writeln!(w, "{f}")?;
                 }
                 w.flush()?;
             }
@@ -1040,6 +1050,16 @@ fn register_capabilities(engine: &mut Engine) {
     engine.register_capability(Box::new(BugHunter::new()));
     engine.register_capability(Box::new(Architect::new()));
     engine.register_capability(Box::new(Review::new()));
+}
+
+/// Create a file for one of `graph`'s side outputs, naming the path when it cannot.
+///
+/// `std::fs::File::create` alone reports "No such file or directory (os error 2)" and leaves
+/// the reader to guess which of two `--` flags they mistyped.
+fn create(path: &std::path::Path) -> anyhow::Result<std::io::BufWriter<std::fs::File>> {
+    let file = std::fs::File::create(path)
+        .map_err(|e| anyhow::anyhow!("cannot write {}: {e}", path.display()))?;
+    Ok(std::io::BufWriter::new(file))
 }
 
 fn open(root: &std::path::Path) -> Result<Engine, EngineError> {

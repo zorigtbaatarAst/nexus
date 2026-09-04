@@ -1124,6 +1124,12 @@ impl Engine {
         })
     }
 
+    /// Every indexed file path. The accuracy harness's coverage denominator: a file with no
+    /// edges is still a file the oracle was supposed to index.
+    pub fn indexed_files(&self) -> Result<Vec<String>> {
+        Ok(self.store.file_paths(self.project_id)?)
+    }
+
     /// The uncollapsed edge list, for out-of-band accuracy measurement.
     ///
     /// [`Engine::graph`] reports how many call sites resolved; this reports what each
