@@ -253,3 +253,52 @@ fn a_task_request_now_gets_a_ranked_package_and_says_so() {
     );
     assert!(pkg.intent.is_some(), "a task package classified its text");
 }
+
+#[test]
+fn the_session_package_carries_only_facts_that_earned_their_place() {
+    // `Store::facts` is ORDER BY fact_key, and its own comment says so: "stable, so a caller
+    // can rely on it, and *not* a ranking". The session path consumed that order as if it
+    // were a priority. With 671 imported claims it bought the first nine alphabetically and
+    // cost 752 tokens where it had cost 194.
+    let mut engine = scanned("durable");
+    for i in 0..40 {
+        engine
+            .record_fact(FactInput {
+                key: format!("arch.aaa-candidate-{i:03}"),
+                scope: "symbol".into(),
+                subject: Some("mn.pay.PaymentService#pay".into()),
+                claim: format!("unverified claim {i} sorted early by key"),
+                source: "ai".into(),
+                evidence: anchored_on_pay(),
+                confidence: 0.5,
+            })
+            .expect("record");
+    }
+    engine
+        .record_fact(FactInput {
+            key: "invariant.zzz.settles-once".into(),
+            scope: "symbol".into(),
+            subject: Some("mn.pay.PaymentService#pay".into()),
+            claim: "a payment settles exactly once".into(),
+            source: "human".into(),
+            evidence: anchored_on_pay(),
+            confidence: 1.0,
+        })
+        .expect("record");
+
+    let pkg = session(&engine);
+    let facts: Vec<&str> = pkg
+        .items
+        .iter()
+        .filter(|i| i.kind == ItemKind::Fact)
+        .map(|i| i.text.as_str())
+        .collect();
+    assert!(
+        facts.iter().any(|t| t.contains("settles exactly once")),
+        "a human fact is durable on arrival and belongs here: {facts:?}"
+    );
+    assert!(
+        !facts.iter().any(|t| t.contains("unverified claim")),
+        "an ai candidate has not earned session budget, whatever its key sorts as: {facts:?}"
+    );
+}

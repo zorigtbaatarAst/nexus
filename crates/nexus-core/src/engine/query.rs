@@ -199,12 +199,13 @@ impl Engine {
             });
         }
 
-        // Durable facts: what previous sessions worked out.
+        // Durable facts: what previous sessions worked out and the project kept.
         //
-        // The lifecycle states are Phase 3.1, so "durable" is approximated by the order the
-        // store already returns — human, then deterministic, then AI, each by confidence.
-        // The approximation gets better when the lifecycle lands; it does not get unwound.
-        for row in self.store.facts(self.project_id, None)? {
+        // Durability is now asked for rather than approximated. It was approximated by store
+        // order while the lifecycle was Phase 3.1; the lifecycle landed and the approximation
+        // outlived it, which is how 671 imported claims came to buy the session budget nine
+        // at a time in alphabetical order.
+        for row in self.store.durable_facts(self.project_id)? {
             let anchor = row
                 .evidence_json
                 .as_deref()

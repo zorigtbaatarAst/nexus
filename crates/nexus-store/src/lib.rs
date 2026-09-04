@@ -2556,6 +2556,41 @@ impl Store {
         Ok(rows)
     }
 
+    /// Facts that have earned the highest retrieval weight: three surviving scans, or a
+    /// person wrote them.
+    ///
+    /// The session package is what a session starts from with no task in hand. Starting from
+    /// unverified guesses ordered by key is the trap §3's `Observed → dropped` edge exists to
+    /// prevent. Rides `idx_facts_state`.
+    pub fn durable_facts(&self, project_id: ProjectId) -> Result<Vec<FactRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT fact_key, scope, subject, claim, source, confidence, evidence_json,
+                    validated_count, durable, created_scan_id
+             FROM facts
+             WHERE project_id = ?1
+               AND superseded_by IS NULL AND invalidated_at IS NULL
+               AND durable = 1
+             ORDER BY fact_key",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id], |r| {
+                Ok(FactRow {
+                    key: r.get(0)?,
+                    scope: r.get(1)?,
+                    subject: r.get(2)?,
+                    claim: r.get(3)?,
+                    source: r.get(4)?,
+                    confidence: r.get(5)?,
+                    evidence_json: r.get(6)?,
+                    validated_count: r.get(7)?,
+                    durable: r.get::<_, i64>(8)? == 1,
+                    created_scan_id: r.get(9)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Record that a scan found these facts' evidence intact.
     ///
     /// The mirror of [`Self::invalidate_moved_facts`], from the same anchors: one says the
