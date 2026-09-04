@@ -10,6 +10,33 @@
 
 **Spec:** [`docs/superpowers/specs/2026-09-03-resolution-accuracy-harness-design.md`](../specs/2026-09-03-resolution-accuracy-harness-design.md) — §6.1 and §6.2.
 
+**Status: complete, 2026-09-04.** Landed as `65d4acc`, `90bb672`, `2a86560`, `bc7c3cf`.
+`make check` green at 59 suites / 427 tests. Measured effect on this repository: 4,603 edge
+rows became 4,387 call sites, and `scan` and `graph` report one figure — 46 % coverage of
+3,632 in-project sites at `2a86560` — where they had reported 45 % and 48 %.
+
+### Where execution departed from this plan
+
+Recorded because a plan that silently disagrees with what shipped is worse than no plan.
+
+1. **ADR-025 was already taken** (`ADR-025-verification-ships-as-a-gate-before-a-reproducer.md`).
+   The new record is **ADR-026**. Task 4 Step 5 below is renumbered.
+2. **The `serde_json` round-trip test was dropped.** `nexus-types` depends on nothing but
+   `serde` and `schemars`, and its own description says so; one assertion did not justify a
+   new dev-dependency. The `#[serde(rename = "external-graph")]` is asserted through `as_str`
+   instead.
+3. **The integration fixture is Rust, not Java.** The Java shape in Task 3 Step 1 produced
+   *zero* edges — the analyzer emits nothing for `thing.save()` on an `Object` field — so the
+   test passed on `0 == 0` while proving nothing. Replaced with the Rust shape
+   `call_resolution.rs` already proves works, and both tests now assert the graph is non-empty
+   before comparing anything. **This is the plan's own worst near-miss: a green test that
+   asserted nothing.**
+4. **Two tests, not one, in Task 2.** `two_call_sites_in_one_caller_stay_two` was added to pin
+   that the grouping key includes `site_line`; without it the key could be narrowed to
+   `(src, hint)` and the metric would under-count instead of over-counting.
+5. **`edges_by_resolution` uses a CTE**, not the doubled `CASE MIN(...)` sketched in Step 4,
+   which was unreadable and computed the same rank twice.
+
 ## Global Constraints
 
 - Rust 1.82+ (`rust-version` in the workspace manifest); CI runs `RUSTFLAGS=-D warnings`, so a warning fails the build.
@@ -32,7 +59,7 @@
 **Interfaces:**
 - Produces: `Resolution::Sibling`, `Resolution::ExternalGraph`, with `as_str()` returning `"sibling"` and `"external-graph"`, and `Resolution::parse` accepting both. Task 2 does not depend on these; the accuracy harness (Plan B) does.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `crates/nexus-types/src/lib.rs`, in the inline `mod tests` (create the module at the end of the file if absent, with `use super::*;`):
 
@@ -65,12 +92,12 @@ fn an_unknown_resolution_is_none_rather_than_a_guess() {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cargo test -p nexus-types every_stored_resolution_value_round_trips`
 Expected: FAIL — `sibling is a stored value the enum cannot name`.
 
-- [ ] **Step 3: Add the two variants**
+- [x] **Step 3: Add the two variants**
 
 In `crates/nexus-types/src/lib.rs`, extend the enum:
 
@@ -121,12 +148,12 @@ Note the `#[serde(rename_all = "lowercase")]` on the enum renders `ExternalGraph
     ExternalGraph,
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cargo test -p nexus-types every_stored_resolution_value_round_trips an_unknown_resolution_is_none_rather_than_a_guess`
 Expected: PASS, 2 tests.
 
-- [ ] **Step 5: Stop `neighbours` defaulting an unknown tier**
+- [x] **Step 5: Stop `neighbours` defaulting an unknown tier**
 
 In `crates/nexus-store/src/lib.rs:1340`, replace the silent default. An unknown value is a schema/code disagreement and must fail loudly rather than claim a tier:
 
@@ -162,12 +189,12 @@ fn unknown_value(column: &str, value: &str) -> Box<dyn std::error::Error + Send 
 }
 ```
 
-- [ ] **Step 6: `make check`**
+- [x] **Step 6: `make check`**
 
 Run: `make check`
 Expected: PASS. If a test elsewhere asserted a `heuristic` tier on a sibling edge, it was asserting the bug — read the assertion, and correct it to `sibling`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/nexus-types/src/lib.rs crates/nexus-store/src/lib.rs
@@ -186,7 +213,7 @@ git commit -m "fix(types): a sibling edge is not a heuristic one"
 - Consumes: nothing from Task 1.
 - Produces: `EdgeCounts` unchanged in shape — every field now counts distinct call sites. `Store::edge_counts` and `Store::edges_by_resolution` keep their signatures, so no consumer changes.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to the inline `mod tests` in `crates/nexus-store/src/lib.rs`. Follow the fixture shape of `live_views_hide_soft_deleted_rows` in the same module for opening a store and inserting a project/scan/file/symbols; do not invent a new one.
 
@@ -232,12 +259,12 @@ fn a_fanned_out_call_site_counts_once_not_four_times() {
 
 If `fixture_with_one_file` and `insert_symbol` do not already exist in that `mod tests`, write them by copying the setup already used by `live_views_hide_soft_deleted_rows`, returning `(Store, ProjectId, ScanId, FileId)` and a symbol id respectively.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cargo test -p nexus-store a_fanned_out_call_site_counts_once_not_four_times`
 Expected: FAIL — `assertion left == right failed: three rows for one call site are one call site; left: 3, right: 1`.
 
-- [ ] **Step 3: Count sites in `edge_counts`**
+- [x] **Step 3: Count sites in `edge_counts`**
 
 Replace the body of `edge_counts` (`crates/nexus-store/src/lib.rs:1265`). SQLite has no multi-column `COUNT(DISTINCT …)`, so the grouping happens in a subquery and the outer query aggregates over groups:
 
@@ -284,7 +311,7 @@ Replace the body of `edge_counts` (`crates/nexus-store/src/lib.rs:1265`). SQLite
 
 `MAX(...)` over a group is the group's OR: a site is resolved if any of its candidate rows bound a destination.
 
-- [ ] **Step 4: Count sites in `edges_by_resolution`**
+- [x] **Step 4: Count sites in `edges_by_resolution`**
 
 The breakdown must use the same unit, or `monorepo_module.rs:96-113` — which asserts the summary and the breakdown agree — fails:
 
@@ -342,17 +369,17 @@ The breakdown must use the same unit, or `monorepo_module.rs:96-113` — which a
 
 Note the selected columns are `rank` then `resolution`, so the outer `SELECT resolution, COUNT(*)` reads index 0 and 1 — adjust the `r.get` indices to `0` and `1` if you drop the `rank` column from the inner select. Prefer dropping it: it exists only to make the `MIN` readable, and the `CASE MIN(...)` already recomputes it.
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `cargo test -p nexus-store a_fanned_out_call_site_counts_once_not_four_times`
 Expected: PASS.
 
-- [ ] **Step 6: `make check`**
+- [x] **Step 6: `make check`**
 
 Run: `make check`
 Expected: PASS. `crates/nexus-core/tests/monorepo_module.rs` and `context_pipeline.rs` assert on these counts; where a count changes because fan-out no longer multiplies it, the new number is correct and the assertion should move. Where a count changes for any other reason, stop and find out why.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/nexus-store/src/lib.rs
@@ -372,7 +399,7 @@ git commit -m "fix(store): the resolution metric counts questions, not answers"
 - Consumes: `EdgeCounts` from Task 2, now in call-site units.
 - Produces: no new types. The rendered strings change.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `crates/nexus-cli/tests/metric_agreement.rs`. Copy the harness shape from an existing integration test in that directory (`json_contract.rs` shows how to build a temp project and invoke the binary):
 
@@ -409,12 +436,12 @@ fn scan_and_graph_report_the_same_resolution_figure() {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cargo test -p nexus-cli --test metric_agreement`
 Expected: FAIL on the first `assert_eq!` — the two totals differ by the number of fan-out rows.
 
-- [ ] **Step 3: Make the scan report read from the same source**
+- [x] **Step 3: Make the scan report read from the same source**
 
 `crates/nexus-core/src/engine/scan.rs:204-207` populates `ScanReport` from `ResolveStats`. Change it to populate from `self.store.edge_counts(self.project_id)?` after the transaction commits, so both commands read one implementation:
 
@@ -427,7 +454,7 @@ Expected: FAIL on the first `assert_eq!` — the two totals differ by the number
 
 then set `edges_total: counts.total as usize`, `edges_resolved: counts.resolved as usize`, `edges_external: counts.external as usize`, `edges_sibling: counts.sibling as usize`.
 
-- [ ] **Step 4: Say "coverage", and show the fan-out**
+- [x] **Step 4: Say "coverage", and show the fan-out**
 
 In `crates/nexus-cli/src/render.rs`, both the scan block (`:236-267`) and the graph block (`:625-673`) currently print `"({pct:.0}% of {in_scope} in-project resolved, {} external)"`. The number is coverage — the share of call sites that found *a* destination — and nothing checks whether it is the right one. Print that:
 
@@ -441,7 +468,7 @@ In `crates/nexus-cli/src/render.rs`, both the scan block (`:236-267`) and the gr
     )?;
 ```
 
-- [ ] **Step 5: Correct the MCP tool description**
+- [x] **Step 5: Correct the MCP tool description**
 
 `crates/nexus-mcp/src/lib.rs:488` says "Dependency graph size and how much of it resolved, broken down by tier." Replace with:
 
@@ -450,17 +477,17 @@ In `crates/nexus-cli/src/render.rs`, both the scan block (`:236-267`) and the gr
      coverage, not accuracy: nothing verifies that a bound destination is the right one."
 ```
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 Run: `cargo test -p nexus-cli --test metric_agreement`
 Expected: PASS.
 
-- [ ] **Step 7: `make check`**
+- [x] **Step 7: `make check`**
 
 Run: `make check`
 Expected: PASS. `scripts/check_smoke.py:31-37` recomputes the percentage itself; it reads `edges_total` and `edges_external` from the scan JSON, whose names and meaning are unchanged, so it needs no edit — but run `make smoke` to confirm.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add crates/nexus-core/src/engine/scan.rs crates/nexus-cli/src/render.rs \
@@ -484,7 +511,7 @@ git commit -m "fix(cli): one denominator, and it is called coverage"
 - Consumes: the behaviour shipped in Tasks 1–3.
 - Produces: documentation only.
 
-- [ ] **Step 1: Correct the tier tables to match the code**
+- [x] **Step 1: Correct the tier tables to match the code**
 
 `docs/architecture.md:251-257` and ADR-003's table at `docs/architecture-decisions.md:117-123` both claim `heuristic` spans 0.70–0.95 and list no `contract` tier. The code has nine constants. Replace both tables with:
 
@@ -504,7 +531,7 @@ git commit -m "fix(cli): one denominator, and it is called coverage"
 
 **None of these confidences has been measured.** Add that sentence under both tables, linking the harness spec.
 
-- [ ] **Step 2: Fix the stale pipeline line**
+- [x] **Step 2: Fix the stale pipeline line**
 
 `docs/architecture.md:207` reads `| resolve | edge resolution: exact → framework → heuristic → unresolved |`, which omits `contract`, `external`, `sibling` and `external-graph`. Replace with:
 
@@ -512,7 +539,7 @@ git commit -m "fix(cli): one denominator, and it is called coverage"
 | `resolve` | edge resolution: exact → contract → heuristic → sibling → external → unresolved |
 ```
 
-- [ ] **Step 3: Add the ADR-017 revision**
+- [x] **Step 3: Add the ADR-017 revision**
 
 Append to ADR-017 in `docs/architecture-decisions.md`, after the existing `### Revision — 2026-09-01` section:
 
@@ -530,7 +557,7 @@ already counted sites, and `graph` read `edge_counts`, which counted rows. Measu
 clone at `46e2fff`, they reported 45 % and 48 % for the same database.
 ```
 
-- [ ] **Step 4: Correct the agent-facing threshold**
+- [x] **Step 4: Correct the agent-facing threshold**
 
 `commands/nexus-status.md:7` says "Report the share of in-project edges that resolved. Below ~80% means impact results are…". The unit changed and the threshold was never measured. Replace with:
 
@@ -542,7 +569,7 @@ clone at `46e2fff`, they reported 45 % and 48 % for the same database.
 
 Apply the same correction of "edges" to "call sites" at `commands/nexus-scan.md:9` and `integrations/README.md:47`.
 
-- [ ] **Step 5: Write ADR-026**
+- [x] **Step 5: Write ADR-026**
 
 Create `docs/architecture/decisions/ADR-026-coverage-is-not-accuracy.md`, following the format of the existing files in that directory:
 
@@ -570,12 +597,12 @@ that needs accuracy must cite an eval run, not a scan. The cost is that the prod
 answer "is my graph correct?" on its own — which is honest, because it never could.
 ```
 
-- [ ] **Step 6: `make check`**
+- [x] **Step 6: `make check`**
 
 Run: `make check`
 Expected: PASS — documentation only, but `make check` also catches a broken intra-doc link in a Rust doc-comment.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add docs/ commands/ integrations/README.md
