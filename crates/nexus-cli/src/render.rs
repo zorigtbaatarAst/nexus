@@ -103,11 +103,23 @@ pub fn banner(w: &mut impl Write, st: &Style) -> std::io::Result<()> {
 ///
 /// Every line here is a query result. Nothing is inferred and no token was spent producing
 /// it, which is the whole claim the package makes.
-pub fn context(w: &mut impl Write, st: &Style, p: &ContextPackage) -> std::io::Result<()> {
-    match &p.project.profile {
-        Some(prof) => profile(w, st, prof)?,
-        None => writeln!(w, "Project: {}", st.head(&p.project.name))?,
-    }
+/// The items alone: findings, code, facts — no profile, no footer.
+///
+/// Split out for `--brief`, which the `UserPromptSubmit` hook uses. The profile is static per
+/// project and the session package already sent it; repeating it every turn was the largest
+/// avoidable cost on the hook path, at 234-256 tokens a prompt.
+///
+/// Sections are separated by a blank line but none precedes the first, so this composes both
+/// as the whole output and as the middle of [`context`].
+pub fn context_items(w: &mut impl Write, st: &Style, p: &ContextPackage) -> std::io::Result<()> {
+    let mut written = false;
+    let section = |w: &mut dyn Write, written: &mut bool, head: String| -> std::io::Result<()> {
+        if *written {
+            writeln!(w)?;
+        }
+        *written = true;
+        writeln!(w, "{}", st.head(&head))
+    };
 
     let findings: Vec<&ContextItem> = p
         .items
@@ -115,11 +127,10 @@ pub fn context(w: &mut impl Write, st: &Style, p: &ContextPackage) -> std::io::R
         .filter(|i| i.kind == ItemKind::Finding)
         .collect();
     if !findings.is_empty() {
-        writeln!(w)?;
-        writeln!(
+        section(
             w,
-            "{}",
-            st.head(&format!("Open findings ({})", findings.len()))
+            &mut written,
+            format!("Open findings ({})", findings.len()),
         )?;
         for i in &findings {
             writeln!(w, "  {}", i.text)?;
@@ -134,8 +145,7 @@ pub fn context(w: &mut impl Write, st: &Style, p: &ContextPackage) -> std::io::R
         .filter(|i| i.kind == ItemKind::Symbol)
         .collect();
     if !symbols.is_empty() {
-        writeln!(w)?;
-        writeln!(w, "{}", st.head(&format!("Code ({})", symbols.len())))?;
+        section(w, &mut written, format!("Code ({})", symbols.len()))?;
         for i in &symbols {
             writeln!(
                 w,
@@ -152,16 +162,32 @@ pub fn context(w: &mut impl Write, st: &Style, p: &ContextPackage) -> std::io::R
         .filter(|i| i.kind == ItemKind::Fact)
         .collect();
     if !facts.is_empty() {
-        writeln!(w)?;
-        writeln!(w, "{}", st.head(&format!("Known ({})", facts.len())))?;
+        section(w, &mut written, format!("Known ({})", facts.len()))?;
         for i in &facts {
             writeln!(w, "  {}", i.text)?;
         }
     }
 
     if let Some(warning) = &p.project.scope_warning {
-        writeln!(w)?;
+        if written {
+            writeln!(w)?;
+        }
         writeln!(w, "{} {}", st.warn("Scope warning:"), warning)?;
+    }
+    Ok(())
+}
+
+pub fn context(w: &mut impl Write, st: &Style, p: &ContextPackage) -> std::io::Result<()> {
+    match &p.project.profile {
+        Some(prof) => profile(w, st, prof)?,
+        None => writeln!(w, "Project: {}", st.head(&p.project.name))?,
+    }
+
+    let mut body = Vec::new();
+    context_items(&mut body, st, p)?;
+    if !body.is_empty() {
+        writeln!(w)?;
+        w.write_all(&body)?;
     }
 
     writeln!(w)?;

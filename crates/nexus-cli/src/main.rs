@@ -205,6 +205,13 @@ enum Command {
         file: Vec<String>,
         #[arg(long, value_name = "FQN")]
         symbol: Vec<String>,
+        /// Items only: no project profile, and nothing at all when nothing was selected.
+        ///
+        /// For the `UserPromptSubmit` hook, which pays this cost on every prompt. The
+        /// session package already sent the profile; sending it again each turn is the
+        /// largest avoidable cost on the hook path.
+        #[arg(long)]
+        brief: bool,
         /// What kind of work this is: `task`, `debug` or `review`.
         ///
         /// Declaring beats deriving. Intent is otherwise read from the words of `--task`,
@@ -888,6 +895,7 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             budget,
             file,
             symbol,
+            brief,
             purpose,
             explain,
             stats,
@@ -954,6 +962,12 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                     emit!(&pkg, {
                         if *stats {
                             render::context_stats(&mut out, &pkg)?;
+                        } else if *brief {
+                            // Nothing selected means nothing to say. Printing a header here
+                            // is how a hook comes to cost 250 tokens on "yes".
+                            if !pkg.items.is_empty() {
+                                render::context_items(&mut out, &st, &pkg)?;
+                            }
                         } else {
                             render::context(&mut out, &st, &pkg)?;
                             if *explain {

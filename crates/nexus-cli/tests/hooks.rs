@@ -151,6 +151,23 @@ fn the_hook_command_fails_open_when_nexus_is_not_on_path() {
 }
 
 #[test]
+fn the_prompt_hook_asks_for_the_brief_package() {
+    // This hook runs on every prompt, so it pays the profile header every turn unless it
+    // asks not to. Measured at 234-256 tokens a turn on the Nexus repository: half of a
+    // small package, and the whole of an empty one.
+    let root = fixture("brief");
+    run(&root, &["init", "--hooks"]);
+    let v = settings(&root).expect("written");
+    let cmd = v["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+        .as_str()
+        .expect("a command string");
+    assert!(
+        cmd.contains("--brief"),
+        "the prompt hook must ask for it: {cmd}"
+    );
+}
+
+#[test]
 fn the_prompt_hook_is_installed_alongside_the_session_hook() {
     let root = fixture("prompt");
     let out = run(&root, &["init", "--hooks"]);

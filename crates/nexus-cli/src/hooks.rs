@@ -29,8 +29,12 @@ pub const SESSION_START_COMMAND: &str = "nexus context --session --budget 800 2>
 /// hook — the thing ADR-024 forbids, because then a hook regression costs more than the
 /// automatic path. The harness substitutes the variable; if it is empty the command still
 /// exits 0 and Nexus reports that it anchored nothing.
+/// `--brief` because this runs on every prompt. Without it the package repeats the project
+/// profile the `SessionStart` hook already sent — 234-256 tokens a turn, which is half of a
+/// small package and all of an empty one — and prints that header even when the prompt named
+/// nothing and nothing was selected.
 pub const USER_PROMPT_COMMAND: &str =
-    "nexus context --task \"$CLAUDE_USER_PROMPT\" --budget 4000 2>/dev/null || true";
+    "nexus context --task \"$CLAUDE_USER_PROMPT\" --budget 4000 --brief 2>/dev/null || true";
 
 /// Keep the index warm after an edit (ADR-024). A no-op rescan is the fast path, so this is
 /// the cheapest hook in the set and the one that makes the others cheap.
