@@ -12,7 +12,8 @@ use std::collections::HashMap;
 /// `Engine` is the product. `Lexical` exists for the Tier 2 control arm and is not a
 /// documented feature — see `docs/superpowers/specs/2026-09-04-tier2-benchmark-design.md` §5
 /// for why it lives in the product binary rather than in the harness.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RankMode {
     #[default]
     Engine,

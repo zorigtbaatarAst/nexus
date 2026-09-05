@@ -273,6 +273,9 @@ impl Engine {
     /// No stage calls a model, and none can: the whole path is a table lookup, a handful of
     /// indexed queries, one graph traversal and a sort.
     fn task_package(&self, req: &TaskRequest) -> Result<ContextPackage> {
+        if req.rank == crate::context::RankMode::Lexical {
+            return self.lexical_package(req);
+        }
         let status = self.status()?;
         let Some(baseline) = status.baseline.clone() else {
             return Err(EngineError::NoBaseline);
@@ -575,6 +578,104 @@ impl Engine {
         let package = finish(package, req);
         crate::context::cache::put(&cache_dir, &key, &package);
         Ok(package)
+    }
+
+    /// The control arm's package: BM25 over file contents, same budget, same item shape.
+    ///
+    /// Deliberately short — every stage the Context Engine runs above (intent, seeds, expand,
+    /// signals, weighted ranking, the cache) is exactly what this arm exists to do without.
+    /// What it does *not* skip is the shared machinery: candidates are handed to the same
+    /// [`context::fill`] and [`finish`] that build every other package, so the budget
+    /// accounting and the serialisation are identical between arms and only the ranking
+    /// function differs. Selection is `Ordered`, not `Ranked`: BM25 already decided the order,
+    /// and re-sorting by density here would fold the product's own ranking heuristic into its
+    /// own control.
+    ///
+    /// The store has no file content column and no notion of the project root — see
+    /// `Store::file_paths` — so unlike every other candidate source in this file, bodies come
+    /// from disk, not the index. A file that no longer reads (deleted since the scan, not
+    /// UTF-8) is skipped rather than failing the whole package, the same way a missing anchor
+    /// is excluded rather than fatal elsewhere in this pipeline.
+    fn lexical_package(&self, req: &TaskRequest) -> Result<ContextPackage> {
+        let status = self.status()?;
+        let Some(baseline) = status.baseline.clone() else {
+            return Err(EngineError::NoBaseline);
+        };
+
+        let docs: Vec<(String, String)> = self
+            .store
+            .file_paths(self.project_id)?
+            .into_iter()
+            .filter_map(|path| {
+                let body = std::fs::read_to_string(self.root.join(&path)).ok()?;
+                Some((path, body))
+            })
+            .collect();
+        let ranked = crate::context::lexical::bm25(&req.text, &docs);
+
+        let candidates: Vec<Candidate> = ranked
+            .into_iter()
+            .filter(|(_, score)| *score > 0.0)
+            .map(|(path, score)| Candidate {
+                // `File` would be more literally accurate — these are whole-file BM25 hits,
+                // not symbols — but `render::context_items` (the CLI's human-readable
+                // output) only has sections for `Finding`, `Symbol` and `Fact`. A `File` item
+                // would serialize fine under `--json` and vanish under the default renderer,
+                // which is exactly the kind of same-arms-different-shape bug this control
+                // exists to rule out. `Symbol` keeps the lexical arm visible the same way.
+                kind: ItemKind::Symbol,
+                label: path.clone(),
+                anchor: Some(CodeRef {
+                    file: path.clone(),
+                    line: 1,
+                    note: String::new(),
+                }),
+                why: format!("bm25 {score:.3}"),
+                text: path,
+                score,
+                terms: Default::default(),
+                component: String::new(),
+            })
+            .collect();
+
+        let mut ledger = InclusionLedger::default();
+        let considered = candidates.len();
+        let mut package = ContextPackage {
+            purpose: req.purpose,
+            project: ProjectSummary {
+                name: status.project.clone(),
+                profile: status.profile.clone(),
+                files: status.files,
+                symbols: status.symbols,
+                scope_warning: None,
+            },
+            items_included: 0,
+            items: Vec::new(),
+            ledger: InclusionLedger::default(),
+            basis: PackageBasis {
+                scan_uid: baseline.scan_uid,
+                commit: status.current.commit.clone(),
+                dirty: status.current.dirty,
+                selection: "lexical control arm: bm25 over file contents, in rank order".into(),
+            },
+            budget_tokens: req.budget_tokens,
+            tokens_estimated: 0,
+            items_considered: considered,
+            intent: None,
+            notes: Vec::new(),
+        };
+        let (items, tokens_estimated) = context::fill(
+            candidates,
+            req.budget_tokens,
+            envelope_cost(&package),
+            context::Selection::Ordered,
+            &mut ledger,
+        );
+        package.items_included = items.len();
+        package.items = items;
+        package.ledger = ledger;
+        package.tokens_estimated = tokens_estimated;
+        Ok(finish(package, req))
     }
 
     /// A fingerprint of what this project remembers, for the cache key.

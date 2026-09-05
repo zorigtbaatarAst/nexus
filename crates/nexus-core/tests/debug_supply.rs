@@ -37,7 +37,7 @@
 //! exists is the folklore `11-risks.md` R8 names. This records what happens and fails when it
 //! changes.
 
-use nexus_core::{Engine, Purpose, TaskRequest};
+use nexus_core::{Engine, Purpose, RankMode, TaskRequest};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -186,6 +186,7 @@ fn supply(repo: &Path, request_text: &str) -> (BTreeMap<String, usize>, usize, u
         // Declared, not derived: the harness knows this is a defect hunt, and #28 exists so
         // that knowledge does not have to survive a round trip through a verb table.
         purpose: Purpose::Debug,
+        rank: RankMode::default(),
         explain: false,
         carry_seeds: Vec::new(),
         recent: None,

@@ -951,6 +951,7 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                     symbols: symbol.clone(),
                     budget_tokens: budget.unwrap_or(nexus_core::context::TASK_BUDGET_TOKENS),
                     purpose: declared_purpose,
+                    rank: nexus_core::RankMode::default(),
                     explain: *explain,
                     carry_seeds: carry_seeds.clone(),
                     recent: recent.clone(),

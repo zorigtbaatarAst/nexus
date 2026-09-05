@@ -577,6 +577,7 @@ impl Nexus {
             files: a.files,
             symbols: a.symbols,
             budget_tokens: a.budget.unwrap_or(nexus_core::context::TASK_BUDGET_TOKENS),
+            rank: nexus_core::RankMode::default(),
             purpose: match a.purpose.as_deref() {
                 None => nexus_core::Purpose::Task,
                 Some(value) => match nexus_core::Purpose::parse(value) {

@@ -34,7 +34,7 @@ pub mod tuning;
 pub mod ui_strings;
 pub mod walk;
 
-pub use context::{ContextPackage, Purpose, TaskRequest};
+pub use context::{ContextPackage, Purpose, RankMode, TaskRequest};
 pub use engine::{Engine, EngineError, Result, DB_FILE, NEXUS_DIR, SIBLING_WARN_FLOOR};
 pub use report::*;
 

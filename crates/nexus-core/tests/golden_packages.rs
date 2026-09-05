@@ -31,7 +31,7 @@
 //! not a flag anyone types by habit.
 
 use nexus_core::context::{Decision, TaskRequest};
-use nexus_core::{Engine, Purpose};
+use nexus_core::{Engine, Purpose, RankMode};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -143,6 +143,7 @@ fn capture(e: &Engine, task: &str) -> Golden {
         symbols: Vec::new(),
         budget_tokens: 4000,
         purpose: Purpose::Task,
+        rank: RankMode::default(),
         // A golden asserts every exclusion carries a reason, so it must ask for the reasons.
         explain: true,
         carry_seeds: Vec::new(),

@@ -101,6 +101,14 @@ pub struct TaskRequest {
     pub symbols: Vec<String>,
     pub budget_tokens: usize,
     pub purpose: Purpose,
+    /// Which ranking function builds this package. Not a product feature — see
+    /// `RankMode`. Defaults to `Engine`, so no existing caller changes behaviour.
+    ///
+    /// `TaskRequest` is not itself `Serialize`/`Deserialize` (it is built from CLI args or MCP
+    /// params, never parsed whole from JSON), so `#[serde(default)]` would not compile here —
+    /// the brief's version assumed it was. `RankMode::default()` is what every existing
+    /// construction site gets instead.
+    pub rank: RankMode,
     /// Ship the reasoning as well as the answer.
     ///
     /// Off by default, and that is a cost decision measured rather than guessed: on this
@@ -129,6 +137,7 @@ impl TaskRequest {
             symbols: Vec::new(),
             budget_tokens,
             purpose: Purpose::Session,
+            rank: RankMode::default(),
             explain: false,
             carry_seeds: Vec::new(),
             recent: None,
