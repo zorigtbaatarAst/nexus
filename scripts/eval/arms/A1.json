@@ -6,7 +6,7 @@
           {
             "type": "command",
             "timeout": 5,
-            "command": "nexus context --session --budget 800 2>/dev/null || true"
+            "command": "nexus-hook --session --budget 800 2>/dev/null || true"
           }
         ]
       }

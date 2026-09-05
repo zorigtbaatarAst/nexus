@@ -16,6 +16,14 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 mkdir -p "$OUT"
 
+# A task that declares a start state starts from a dirty working tree, and nothing here applies
+# the patch. Running it anyway would run a different task than the one the spec describes and
+# say nothing about it — the one failure mode worse than not running it at all.
+if python3 "$ROOT/scripts/eval/task_lookup.py" "$TASK" start_state >/dev/null 2>&1; then
+  echo "$TASK declares start_state; run.sh does not apply the working-tree patch yet" >&2
+  exit 1
+fi
+
 # Which repository and commit this task starts from, read from the fixture manifests.
 read -r REPO COMMIT PROMPT < <(python3 "$ROOT/scripts/eval/task_lookup.py" "$TASK")
 
@@ -56,7 +64,10 @@ fi
 # helped no one — so the sweep has to be able to tell the two apart afterwards.
 SETUP=""
 if [ "$ARM" != "A0" ]; then
-  SETUP="{ nexus init && nexus scan; } >/bench/setup.log 2>&1; echo \"setup exit=\$?\" >> /bench/setup.log;"
+  # The group sits in an `if`, where `set -e` is suspended. Written as a bare group, a failing
+  # `nexus scan` — the last command of the AND-OR list — aborts the container before claude runs
+  # and before the log says why, and the trap then deletes the log unread.
+  SETUP="if { nexus init && nexus scan; } >/bench/setup.log 2>&1; then echo 'setup exit=0'; else echo \"setup exit=\$?\"; fi >>/bench/setup.log;"
 fi
 
 # IS_SANDBOX=1 because the container runs as root and Claude Code otherwise refuses
@@ -79,11 +90,16 @@ docker run --rm \
     git config --global --add safe.directory /work
     cd /work
     $SETUP
+    # The exit code is kept, not swallowed: a run killed at the timeout (124) and a run that
+    # legitimately did nothing both write an all-zero usage.json, and Task 8 would take medians
+    # over the difference.
+    STATUS=0
     timeout ${TIMEOUT_S}s claude -p \"\$(cat /bench/prompt)\" \
       --model $MODEL \
       --output-format json \
       --permission-mode bypassPermissions \
-      > /bench/result.json 2>/bench/stderr || true
+      > /bench/result.json 2>/bench/stderr || STATUS=\$?
+    echo \"\$STATUS\" > /bench/status
     # Everything the container wrote is owned by root; hand it back so the host can read the
     # diff and delete the workspace.
     chown -R \"\$HOST_UID:\$HOST_GID\" /work /bench /root/.claude 2>/dev/null || true
@@ -97,10 +113,15 @@ git -C "$WORK/repo" diff --cached "$COMMIT" > "$OUT/diff.patch"
 cp "$WORK/bench/result.json" "$OUT/transcript.json" 2>/dev/null || echo '{}' > "$OUT/transcript.json"
 cp "$WORK/bench/stderr" "$OUT/stderr.log" 2>/dev/null || true
 cp "$WORK/bench/setup.log" "$OUT/setup.log" 2>/dev/null || true
+# What the hooks actually put into the turn — absent for A0, which has none.
+cp "$WORK/bench/injected.log" "$OUT/injected.log" 2>/dev/null || true
 
-python3 - "$OUT" "$TASK" "$ARM" "$REP" "$MODEL" <<'PY'
+# -1 means the container never got as far as recording one.
+CLAUDE_EXIT="$(cat "$WORK/bench/status" 2>/dev/null || echo -1)"
+
+python3 - "$OUT" "$TASK" "$ARM" "$REP" "$MODEL" "$CLAUDE_EXIT" <<'PY'
 import json, sys, pathlib
-out, task, arm, rep, model = sys.argv[1:6]
+out, task, arm, rep, model, claude_exit = sys.argv[1:7]
 d = pathlib.Path(out)
 try:
     r = json.loads((d / "transcript.json").read_text())
@@ -118,6 +139,9 @@ u = r.get("usage", {}) or {}
     "total_cost_usd": r.get("total_cost_usd", 0.0),
     "num_turns": r.get("num_turns", 0),
     "duration_api_ms": r.get("duration_api_ms", 0),
+    # 0 is a run that finished, 124 one the timeout killed, anything else a crash. Without it
+    # every one of those is the same all-zero row.
+    "claude_exit": int(claude_exit),
     "claimed_done": "done" in (r.get("result") or "").lower(),
 }, indent=2) + "\n")
 PY
