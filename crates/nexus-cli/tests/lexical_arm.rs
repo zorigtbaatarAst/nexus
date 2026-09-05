@@ -66,10 +66,20 @@ fn run(root: &Path, args: &[&str]) -> std::process::Output {
 #[test]
 fn the_lexical_arm_produces_a_package() {
     let root = project("works");
-    let out = run(&root, &["context", "--task", "the save method", "--rank", "lexical"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = run(
+        &root,
+        &["context", "--task", "the save method", "--rank", "lexical"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("bm25"), "items should say how they were ranked:\n{text}");
+    assert!(
+        text.contains("bm25"),
+        "items should say how they were ranked:\n{text}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -77,15 +87,26 @@ fn the_lexical_arm_produces_a_package() {
 fn the_flag_is_absent_from_help() {
     // Undocumented is the deal. If this ever fails, either hide the flag again or update
     // cli-spec.md and 09-tooling.md to admit the surface exists — but do not do it silently.
-    let out = Command::new(nexus()).args(["context", "--help"]).output().expect("help");
+    let out = Command::new(nexus())
+        .args(["context", "--help"])
+        .output()
+        .expect("help");
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(!text.contains("--rank"), "the control arm's flag must stay hidden:\n{text}");
+    assert!(
+        !text.contains("--rank"),
+        "the control arm's flag must stay hidden:\n{text}"
+    );
 }
 
 #[test]
 fn an_unknown_rank_is_a_usage_error() {
     let root = project("typo");
     let out = run(&root, &["context", "--task", "x", "--rank", "bm25"]);
-    assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
