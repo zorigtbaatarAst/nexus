@@ -100,13 +100,13 @@ fn the_flag_is_absent_from_help() {
 
 #[test]
 fn an_unknown_rank_is_a_usage_error() {
+    // Exit code 2 alone doesn't prove the flag was validated: clap also exits 2 when
+    // `--rank` isn't a registered argument at all, which is exactly the regression this
+    // test exists to catch. The stderr text is what tells the two apart.
     let root = project("typo");
     let out = run(&root, &["context", "--task", "x", "--rank", "bm25"]);
-    assert_eq!(
-        out.status.code(),
-        Some(2),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("unknown --rank"), "{stderr}");
     let _ = std::fs::remove_dir_all(&root);
 }
