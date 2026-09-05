@@ -602,15 +602,27 @@ impl Engine {
             return Err(EngineError::NoBaseline);
         };
 
-        let docs: Vec<(String, String)> = self
-            .store
-            .file_paths(self.project_id)?
+        let paths = self.store.file_paths(self.project_id)?;
+        let total = paths.len();
+        let docs: Vec<(String, String)> = paths
             .into_iter()
             .filter_map(|path| {
                 let body = std::fs::read_to_string(self.root.join(&path)).ok()?;
                 Some((path, body))
             })
             .collect();
+        // A skip here is meant to absorb binaries, not to hide a root mismatch or a corpus
+        // that silently went empty — the second failure would report the control arm losing
+        // for a reason invisible in the benchmark's numbers, so it goes in `notes` the same
+        // way the engine arm discloses a capped seed set or a scope warning.
+        let mut notes = Vec::new();
+        let unread = total - docs.len();
+        if unread > 0 {
+            notes.push(format!(
+                "{unread} of {total} files could not be read from disk and were excluded from \
+                 the lexical corpus"
+            ));
+        }
         let ranked = crate::context::lexical::bm25(&req.text, &docs);
 
         let candidates: Vec<Candidate> = ranked
@@ -662,7 +674,7 @@ impl Engine {
             tokens_estimated: 0,
             items_considered: considered,
             intent: None,
-            notes: Vec::new(),
+            notes,
         };
         let (items, tokens_estimated) = context::fill(
             candidates,

@@ -89,6 +89,19 @@ fn the_lexical_arm_selects_by_text_and_respects_the_budget() {
         "the file containing the query terms must be selected: {:?}",
         pkg.items.iter().map(|i| &i.anchor.file).collect::<Vec<_>>()
     );
+    // The dispatch is the feature. Without it, RankMode::Lexical falls through to the engine
+    // arm, which happens to satisfy every assertion above for this fixture too — these two
+    // markers are the only things in this package that only the lexical path emits.
+    assert!(
+        pkg.basis.selection.contains("bm25"),
+        "basis must say this came from the lexical arm: {:?}",
+        pkg.basis.selection
+    );
+    assert!(
+        pkg.items.iter().all(|i| i.why.starts_with("bm25")),
+        "every item's reason must be a bm25 score, not a seed/expand reason: {:?}",
+        pkg.items.iter().map(|i| &i.why).collect::<Vec<_>>()
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -109,6 +122,10 @@ fn the_two_arms_produce_the_same_shape_and_differ_only_in_content() {
 
     assert_eq!(engine_pkg.budget_tokens, lexical_pkg.budget_tokens);
     assert_eq!(engine_pkg.purpose, lexical_pkg.purpose);
+    assert_ne!(
+        engine_pkg.basis.selection, lexical_pkg.basis.selection,
+        "the two arms must actually run different code, not just be asked to"
+    );
     assert!(
         lexical_pkg.tokens_estimated > 0,
         "the control arm must actually inject context"
