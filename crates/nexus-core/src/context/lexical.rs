@@ -143,8 +143,22 @@ mod tests {
     fn ranking_is_stable_for_equal_scores() {
         // Two runs of the same query must produce the same order, or the golden benchmark
         // records noise. Ties break on path.
-        let first = bm25("class", &docs());
-        let second = bm25("class", &docs());
+        // Use a dedicated fixture that guarantees equal scores (two identical-length docs,
+        // same term frequency for the query term).
+        let tie_fixture = vec![
+            ("B".into(), "class Foo".into()),
+            ("A".into(), "class Bar".into()),
+        ];
+        let first = bm25("class", &tie_fixture);
+        let second = bm25("class", &tie_fixture);
+
+        // Verify the fixture actually produces a tie (both docs score identically).
+        assert_eq!(
+            first[0].1, first[1].1,
+            "fixture must produce tied scores for this test to be meaningful: {first:?}"
+        );
+
+        // Verify deterministic tie-breaking on path across runs.
         assert_eq!(
             first.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>(),
             second.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>()
