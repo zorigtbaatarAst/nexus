@@ -4,8 +4,21 @@
 # and the agent by an exact npm version.
 FROM eclipse-temurin:21-jdk@sha256:85f00967bcc624fc19fa9c2cf124ea426a5363898e267141726f31f358c2e14b
 
+# Maven, node and npm grade every run — they are the L0 build for four of the five fixture
+# repositories — so they are pinned to exact archive versions rather than to whatever the
+# Ubuntu archive holds on the day of a rebuild. The committed package-lock.json's guarantee
+# is only as good as the npm that reads it.
+#
+# The failure mode of an exact pin is that a rebuild stops working once Ubuntu supersedes a
+# package. That is the intended failure: a loud one-line version bump, made deliberately,
+# beats an image that silently grades with a different toolchain than the one measured.
+# git, curl, unzip, ca-certificates and sqlite3 are unpinned on purpose — nothing graded
+# depends on their versions.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git curl unzip ca-certificates maven nodejs npm sqlite3 \
+      git curl unzip ca-certificates sqlite3 \
+      maven=3.9.12-1 \
+      nodejs=22.22.1+dfsg+~cs22.19.15-1ubuntu1 \
+      npm=9.2.0~ds3-1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Gradle comes from the distribution, not from apt: Ubuntu's `gradle` package is 4.4.1, which

@@ -24,8 +24,10 @@ subprojects {
 
     tasks.named('test') {
         useJUnitPlatform()
-        // Gradle's test task says nothing on success. The grader reads this output to tell
-        // "the tests passed" from "there were no tests", which are the same exit code.
+        // Gradle's test task says nothing on success, and a module whose test sources are
+        // gone is NO-SOURCE rather than empty — both are exit 0. `fixture-build` requires a
+        // PASSED line to appear, so these events are load-bearing: dropping them turns the
+        // Gradle half of L0 back into a check that passes whether or not anything ran.
         testLogging {
             events 'passed', 'failed', 'skipped'
         }

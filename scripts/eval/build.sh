@@ -29,9 +29,19 @@ if [ -f api/pom.xml ]; then
   ( cd api && mvn -B -o -DfailIfNoTests=true test )
 fi
 
+# Gradle has no `-DfailIfNoTests`, and deleting a module's test sources makes its `test` task
+# NO-SOURCE rather than empty — the build stays green and a repository that lost its tests
+# grades exactly like one whose tests passed. So the output is checked, not just the exit
+# code: `testLogging { events 'passed' }` in the corpus's build.gradle prints one PASSED line
+# per test, and this is what reads it.
 if [ -f settings.gradle ]; then
   FOUND=1
-  gradle --offline --no-daemon --console=plain test
+  gradle_out="$(gradle --offline --no-daemon --console=plain test)"
+  printf '%s\n' "$gradle_out"
+  if ! printf '%s\n' "$gradle_out" | grep -q 'PASSED'; then
+    echo "fixture-build: gradle build succeeded but no test reported PASSED" >&2
+    exit 1
+  fi
 fi
 
 if [ -f web/package.json ]; then
