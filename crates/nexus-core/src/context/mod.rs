@@ -645,11 +645,13 @@ mod budget_tests {
 pub mod cache;
 pub mod expand;
 pub mod intent;
+pub mod lexical;
 pub mod rank;
 pub mod seeds;
 pub mod signals;
 
 pub use intent::{classify, Intent, IntentMatch};
+pub use lexical::RankMode;
 pub use seeds::{Seed, SeedResult, SeedSource};
 pub use signals::{SignalIndex, Signals};
 
