@@ -56,6 +56,15 @@ class HiddenTest {
         }
     }
 
+    /**
+     * Whole-identifier match, not substring: `DROP INDEX ux_payment_idempotency_key` must not be
+     * read as dropping a live constraint named `ux_payment_idempotency`. Underscores are word
+     * characters, so the boundary falls where SQL's identifier boundary does.
+     */
+    private static boolean mentions(String statement, String name) {
+        return Pattern.compile("\\b" + Pattern.quote(name) + "\\b").matcher(statement).find();
+    }
+
     private static String nameIn(String statement) {
         Matcher m = OBJECT_NAME.matcher(statement);
         return m.find() ? m.group(1).replace("\"", "") : UNNAMED;
@@ -75,12 +84,18 @@ class HiddenTest {
                 if (!statement.contains("idempotency")) {
                     continue;
                 }
+                // Removal first, then addition, and both are plain `if`s: one statement can do
+                // both. `ALTER TABLE ... DROP CONSTRAINT IF EXISTS x, ADD CONSTRAINT x UNIQUE (...)`
+                // is the standard idempotent-migration idiom and restores the constraint; an
+                // `else` here would grade it as a drop and fail a correct fix over its SQL idiom.
+                //
                 // "drop" alone would also match `ALTER COLUMN ... DROP NOT NULL`, which removes
                 // no uniqueness at all. A drop only counts if it names a schema object.
                 if (statement.contains("drop")
                         && (statement.contains("index") || statement.contains("constraint"))) {
-                    live.removeIf(statement::contains);
-                } else if (statement.contains("unique")) {
+                    live.removeIf(name -> mentions(statement, name));
+                }
+                if (statement.contains("unique")) {
                     live.add(nameIn(statement));
                 }
             }

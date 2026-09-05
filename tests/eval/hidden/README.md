@@ -60,7 +60,9 @@ docker run --rm --network=none -v "$PWD/target/fixtures/spring-payments:/w" -w /
 - **C1** — any migration set that leaves a uniqueness constraint standing on the idempotency key:
   `CREATE UNIQUE INDEX`, `ALTER TABLE ... ADD CONSTRAINT ... UNIQUE`, or an inline `UNIQUE` on the
   column, under any name, reached by deleting the offending `DROP`, deleting the migration that
-  holds it, or appending a new one.
+  holds it, or appending a new one. A single statement may both drop and re-add — the idempotent
+  `ALTER TABLE … DROP CONSTRAINT IF EXISTS x, ADD CONSTRAINT x UNIQUE (…)` idiom is accepted, and
+  names are matched whole, so dropping `ux_foo_key` does not remove a live `ux_foo`.
 
 ## The coupling that is left
 
