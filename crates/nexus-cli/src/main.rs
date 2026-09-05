@@ -218,6 +218,10 @@ enum Command {
         /// which is right for a person typing and wrong for a caller that already knows.
         #[arg(long, value_name = "KIND")]
         purpose: Option<String>,
+        /// Which ranker builds the package. Undocumented: this exists for the Tier 2
+        /// benchmark's control arm and is not a product feature.
+        #[arg(long, value_name = "MODE", hide = true)]
+        rank: Option<String>,
         /// Why every candidate is in or out, with the score terms that decided it
         #[arg(long)]
         explain: bool,
@@ -897,6 +901,7 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             symbol,
             brief,
             purpose,
+            rank,
             explain,
             stats,
             carry_seeds,
@@ -913,6 +918,22 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                     None => {
                         eprintln!(
                             "{}: unknown --purpose `{value}`; expected task, debug or review",
+                            render::binary_name()
+                        );
+                        return Ok(exit::USAGE);
+                    }
+                },
+            };
+            // Same rule as --purpose above: an unparseable --rank must not quietly become
+            // the default, or a caller that meant `lexical` and typed `lexicl` would get the
+            // product ranker and no signal that its request was ignored.
+            let rank_mode = match rank.as_deref() {
+                None => nexus_core::RankMode::default(),
+                Some(value) => match nexus_core::RankMode::parse(value) {
+                    Some(m) => m,
+                    None => {
+                        eprintln!(
+                            "{}: unknown --rank `{value}`; expected engine or lexical",
                             render::binary_name()
                         );
                         return Ok(exit::USAGE);
@@ -951,7 +972,7 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                     symbols: symbol.clone(),
                     budget_tokens: budget.unwrap_or(nexus_core::context::TASK_BUDGET_TOKENS),
                     purpose: declared_purpose,
-                    rank: nexus_core::RankMode::default(),
+                    rank: rank_mode,
                     explain: *explain,
                     carry_seeds: carry_seeds.clone(),
                     recent: recent.clone(),
