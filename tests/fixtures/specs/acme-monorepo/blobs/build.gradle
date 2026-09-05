@@ -1,0 +1,57 @@
+// One build file for three modules, because the modules differ only in what they depend on.
+//
+// Every version comes from the Spring Boot BOM, pinned to an exact release: the benchmark
+// grades `gradle --offline test`, and a dependency that could resolve differently between
+// runs would make the environment a variable the measurement cannot see.
+//
+// No `java.toolchain` block on purpose. The run image is a JDK 21 image; declaring a
+// toolchain would let Gradle try to *provision* one, which is a network call in the middle
+// of an offline build.
+subprojects {
+    apply plugin: 'java'
+
+    repositories {
+        mavenCentral()
+    }
+
+    dependencies {
+        implementation platform('org.springframework.boot:spring-boot-dependencies:3.3.5')
+        implementation 'org.springframework:spring-context'
+        implementation 'jakarta.persistence:jakarta.persistence-api'
+        testImplementation 'org.junit.jupiter:junit-jupiter'
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    }
+
+    tasks.named('test') {
+        useJUnitPlatform()
+        // Gradle's test task says nothing on success. The grader reads this output to tell
+        // "the tests passed" from "there were no tests", which are the same exit code.
+        testLogging {
+            events 'passed', 'failed', 'skipped'
+        }
+    }
+}
+
+// The shared library every service compiles against. This is the edge the fixture is about:
+// an edit in `libs/common` reaches both services, and neither service's source names it.
+project(':services:orders') {
+    dependencies {
+        implementation project(':libs:common')
+    }
+}
+
+project(':services:inventory') {
+    dependencies {
+        implementation project(':libs:common')
+    }
+}
+
+// `services/shipping` exists only on the `feature/shipping` branch, and settings.gradle
+// includes it on every branch. Gradle reports NO-SOURCE for a project directory that is not
+// there, so the trunk builds unchanged and the branch's in-flight module actually compiles —
+// which is the point of having a branch a task can start from.
+project(':services:shipping') {
+    dependencies {
+        implementation project(':libs:common')
+    }
+}

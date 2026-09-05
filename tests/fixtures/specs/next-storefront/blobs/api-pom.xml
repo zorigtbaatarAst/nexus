@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Every version is pinned, and none of them is pinned here: the Spring Boot parent is the
-  single place a version is decided, and it is itself pinned to an exact release. A benchmark
-  whose dependency resolution can move between runs measures the resolution, not the agent.
+  The backend half of the seam. It has its own build because the frontend has its own build:
+  neither compiler can see across, which is the property Family B exists to measure, and a
+  single build that covered both would quietly repair it.
+
+  See spring-payments/pom.xml for why the parent is the only version here.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0">
   <modelVersion>4.0.0</modelVersion>
@@ -12,8 +14,8 @@
     <version>3.3.5</version>
     <relativePath/>
   </parent>
-  <groupId>mn.pay</groupId>
-  <artifactId>payments</artifactId>
+  <groupId>mn.shop</groupId>
+  <artifactId>storefront-api</artifactId>
   <version>1.0.0</version>
   <properties>
     <java.version>21</java.version>

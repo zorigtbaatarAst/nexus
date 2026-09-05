@@ -3,7 +3,7 @@ CAP_BIN := target/release/bughunter
 PREFIX  ?= $(HOME)/.local
 
 .PHONY: help build release test lint fmt check install uninstall clean demo smoke \
-        fixtures fixtures-verify
+        fixtures fixtures-verify bench-image
 
 help:
 	@echo "build    debug build"
@@ -16,6 +16,7 @@ help:
 	@echo "demo     scan a repository and prove the incremental cascade (REPO=path)"
 	@echo "fixtures         build the benchmark corpus -> target/fixtures"
 	@echo "fixtures-verify  prove the corpus is reproducible (CI gate)"
+	@echo "bench-image      build the benchmark run image, with its offline caches warmed"
 	@echo "eval             measure resolution accuracy against a SCIP oracle (needs an indexer)"
 
 build:
@@ -48,6 +49,13 @@ fixtures:
 # taken against it a measurement of the corpus rather than of Nexus.
 fixtures-verify:
 	cargo run --quiet --bin nexus -- fixture verify
+
+# The benchmark's run image. Both prerequisites are real: the Dockerfile copies the host-built
+# binary in, and it warms its offline dependency caches from the generated corpus. Never part
+# of `make check` — it downloads a JDK image and a few hundred megabytes of dependencies.
+IMAGE ?= nexus-bench:latest
+bench-image: release fixtures
+	docker build -t $(IMAGE) -f scripts/eval/Dockerfile .
 
 install: release
 	install -Dm755 $(BIN) $(PREFIX)/bin/nexus

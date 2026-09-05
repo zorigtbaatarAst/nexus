@@ -113,6 +113,48 @@ write = [{ path = "a.txt", content = "x\n" }]
     );
 }
 
+/// `make fixtures` twice in a row, on a fixture that carries a build file.
+///
+/// The source-tree guard refuses to write into a directory holding a `pom.xml`, which is
+/// what a Java fixture *is*. Applied to our own previous output it made the corpus
+/// generatable exactly once: the second `make fixtures` failed, and every fixture in the
+/// shipped corpus now carries a build file. The guard still has to fire for a mistyped
+/// `--out`, so the discriminator is the manifest we wrote beside the repository.
+#[test]
+fn regenerating_a_fixture_that_contains_a_build_file_is_allowed() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let spec = spec_dir(
+        tmp.path(),
+        r#"
+[[commit]]
+id = "c1"
+message = "one"
+write = [{ path = "pom.xml", content = "<project/>\n" }]
+"#,
+        &[],
+    );
+    let spec = Spec::load(&spec).expect("spec loads");
+    let out = tmp.path().join("out");
+    let opts = || Options {
+        force: true,
+        ..Default::default()
+    };
+
+    let first = generate(&spec, &out, &opts()).expect("first");
+    let again = generate(&spec, &out, &opts()).expect("a second `make fixtures` must work");
+    assert_eq!(shas(&first.manifest), shas(&again.manifest));
+
+    // The guard itself is unchanged for the case it was written for: an output directory
+    // that is somebody's project rather than something we generated.
+    let stranger = tmp.path().join("stranger");
+    std::fs::create_dir_all(stranger.join(spec.name())).expect("mkdir");
+    std::fs::write(stranger.join(spec.name()).join("pom.xml"), "<project/>").expect("write");
+    assert!(
+        generate(&spec, &stranger, &opts()).is_err(),
+        "a directory with no manifest beside it is still refused"
+    );
+}
+
 #[test]
 fn write_move_substitute_transform_and_delete_all_take_effect() {
     let tmp = tempfile::tempdir().expect("tmp");

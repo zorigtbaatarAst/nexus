@@ -1,0 +1,8 @@
+# The build context is the repository root and `target/` is tens of gigabytes of cargo
+# output, so everything is excluded and the three things the image actually needs are named.
+# Without this, `docker build` streams the whole cargo target directory to the daemon before
+# reading the first instruction.
+*
+!scripts/eval
+!target/release/nexus
+!target/fixtures

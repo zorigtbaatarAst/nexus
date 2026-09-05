@@ -14,6 +14,11 @@
 *.swp
 *.swo
 .idea/
+# Eclipse JDT / jdtls writes these next to any pom.xml or build.gradle it finds, and the
+# fixture blobs are build files.
+.project
+.classpath
+.settings/
 .vscode/
 .DS_Store
 

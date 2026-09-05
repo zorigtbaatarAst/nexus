@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Every version is pinned, and none of them is pinned here: the Spring Boot parent is the
-  single place a version is decided, and it is itself pinned to an exact release. A benchmark
-  whose dependency resolution can move between runs measures the resolution, not the agent.
+  See spring-payments/pom.xml: the parent is the only place a version is decided, and it is
+  pinned to an exact release. `spring-boot-starter-web` is here because InvoiceController is
+  a @RestController — the live path this fixture's decoys are decoys for.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0">
   <modelVersion>4.0.0</modelVersion>
@@ -12,8 +12,8 @@
     <version>3.3.5</version>
     <relativePath/>
   </parent>
-  <groupId>mn.pay</groupId>
-  <artifactId>payments</artifactId>
+  <groupId>mn.billing</groupId>
+  <artifactId>billing</artifactId>
   <version>1.0.0</version>
   <properties>
     <java.version>21</java.version>
@@ -21,11 +21,7 @@
   <dependencies>
     <dependency>
       <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-data-jpa</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-graphql</artifactId>
+      <artifactId>spring-boot-starter-web</artifactId>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>

@@ -114,7 +114,12 @@ pub fn generate(spec: &Spec, out_root: &Path, opts: &Options) -> Result<Generate
     let patches_dir = out_root.join(format!("{name}.patches"));
     let manifest_path = out_root.join(format!("{name}.manifest.json"));
 
-    guard_output(&repo_path)?;
+    // A manifest beside the repository is the tell that this directory is our own previous
+    // output. Regenerating over it is the normal case — every fixture that carries a build
+    // file trips the source-tree guard otherwise, which is every fixture in the corpus.
+    if !manifest_path.exists() {
+        guard_output(&repo_path)?;
+    }
     reset_dir(&repo_path, opts.force)?;
     reset_dir(&patches_dir, true)?;
 
@@ -501,6 +506,10 @@ fn emit_task_files(manifest: &Manifest, dir: &Path) -> Result<()> {
 ///
 /// The default output lives under `target/`, but `--out` accepts anything, and the cost of a
 /// mistyped path is somebody's source tree. Cheap to check, expensive to omit.
+///
+/// Only consulted when no manifest sits beside the directory — see `generate`. A generated
+/// fixture is itself a source tree, so applying this to our own output would make the corpus
+/// generatable exactly once.
 fn guard_output(path: &Path) -> Result<()> {
     for (marker, why) in [
         ("Cargo.toml", "it contains a Cargo.toml"),

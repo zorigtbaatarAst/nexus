@@ -30,4 +30,35 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.261
 # why the arms cannot just call `nexus context --task "$CLAUDE_USER_PROMPT"`.
 COPY scripts/eval/nexus-hook.sh /usr/local/bin/nexus-hook
 
+# How a fixture is built and tested — one definition, shared by the pre-warm below and by the
+# grader's L0.
+COPY scripts/eval/build.sh /usr/local/bin/fixture-build
+
+# --- the offline caches -------------------------------------------------------------------
+#
+# Every dependency the corpus needs, downloaded here and never during a run. `make fixtures`
+# must have run on the host: the warm copy is the generated corpus itself, so the caches hold
+# exactly what the runs ask for rather than what a hand-kept list of coordinates claims.
+#
+# This is the only place in the benchmark with network access to a package registry.
+COPY target/fixtures /warm
+RUN set -eux; \
+    for p in /warm/spring-payments /warm/legacy-billing /warm/next-storefront/api; do \
+      ( cd "$p" && mvn -B test ); \
+    done; \
+    ( cd /warm/acme-monorepo && gradle --no-daemon --console=plain test ); \
+    ( cd /warm/next-storefront/web && npm ci --no-audit --no-fund ); \
+    rm -rf /warm /root/.gradle/daemon
+
+# The proof, on a clean copy: everything above builds and tests with no network at all. A
+# failure here is a broken image, which is loud — the alternative is 75 runs that each score
+# `passed: false` for a reason nothing in the results distinguishes from a bad agent.
+#
+# The loop is driven off the manifests, so it names the fixture repositories and not the
+# `<name>.patches/` directories that sit beside them.
+COPY target/fixtures /verify
+RUN set -eux; \
+    for m in /verify/*.manifest.json; do fixture-build "${m%.manifest.json}"; done; \
+    rm -rf /verify /root/.gradle/daemon
+
 WORKDIR /work

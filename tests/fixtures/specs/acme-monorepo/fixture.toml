@@ -28,10 +28,12 @@ from = "c2"
 id      = "c1"
 message = "Shared money and entity base, and the orders service on top of them"
 write = [
-  { path = ".gitignore",                                                 blob = "gitignore" },
-  { path = "settings.gradle",                                            blob = "settings.gradle" },
-  { path = "libs/common/src/main/java/mn/acme/common/Money.java",        blob = "Money.java" },
-  { path = "libs/common/src/main/java/mn/acme/common/BaseEntity.java",   blob = "BaseEntity.java" },
+  { path = ".gitignore",                                                     blob = "gitignore" },
+  { path = "settings.gradle",                                                blob = "settings.gradle" },
+  { path = "build.gradle",                                                   blob = "build.gradle" },
+  { path = "libs/common/src/main/java/mn/acme/common/Money.java",            blob = "Money.java" },
+  { path = "libs/common/src/main/java/mn/acme/common/BaseEntity.java",       blob = "BaseEntity.java" },
+  { path = "libs/common/src/test/java/mn/acme/common/MoneyTest.java",        blob = "MoneyTest.java" },
   { path = "services/orders/src/main/java/mn/acme/orders/OrderEntity.java",  blob = "OrderEntity.java" },
   { path = "services/orders/src/main/java/mn/acme/orders/OrderService.java", blob = "OrderService.java" },
 ]

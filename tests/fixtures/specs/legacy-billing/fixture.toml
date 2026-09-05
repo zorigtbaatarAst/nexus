@@ -28,12 +28,13 @@ email = "fixtures@nexus.invalid"
 id      = "c1"
 message = "Billing: invoices, line items, and the tax table"
 write = [
-  { path = ".gitignore",                                          blob = "gitignore" },
-  { path = "src/main/java/mn/billing/LineItem.java",              blob = "LineItem.java" },
-  { path = "src/main/java/mn/billing/TaxTable.java",              blob = "TaxTable.java" },
-  { path = "src/main/java/mn/billing/InvoiceService.java",        blob = "InvoiceService.java" },
-  { path = "src/main/java/mn/billing/InvoiceController.java",     blob = "InvoiceController.java" },
-  { path = "src/test/java/mn/billing/InvoiceServiceTest.java",    blob = "InvoiceServiceTest.java" },
+  { path = ".gitignore",                                       blob = "gitignore" },
+  { path = "pom.xml",                                          blob = "pom.xml" },
+  { path = "src/main/java/mn/billing/LineItem.java",           blob = "LineItem.java" },
+  { path = "src/main/java/mn/billing/TaxTable.java",           blob = "TaxTable.java" },
+  { path = "src/main/java/mn/billing/InvoiceService.java",     blob = "InvoiceService.java" },
+  { path = "src/main/java/mn/billing/InvoiceController.java",  blob = "InvoiceController.java" },
+  { path = "src/test/java/mn/billing/InvoiceServiceTest.java", blob = "InvoiceServiceTest.java" },
 ]
 
 [[commit]]

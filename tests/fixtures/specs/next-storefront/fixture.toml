@@ -25,14 +25,19 @@ email = "fixtures@nexus.invalid"
 id      = "c1"
 message = "Orders API and the storefront that renders it"
 write = [
-  { path = ".gitignore",                                        blob = "gitignore" },
+  { path = ".gitignore",                                         blob = "gitignore" },
+  { path = "api/pom.xml",                                        blob = "api-pom.xml" },
   { path = "api/src/main/java/mn/shop/api/Order.java",           blob = "Order.java" },
   { path = "api/src/main/java/mn/shop/api/OrderDto.java",        blob = "OrderDto.java" },
   { path = "api/src/main/java/mn/shop/api/OrderRepository.java", blob = "OrderRepository.java" },
   { path = "api/src/main/java/mn/shop/api/OrderController.java", blob = "OrderController.java" },
   { path = "api/src/main/resources/graphql/order.graphqls",      blob = "order.graphqls" },
+  { path = "api/src/test/java/mn/shop/api/OrderDtoTest.java",    blob = "OrderDtoTest.java" },
   { path = "web/package.json",                                   blob = "package.json" },
+  { path = "web/package-lock.json",                              blob = "package-lock.json" },
+  { path = "web/tsconfig.json",                                  blob = "tsconfig.json" },
   { path = "web/src/lib/orders.ts",                              blob = "orders.ts" },
+  { path = "web/src/lib/orders.test.ts",                         blob = "orders.test.ts" },
   { path = "web/src/components/OrderSummary.tsx",                blob = "OrderSummary.tsx" },
   { path = "web/src/app/orders/page.tsx",                        blob = "page.tsx" },
   { path = "web/src/generated/graphql-generated.ts",             blob = "graphql-generated.ts" },
@@ -40,7 +45,16 @@ write = [
 expect.note = """
 `web/src/generated/graphql-generated.ts` is codegen output. `walk::is_excluded` must drop it: \
 it is symbols nobody wrote and nobody can change, and indexing them inflates every count and \
-every impact answer with edges no edit can follow."""
+every impact answer with edges no edit can follow.
+
+Two builds, not one, and that is the point: `api/pom.xml` compiles the Java, `web/` type-checks \
+the TypeScript, and neither sees the other. A single build spanning both would repair the seam \
+that Family B exists to measure.
+
+`web`'s build script is `tsc --noEmit` rather than `next build`. The TypeScript compiler is \
+what actually compiles these sources and what a broken rename fails; `next build` would need a \
+root layout and a Next scaffold nobody wrote, and would put a bundler's network reach inside an \
+offline benchmark run."""
 
 [[commit]]
 id      = "c2"
