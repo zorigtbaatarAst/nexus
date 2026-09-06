@@ -130,8 +130,10 @@ fn a_bare_symbol_name_in_the_prompt_is_found() {
 
 #[test]
 fn a_prompt_that_anchors_to_nothing_reports_zero_seeds_rather_than_inventing_some() {
-    // §4: a package built from nothing is worse than an empty package plus "I could not
-    // anchor this to the code", because the second lets the agent ask a better question.
+    // §4: seeding never invents an anchor, and it says so in `notes` when it has none.
+    // Since ADR-027 the caller may still return something — BM25 over file contents — but
+    // this note is what travels with it and labels it a guess, so a stage 2 that stopped
+    // emitting the note would silently turn a guess into an answer.
     let (_root, engine) = scanned("noseeds");
     let got = engine
         .seeds(&request("make the thing better somehow"), Intent::Unknown)

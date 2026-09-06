@@ -8,11 +8,13 @@ codebase. This repo is **single-context**: one product, one domain, one set of r
 - **[`AGENTS.md`](../../AGENTS.md)** at the repo root: the long-form design briefing — invariants,
   deliberate oddities, and the traps that cost real debugging time to find. Read it before
   changing anything in `crates/`. Its table at the end maps questions to documents.
-- **[`docs/architecture-decisions.md`](../architecture-decisions.md)**: the ADRs. Twenty-one
-  records in one file, headed `## ADR-0NN — <title>`, each stating why it was needed, what else
-  was considered, what it costs, and the signal that should make you change it. Read the ones
-  that touch the area you're about to work in — grep the file for the subsystem name rather than
-  reading all 21.
+- **The ADRs, which live in two places and share one number sequence.** ADR-001 … ADR-021 are
+  `## ADR-0NN — <title>` sections of
+  [`docs/architecture-decisions.md`](../architecture-decisions.md); ADR-022 onward are one file
+  each under [`docs/architecture/decisions/`](../architecture/decisions/). Each record states
+  why it was needed, what else was considered, what it costs, and the signal that should make
+  you change it. Read the ones that touch the area you're about to work in — grep **both**
+  homes for the subsystem name rather than reading them all.
 - **`docs/`**: fifteen documents, the design of record. `architecture.md`, `data-model.md`,
   `cli-spec.md`, `mcp-api.md`, `change-analysis.md`, `capabilities.md` and the rest.
 - **`CONTEXT.md`** at the repo root, if it exists.
@@ -29,17 +31,22 @@ and `/improve-codebase-architecture`) creates it lazily, when terms actually get
 ├── CLAUDE.md                        ← operating instructions for agents
 ├── CONTEXT.md                       ← glossary; created lazily, absent today
 ├── docs/
-│   ├── architecture-decisions.md    ← all ADRs, one file, `## ADR-0NN` headings
+│   ├── architecture-decisions.md    ← ADR-001…021, one file, `## ADR-0NN` headings
+│   ├── architecture/
+│   │   └── decisions/               ← ADR-022 onward, one file per record
 │   ├── architecture.md
 │   ├── data-model.md
 │   └── … 12 more design documents
-└── crates/                          ← 13-crate Cargo workspace
+└── crates/                          ← the Cargo workspace
 ```
 
-**Note the deviation from the skill default.** ADRs here are *not* one file per record under
-`docs/adr/`; they are sections of `docs/architecture-decisions.md`. Cite them as `ADR-021`, the
-form the rest of the repo already uses. If you add a record, append a `## ADR-0NN` section to
-that file rather than starting a directory.
+**Note the deviation from the skill default.** There is no `docs/adr/`. The number sequence is
+shared across both homes — two ADR-001s in one project costs real time to unpick — but the
+storage is not: the original twenty-one stay as sections of `docs/architecture-decisions.md`,
+and anything new is a file in `docs/architecture/decisions/`, named
+`ADR-0NN-<kebab-title>.md`. Cite either form as `ADR-0NN`, which is what the rest of the repo
+already does. Take the next free number by checking both homes; the README in
+`docs/architecture/decisions/` says the same thing from the other side.
 
 ## Use the glossary's vocabulary
 

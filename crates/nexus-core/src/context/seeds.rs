@@ -1,21 +1,24 @@
 //! Stage 2 — what in the code this is about.
 //!
-//! Six sources, in the priority order §4 fixes. Every seed records which source found it,
+//! Seven sources, in the priority order §4 fixes. Every seed records which source found it,
 //! because stage 5 weights an explicitly named symbol differently from one guessed at by
 //! name, and because a seed nobody can account for produces a package nobody can argue with.
 //!
 //! Zero seeds is a legitimate answer and is stated in `notes` rather than left to be inferred
-//! from an empty vector. §4 is explicit about why: an empty package plus "I could not anchor
-//! this to the code" lets the agent ask a better question, where a package built from nothing
-//! sends it confidently into the wrong module.
+//! from an empty vector. That note is the contract this stage owes its caller: it says the
+//! request named nothing this index knows, and it travels with whatever the caller decides to
+//! return.
 //!
-//! **That is no longer the whole behaviour, and this paragraph is being rewritten under #36.**
-//! Zero seeds still produces the note, and the note still travels with whatever is returned —
-//! but `Engine::task_package` now falls back to ranking file contents lexically instead of
-//! returning nothing, when the prompt shares at least two distinctive words with the corpus.
-//! The reasoning above is why the note survives and why every such item is labelled a guess;
-//! what changed is that on two of five real benchmark prompts, and on the planted bugs in
-//! `debug_supply`, the alternative to a labelled guess was measured and it was silence.
+//! What the caller decides is no longer "nothing". `Engine::task_package` falls back to
+//! ranking file contents with BM25 when this stage anchors nothing and the prompt shares at
+//! least two discriminating words with the corpus. ADR-027.
+//!
+//! The original reasoning for returning nothing still holds and is why the disclosure is not
+//! optional: a package built from nothing sends an agent confidently into the wrong module, so
+//! the note above survives, the package's `basis.selection` says "no symbol anchored", and
+//! every item's `why` reads `bm25 <score>`. The agent is told it is a guess. What changed is
+//! that the alternative to a labelled guess was measured — on two of five Tier 2 prompts and
+//! on the bugs planted in `debug_supply` — and it was silence.
 
 use super::TaskRequest;
 use crate::context::intent::Intent;

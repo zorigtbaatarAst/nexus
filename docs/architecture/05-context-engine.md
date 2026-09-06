@@ -99,17 +99,31 @@ Seeds are resolved in priority order, and every seed records *how* it was found:
 5. **Text match** — `ui_strings` (once populated) for a user-visible label, including non-English
    i18n values. This is the strongest signal for a bug report and today the table is empty.
 6. **Fact subject match** — the task names a module a fact is about.
+7. **Carried** — seeds the harness carried forward from the previous turn
+   ([`13-evaluation.md`](13-evaluation.md) §14.1). Last on purpose: a seed this prompt names is
+   better evidence than one the last prompt named.
 
-Zero seeds is a legitimate result and is reported as such. A package built from nothing is
-worse than an empty package plus "I could not anchor this to the code" — the second lets the
-agent ask a better question; the first sends it confidently into the wrong module.
+Zero seeds is a legitimate result and is reported as such, in `notes` rather than left to be
+inferred from an empty vector. A package built from nothing is worse than a package that says
+"I could not anchor this to the code" — the second lets the agent ask a better question; the
+first sends it confidently into the wrong module.
 
-> **Superseded in part; being rewritten under #36.** Zero seeds is still reported, and the note
-> still travels with the package. But stage 2 returning nothing no longer ends the request: the
-> engine falls back to ranking file contents lexically, labelling every item as a guess, when
-> the prompt shares at least two distinctive words with the corpus. The paragraph above is why
-> the disclosure survives; what changed is that the measured alternative to a labelled guess
-> was silence — on two of five Tier 2 prompts, and on the planted bugs in `debug_supply`.
+**Zero seeds no longer ends the request, and that reasoning is why.** When stage 2 anchors
+nothing, `Engine::task_package` ranks file contents with BM25 instead of returning an empty
+package — gated on the prompt sharing at least two *discriminating* terms with the corpus:
+not a stopword, at least four characters, and present in fewer than half the files. The result
+is labelled a guess at all three levels the package has: stage 2's note travels with it,
+`basis.selection` reads `no symbol anchored: bm25 over file contents, in rank order`, and every
+item's `why` reads `bm25 <score>`. Stages 3 through 5 do not run — there is no graph to walk —
+and the budget is filled by the same code the graph path uses.
+
+The disclosure is not decoration; it is the original decision still being honoured. What
+changed is that a third option existed that the original decision did not have on the table:
+supply something, and label it. Measured, the alternative to a labelled guess was silence — two
+of five Tier 2 prompts returned `considered 0 · included 0`, and `debug_supply` recorded the
+package reaching none of the files a fix had to touch across three planted bugs.
+[ADR-027](decisions/ADR-027-a-labelled-guess-beats-silence-when-seeding-anchors-nothing.md)
+records the reversal, the evidence, the alternatives rejected, and what it costs.
 
 ## 5. Stage 3 — Expand
 
