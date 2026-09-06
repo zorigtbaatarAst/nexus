@@ -57,18 +57,26 @@ docker image inspect "$IMAGE" >/dev/null 2>&1 || {
   echo "no image $IMAGE: build it with scripts/eval/Dockerfile first" >&2; exit 1; }
 
 WORK="$(mktemp -d)"
-# The container writes target/, build/ and node_modules/ as root and chowns them back before it
-# exits. If docker never started there is nothing to chown and rm fails — say so rather than
-# leaving a silent orphan under /tmp.
+
+# Every container this run has named. `run_build` removes its own, and this is the fallback for
+# the two cases that removal can miss: a grade.sh killed mid-build, and dockerd instantiating a
+# container after the CLI it belonged to was already gone. The names are unique to this process,
+# so removing one that is already gone is a no-op and removing one that is not is the point.
+CONTAINERS=""
 CONTAINER=""
+
 cleanup() {
-  if [ -n "$CONTAINER" ]; then docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; fi
+  local c
+  for c in $CONTAINERS; do docker rm -f "$c" >/dev/null 2>&1 || true; done
   rm -rf "$WORK" 2>/dev/null && return 0
-  # A container killed at the deadline never reached its chown, so target/ and node_modules/
-  # are still root-owned and rm cannot touch them. Hand them back the same way the build does,
-  # or a sweep with a few timeouts in it fills /tmp with gigabytes nobody can delete.
-  docker run --rm -v "$WORK:/w:Z" "$IMAGE" \
+  # A container killed at the deadline never reached its chown, so target/ and node_modules/ are
+  # still root-owned and rm cannot touch them. Hand them back the same way the build does, or a
+  # sweep with a few timeouts in it fills /tmp with gigabytes nobody can delete. Bounded like
+  # every other docker run here: this one runs inside the EXIT trap, and a daemon busy enough to
+  # hang it is exactly the daemon a sweep is running against.
+  timeout -k 10 60 docker run --rm --name "nexus-grade-$$-chown" -v "$WORK:/w:Z" "$IMAGE" \
     chown -R "$(id -u):$(id -g)" /w >/dev/null 2>&1 || true
+  docker rm -f "nexus-grade-$$-chown" >/dev/null 2>&1 || true
   rm -rf "$WORK" 2>/dev/null || echo "grade.sh: could not remove $WORK" >&2
 }
 trap cleanup EXIT
@@ -201,9 +209,11 @@ run_build() {  # tree, log -> BUILD_STATUS
   #                  SIGKILLs the client, which is what actually unblocks the decision.
   #   --name         the container outlives the client either way — still `Up` and executing,
   #   docker rm -f   or stranded in `Created`, which `--rm` never reaps because the client died
-  #                  before the container's lifecycle completed. Removing it by name afterwards,
-  #                  unconditionally, is what actually bounds the container.
+  #                  before the container's lifecycle completed. Removing it by name is what
+  #                  bounds the container, and for the `Created` case that removal has to wait
+  #                  for it: see the retry below.
   CONTAINER="nexus-grade-$$-$RANDOM"
+  CONTAINERS="$CONTAINERS $CONTAINER"
   timeout -k 10 "$BUILD_TIMEOUT_S" \
   docker run --rm --name "$CONTAINER" --network=none \
     -v "$tree:/work:Z" -w /work \
@@ -212,7 +222,34 @@ run_build() {  # tree, log -> BUILD_STATUS
     bash -lc 'fixture-build .; status=$?; chown -R "$HOST_UID:$HOST_GID" /work 2>/dev/null || true; exit $status' \
     >"$log" 2>&1 </dev/null || BUILD_STATUS=$?
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+
+  # SIGKILLing the CLI does not stop dockerd finishing what it started. A container can appear
+  # in `Created` twenty or thirty seconds *after* the removal above ran and found nothing —
+  # measured at 2 leaks in 5 runs with BUILD_TIMEOUT_S=3 — and `--rm` never reaps it, because
+  # the client that owned it is gone. One removal is a race won or lost; keep looking until the
+  # daemon has settled. Only after a kill: a build that exited on its own leaves nothing to wait
+  # for, and polling every healthy build would add half a minute to each of them.
+  #
+  # $CONTAINER stays in $CONTAINERS either way, so the EXIT trap is still the fallback if this
+  # loop is interrupted, or if a strand outlives even the window.
+  #
+  # The probe is `docker ps -a`, not the exit code of `docker rm -f`: `-f` exits 0 for a
+  # container that does not exist, so a loop that breaks on a successful removal breaks on the
+  # first attempt every time and waits for nothing. Verified before relying on it.
+  case "$BUILD_STATUS" in
+    124 | 137)
+      local settle=$((SECONDS + 45))
+      while [ "$SECONDS" -lt "$settle" ]; do
+        if [ -n "$(docker ps -aq --filter "name=^${CONTAINER}$" 2>/dev/null)" ]; then
+          docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+          break
+        fi
+        sleep 1
+      done
+      ;;
+  esac
   CONTAINER=""
+
   # 125 is docker failing, 126/127 the container failing to run the command. None of them is a
   # verdict about the agent's diff, and recording one as a failed gate would zero a run for a
   # reason nothing in the results distinguishes from a bad fix.
