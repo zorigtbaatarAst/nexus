@@ -107,8 +107,12 @@ docker run --rm --network=none -v "$PWD/target/fixtures/spring-payments:/w" -w /
   correct fixes were written and all pass: finishing the rename forward on the schema and the
   frontend; reverting the Java side back to `totalAmount` and touching no frontend file at all; and
   keeping both sides as they are while adding an `@SchemaMapping(typeName = "Order", field =
-  "totalAmount")` resolver that serves the orphaned field. Nothing here names a field, because the
-  prompt names none — asserting `grossAmount` would grade which direction the agent guessed.
+  "totalAmount")` resolver that serves the orphaned field. A fourth passes too: renaming the schema
+  field and keeping the client's key with a GraphQL alias, `totalAmount: grossAmount`, touching no
+  frontend file. An alias renames the field in the *response*, so the selection set is read as a map
+  from the schema-side name to the key the client gets back, and each is checked against the layer
+  it actually describes. Nothing here names a field, because the prompt names none — asserting
+  `grossAmount` would grade which direction the agent guessed.
 - **A2** — any `Money` that keeps a fourth decimal place and carries at least four: `setScale(4, …)`
   under any rounding mode, in the constructor or in the accessor, behind a constant or a parameter.
   The bound is "at least four", never "exactly four", for the same reason A1's is "at least 128".

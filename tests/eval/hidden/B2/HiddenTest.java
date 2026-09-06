@@ -1,6 +1,7 @@
 package mn.shop.api;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -8,11 +9,14 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.RecordComponent;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -38,6 +42,11 @@ import org.junit.jupiter.api.Test;
  * walking up rather than assumed, because Maven runs this test with {@code api/} as the working
  * directory.
  *
+ * <p>A GraphQL alias is a fix, not a workaround: `totalAmount: grossAmount` renames the field in
+ * the response, so a renamed schema and an untouched component agree. The selection set is
+ * therefore read as a map from the schema-side name to the key the response carries, and the two
+ * are checked against the two different things they describe.
+ *
  * <p>Note what is deliberately <em>not</em> asserted here. That the component reads only fields
  * the client-side type declares is {@code tsc --noEmit}'s job and it does it at L0. That the old
  * name is gone everywhere is B1's business, not this task's: reverting Java to {@code
@@ -55,6 +64,10 @@ class HiddenTest {
     /** The selection set of the `orders` field in the query the client sends. */
     private static final Pattern ORDERS_SELECTION =
             Pattern.compile("\\borders\\s*\\{([^{}]*)\\}", Pattern.DOTALL);
+
+    /** One entry in a selection set: `grossAmount`, or `totalAmount: grossAmount`. */
+    private static final Pattern SELECTED =
+            Pattern.compile("(?:(\\w+)\\s*:\\s*)?(\\w+)");
 
     /** A field resolver: `@SchemaMapping` / `@BatchMapping`, with or without attributes. */
     private static final Pattern FIELD_RESOLVER =
@@ -157,9 +170,28 @@ class HiddenTest {
 
     private record SchemaField(String name, String type) {}
 
-    private static List<SchemaField> orderFields() throws IOException {
-        String schema = read("api/src/main/resources/graphql/order.graphqls");
-        Matcher body = ORDER_TYPE.matcher(schema);
+    /**
+     * Every schema file the application would load, concatenated — read off the test classpath
+     * rather than from a path, so a fix that renames, moves or splits the schema file is still
+     * graded on what it declares. A hard-coded path would throw rather than assert, and an
+     * exception is not a red test.
+     */
+    private static String schema() throws Exception {
+        URL location = HiddenTest.class.getResource("/graphql");
+        assertNotNull(location, "no graphql/ schema directory on the classpath any more");
+        try (Stream<Path> files = Files.walk(Path.of(location.toURI()))) {
+            StringBuilder all = new StringBuilder();
+            for (Path file : files.filter(Files::isRegularFile).sorted().toList()) {
+                if (file.getFileName().toString().endsWith(".graphqls")) {
+                    all.append(Files.readString(file)).append('\n');
+                }
+            }
+            return all.toString();
+        }
+    }
+
+    private static List<SchemaField> orderFields() throws Exception {
+        Matcher body = ORDER_TYPE.matcher(schema());
         assertTrue(body.find(), "the schema no longer declares a type Order");
         List<SchemaField> fields = new ArrayList<>();
         Matcher field = SCHEMA_FIELD.matcher(body.group(1));
@@ -170,26 +202,30 @@ class HiddenTest {
         return fields;
     }
 
-    /** The fields the client's GraphQL query asks for, aliases resolved to the real name. */
-    private static Set<String> selectedFields() throws IOException {
+    /**
+     * The query's selection set: schema field name -> the key the response carries it under.
+     * `totalAmount: grossAmount` selects the schema's `grossAmount` and hands the client back a
+     * `totalAmount`, so both names matter and neither can be dropped — the schema side is what
+     * the schema must declare, the client side is what the page reads.
+     */
+    private static Map<String, String> selectedFields() throws IOException {
         String client = read("web/src/lib/orders.ts");
         Matcher selection = ORDERS_SELECTION.matcher(client);
         assertTrue(
                 selection.find(),
                 "web/src/lib/orders.ts no longer sends a query selecting fields on `orders`");
-        Set<String> selected = new LinkedHashSet<>();
-        // `total: grossAmount` selects grossAmount under an alias; drop the label, keep the field.
-        Matcher token = Pattern.compile("(\\w+)\\s*:\\s*|(\\w+)").matcher(selection.group(1));
+        Map<String, String> selected = new LinkedHashMap<>();
+        Matcher token = SELECTED.matcher(selection.group(1));
         while (token.find()) {
-            if (token.group(2) != null) {
-                selected.add(token.group(2));
-            }
+            String alias = token.group(1);
+            String field = token.group(2);
+            selected.put(field, alias != null ? alias : field);
         }
         return selected;
     }
 
     @Test
-    void everyFieldTheSchemaDeclaresIsActuallyServed() throws IOException {
+    void everyFieldTheSchemaDeclaresIsActuallyServed() throws Exception {
         Set<String> answerable = new LinkedHashSet<>(publishedNames(OrderDto.class));
         answerable.addAll(resolverServedNames());
 
@@ -207,11 +243,12 @@ class HiddenTest {
     }
 
     @Test
-    void everyFieldTheClientSelectsIsDeclaredByTheSchema() throws IOException {
+    void everyFieldTheClientSelectsIsDeclaredByTheSchema() throws Exception {
         Set<String> declared = new LinkedHashSet<>();
         orderFields().forEach(f -> declared.add(f.name()));
 
-        List<String> unknown = selectedFields().stream().filter(f -> !declared.contains(f)).toList();
+        List<String> unknown =
+                selectedFields().keySet().stream().filter(f -> !declared.contains(f)).toList();
 
         assertTrue(
                 unknown.isEmpty(),
@@ -223,7 +260,7 @@ class HiddenTest {
     }
 
     @Test
-    void theAmountIsStillDeclaredSelectedAndNamedByTheView() throws IOException {
+    void theAmountIsStillDeclaredSelectedAndNamedByTheView() throws Exception {
         List<String> amounts =
                 orderFields().stream().filter(f -> f.type().startsWith("Float")).map(SchemaField::name).toList();
         assertFalse(
@@ -231,7 +268,7 @@ class HiddenTest {
                 "type Order no longer declares any numeric field — the total the page renders was "
                         + "removed rather than repaired");
 
-        Set<String> selected = selectedFields();
+        Map<String, String> selected = selectedFields();
         // The client type and the component: the query literal is dropped so that selecting a
         // field is not mistaken for the client knowing about it.
         String clientCode = read("web/src/lib/orders.ts").replaceAll("(?s)`[^`]*`", " ");
@@ -239,14 +276,21 @@ class HiddenTest {
 
         for (String amount : amounts) {
             assertTrue(
-                    selected.contains(amount),
+                    selected.containsKey(amount),
                     "the schema declares Order." + amount + " but the orders query never selects it");
+            // What the page reads is the key the *response* carries, which an alias renames. A
+            // query that selects grossAmount as `totalAmount: grossAmount` and a component that
+            // reads totalAmount agree perfectly; demanding the schema-side name here would grade
+            // a working fix red for choosing an alias over an edit.
+            String carriedAs = selected.get(amount);
             assertTrue(
-                    Pattern.compile("\\b" + Pattern.quote(amount) + "\\b").matcher(clientCode + view).find(),
+                    Pattern.compile("\\b" + Pattern.quote(carriedAs) + "\\b").matcher(clientCode + view).find(),
                     "the query selects "
                             + amount
+                            + (carriedAs.equals(amount) ? "" : " as `" + carriedAs + "`")
                             + ", but neither the client type in orders.ts nor OrderSummary.tsx names "
-                            + "it — the page reads a property the response does not carry");
+                            + carriedAs
+                            + " — the page reads a property the response does not carry");
         }
     }
 }
