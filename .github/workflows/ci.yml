@@ -29,6 +29,13 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # The benchmark analysis' own statistics self-test: medians not means, a paired bootstrap
+      # that resamples tasks, the two task sets, the fallback counter. Pure stdlib and ~0.2s, and
+      # nothing else in CI ran it — so `make check` was vacuous for the one file a ship-or-delete
+      # decision is read from. Before the tests, so a broken statistic fails in the first second.
+      - name: Benchmark analysis self-test
+        run: python3 scripts/eval/analyse.py --self-test
+
       # The architecture's module boundaries are tests, not conventions:
       # docs/architecture.md §4. They run with everything else.
       - name: Tests

@@ -686,7 +686,11 @@ def report(base):
         outside = [t for t in tasks if t not in cmp_tasks]
         set_note = (
             f" Task set: the {len(cmp_tasks)} task(s) run at both arms ({', '.join(cmp_tasks) or '—'})"
-            + (f"; {', '.join(outside)} never ran {baseline} and are not in this comparison." if outside else ".")
+            + (
+                f"; {', '.join(outside)} never ran {baseline} and "
+                f"{'is' if len(outside) == 1 else 'are'} not in this comparison."
+                if outside else "."
+            )
         )
         # Carried on the line itself, not left to the arm table: a comparison where one arm was
         # handed an empty package, or a guess in place of a graph ranking, is not a contrast
@@ -1360,35 +1364,48 @@ def _self_test_task_sets():
     """The two thresholds rest on two task sets, and each must be computed over — and report —
     its own.
 
-    Five tasks, deliberately asymmetric, exactly as the corpus is: P, Q and R run all three
+    Six tasks, deliberately asymmetric, exactly as the corpus is: P, Q, R and S run all three
     arms; E1 and N1 run A1 and A5 only, because A0 contributes nothing to a ranking comparison.
-    Every cell is one rep and one clean pass, so a cell's CPS is its token count.
+    Every cell is one rep and one clean pass unless the table says otherwise, so a cell's CPS is
+    its token count.
 
-        task | A0   | A1  | A5   | T4 reduction (A0-A1)/A0 | T7 reduction (A5-A1)/A5
-        -----|------|-----|------|-------------------------|------------------------
-        E1   |  —   | 800 | 1000 | not in the T4 set       | 20%
-        N1   |  —   | 400 | 1000 | not in the T4 set       | 60%
-        P    | 1000 | 500 | 1000 | 50%                     | 50%
-        Q    | 1000 | 250 | 1000 | 75%                     | 75%
-        R    | fail | 500 | 1000 | skipped: A0 CPS is inf  | 50%
+        task | A0    | A1  | A5   | T4 reduction (A0-A1)/A0 | T7 reduction (A5-A1)/A5
+        -----|-------|-----|------|-------------------------|------------------------
+        E1   |  —    | 800 | 1000 | not in the T4 set       | 20%
+        N1   |  —    | 400 | 1000 | not in the T4 set       | 60%
+        P    | 1000  | 500 | 1000 | 50%                     | 50%
+        Q    | 1000  | 250 | 1000 | 75%                     | 75%
+        R    | fail  | 500 | 1000 | skipped: A0 CPS is inf  | 50%
+        S    | infra | 500 | 1000 | skipped: no A0 data     | 50%
 
-    So T4's task set is 3 (P, Q, R) of which 2 survive — R is skipped for an undefined CPS,
-    which is real missing data and must keep being reported as such. Its deltas are [50, 75],
-    median 62.5, and it does NOT meet T4: 2 surviving tasks is below MIN_T4_TASKS, however good
-    62.5% looks. T7's task set is 5, all surviving, deltas in sorted-task order
-    [20, 60, 50, 75, 50] -> median 50, favourable 5 of 5, p = 1/32 = 0.03125 < 0.10 -> MEETS.
+    Three shapes of "A0 has no usable number at this task", which must not collapse into each
+    other: E1/N1 (**never ran A0** — not in the corpus, not missing data), R (**ran and failed**
+    — CPS infinite), S (**ran and was killed by the harness** — its only A0 cell is infra, so it
+    IS in the corpus and IS missing data). S is the case the `tasks=` kwarg and
+    `comparison_task_set`'s "any run, infra included" rule both exist for, and the only fixture
+    where an arm's *entire* presence at a task is an infra run.
+
+    So T4's task set is 4 (P, Q, R, S) of which 2 survive. Its deltas are [50, 75], median 62.5,
+    and it does NOT meet T4: 2 surviving tasks is below MIN_T4_TASKS, however good 62.5% looks.
+    T7's task set is 6, all surviving, deltas in sorted-task order [20, 60, 50, 75, 50, 50] ->
+    sorted [20, 50, 50, 50, 60, 75] -> median 50, favourable 6 of 6, p = 1/64 = 0.015625 < 0.10
+    -> MEETS.
 
     The wrong implementations this discriminates against:
 
       * computing both thresholds over every task in the tree (what this file did before the
-        corpus went asymmetric) -> T4's task set is 5 and E1/N1 appear in its `skipped_tasks`
+        corpus went asymmetric) -> T4's task set is 6 and E1/N1 appear in its `skipped_tasks`
         as missing data, which is the specific misreading — corpus shape reported as data loss
-      * a union instead of an intersection                 -> same, T4 n_task_set 5
-      * the two sets swapped                               -> T4 n_task_set 5, T7 3
-      * `n_task_set` collapsed onto `n_tasks` (surviving)  -> T4 n_task_set 2, not 3; R exists
-        in the corpus and was measured, it just had no defined CPS
-      * membership decided by non-infra runs rather than by any run -> unchanged here by
-        construction, which is why the infra case is left to _self_test_synthetic_tree
+      * a union instead of an intersection                 -> same, T4 n_task_set 6
+      * the two sets swapped                               -> T4 n_task_set 6, T7 4
+      * `n_task_set` collapsed onto `n_tasks` (surviving)  -> T4 n_task_set 2, not 4; R and S
+        exist in the corpus and were paid for, they just have no defined CPS
+      * `comparison_task_set` skipping infra runs when building membership -> S drops out of
+        T4's task set entirely and out of its `skipped_tasks`, so a task that was paid for and
+        lost to the harness reads as a task that was never in the corpus
+      * `arm_stats` deriving its task count from non-infra runs (i.e. dropping the `tasks=`
+        kwarg report() passes) -> A0's `n_tasks` reads 3, not 4, and the arm table under-counts
+        exactly the tasks the harness took away
     """
     import io
     import tempfile
@@ -1398,7 +1415,9 @@ def _self_test_task_sets():
         base = pathlib.Path(d)
         (base / "meta.json").write_text(json.dumps({"model": "claude-opus-5"}))
 
-        for task, a1_tokens in (("P", 500), ("Q", 250), ("R", 500), ("E1", 800), ("N1", 400)):
+        for task, a1_tokens in (
+            ("P", 500), ("Q", 250), ("R", 500), ("S", 500), ("E1", 800), ("N1", 400)
+        ):
             _write_run(base, task, "A1", 0, tokens=(a1_tokens, 0, 0, 0), passed=True)
             _write_run(base, task, "A5", 0, tokens=(1000, 0, 0, 0), passed=True)
         _write_run(base, "P", "A0", 0, tokens=(1000, 0, 0, 0), passed=True)
@@ -1406,6 +1425,10 @@ def _self_test_task_sets():
         # R's A0 cell ran and failed: CPS is infinite there, so R is genuinely skipped — a
         # different fact from E1/N1, which never ran A0 at all.
         _write_run(base, "R", "A0", 0, tokens=(1000, 0, 0, 0), passed=False)
+        # S's ONLY A0 cell was killed by the harness. That run was still paid for and S is still
+        # in T4's corpus; it belongs in the task set and in `skipped_tasks`, and in A0's arm-table
+        # task count. Deriving either from non-infra runs erases it.
+        _write_run(base, "S", "A0", 0, tokens=(0, 0, 0, 0), passed=False, claude_exit=124)
 
         buf = io.StringIO()
         with redirect_stdout(buf):
@@ -1415,44 +1438,48 @@ def _self_test_task_sets():
 
         summary = json.loads((base / "summary.json").read_text())
         assert summary["task_sets"] == {
-            "A1_vs_A0": {"tasks": ["P", "Q", "R"], "n": 3},
-            "A1_vs_A5": {"tasks": ["E1", "N1", "P", "Q", "R"], "n": 5},
+            "A1_vs_A0": {"tasks": ["P", "Q", "R", "S"], "n": 4},
+            "A1_vs_A5": {"tasks": ["E1", "N1", "P", "Q", "R", "S"], "n": 6},
         }, summary["task_sets"]
 
         t4 = summary["t4_threshold"]
-        assert t4["task_set"] == ["P", "Q", "R"], t4["task_set"]
-        assert t4["n_task_set"] == 3, t4["n_task_set"]
+        assert t4["task_set"] == ["P", "Q", "R", "S"], t4["task_set"]
+        assert t4["n_task_set"] == 4, t4["n_task_set"]
         # E1 and N1 are not in this comparison's corpus, so they are not "missing data" either.
-        assert t4["skipped_tasks"] == ["R"], t4["skipped_tasks"]
+        # R and S are: one arm ran and could not pass, the other was killed mid-run.
+        assert t4["skipped_tasks"] == ["R", "S"], t4["skipped_tasks"]
         assert t4["deltas_pct"] == [50.0, 75.0], t4["deltas_pct"]
         assert t4["median_reduction_pct"] == 62.5, t4["median_reduction_pct"]
         assert t4["n_tasks"] == 2, t4["n_tasks"]
         assert t4["meets_t4"] is False, "2 surviving tasks is below MIN_T4_TASKS whatever the median"
 
         t7 = summary["t7_threshold"]
-        assert t7["task_set"] == ["E1", "N1", "P", "Q", "R"], t7["task_set"]
-        assert t7["n_task_set"] == 5, t7["n_task_set"]
+        assert t7["task_set"] == ["E1", "N1", "P", "Q", "R", "S"], t7["task_set"]
+        assert t7["n_task_set"] == 6, t7["n_task_set"]
         assert t7["skipped_tasks"] == [], t7["skipped_tasks"]
-        assert t7["deltas_pct"] == [20.0, 60.0, 50.0, 75.0, 50.0], t7["deltas_pct"]
+        assert t7["deltas_pct"] == [20.0, 60.0, 50.0, 75.0, 50.0, 50.0], t7["deltas_pct"]
         assert t7["median_reduction_pct"] == 50.0, t7["median_reduction_pct"]
-        assert t7["n_tasks"] == 5 and t7["n_non_tied"] == 5, t7
-        assert t7["p_value"] == 1 / 32, t7["p_value"]
+        assert t7["n_tasks"] == 6 and t7["n_non_tied"] == 6, t7
+        assert t7["p_value"] == 1 / 64, t7["p_value"]
         assert t7["meets_t7"] is True, t7
 
-        # The token comparisons are on their own task sets too, not on all five.
-        assert summary["comparisons"]["A1_vs_A0_tokens"]["n_task_set"] == 3
-        assert summary["comparisons"]["A1_vs_A5_tokens"]["n_task_set"] == 5
+        # The token comparisons are on their own task sets too, not on all six.
+        assert summary["comparisons"]["A1_vs_A0_tokens"]["n_task_set"] == 4
+        assert summary["comparisons"]["A1_vs_A5_tokens"]["n_task_set"] == 6
 
         # Per-arm task counts, so the asymmetry is visible in the table itself and not only in
-        # the prose above it.
-        assert summary["arms_stats"]["A0"]["n_tasks"] == 3, summary["arms_stats"]["A0"]["n_tasks"]
-        assert summary["arms_stats"]["A1"]["n_tasks"] == 5
-        assert summary["arms_stats"]["A5"]["n_tasks"] == 5
+        # the prose above it. A0's 4 includes S, whose only A0 run was infra: the harness took
+        # the measurement away, it did not take the task out of the corpus.
+        assert summary["arms_stats"]["A0"]["n_tasks"] == 4, summary["arms_stats"]["A0"]
+        assert summary["arms_stats"]["A0"]["n_infra"] == 1, summary["arms_stats"]["A0"]
+        assert summary["arms_stats"]["A1"]["n_tasks"] == 6
+        assert summary["arms_stats"]["A5"]["n_tasks"] == 6
 
         # And a reader of the page — not of summary.json — must see both sizes stated beside the
         # thresholds, or the whole change bought nothing.
-        assert "Task set: the 3 task(s) run at three arms (P, Q, R)" in stdout, stdout
-        assert "Task set: the 5 task(s) run at A1 and A5 (E1, N1, P, Q, R)" in stdout, stdout
+        assert "Task set: the 4 task(s) run at three arms (P, Q, R, S)" in stdout, stdout
+        assert "Task set: the 6 task(s) run at A1 and A5 (E1, N1, P, Q, R, S)" in stdout, stdout
+        assert "| A0 | 4 |" in stdout, stdout
         assert "Two task sets, one corpus" in stdout, stdout
         assert "E1, N1 joined for the ranking comparison only" in stdout, stdout
         assert "not the T7 set below" in stdout and "a different, larger set than T4's" in stdout
