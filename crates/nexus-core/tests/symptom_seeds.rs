@@ -296,3 +296,157 @@ fn a_prompt_that_does_anchor_is_untouched_by_the_fallback() {
         pkg.notes
     );
 }
+
+/// A fixture shaped like the two benchmark repositories the seed stage went silent on.
+///
+/// Java, because the defect is about camelCase: a prompt says "the idempotency key" and "the
+/// total", and the index holds `idempotencyKey` and `getTotalAmount`. Rust fixtures cannot
+/// reproduce it — `snake_case` puts the word at a separator the old suffix match already saw.
+///
+/// Three properties are load-bearing and are why this is not smaller:
+///   * `idempotency` is a token of exactly four names, spread over two files — a family;
+///   * `payment` is a token of nine, which is a theme and must still seed nothing;
+///   * `orders` is the whole name of two symbols, which must still seed nothing either.
+fn scanned_camel(name: &str) -> (PathBuf, Engine) {
+    let root = std::env::temp_dir().join(format!("nexus-camel-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    for (path, body) in [
+        (
+            "pom.xml",
+            "<project><modelVersion>4.0.0</modelVersion><groupId>mn</groupId>\
+             <artifactId>demo</artifactId><version>1</version></project>\n",
+        ),
+        (
+            "src/main/java/mn/pay/Payment.java",
+            "package mn.pay;\npublic class Payment {\n  private String idempotencyKey;\n  \
+             public String getIdempotencyKey() { return idempotencyKey; }\n}\n",
+        ),
+        (
+            "src/main/java/mn/pay/PaymentRepository.java",
+            "package mn.pay;\npublic interface PaymentRepository {\n  \
+             boolean existsByIdempotencyKey(String k);\n  \
+             Payment findByIdempotencyKey(String k);\n}\n",
+        ),
+        (
+            "src/main/java/mn/pay/PaymentService.java",
+            "package mn.pay;\npublic class PaymentService {\n  public PaymentService() {}\n  \
+             public void createPayment() {}\n}\n",
+        ),
+        (
+            "src/main/java/mn/pay/PaymentValidator.java",
+            "package mn.pay;\npublic class PaymentValidator {\n  public PaymentValidator() {}\n}\n",
+        ),
+        (
+            "src/main/java/mn/pay/PaymentDto.java",
+            "package mn.pay;\npublic class PaymentDto {\n  public PaymentDto() {}\n}\n",
+        ),
+        (
+            "src/main/java/mn/shop/Order.java",
+            "package mn.shop;\npublic class Order {\n  private java.math.BigDecimal gross;\n  \
+             public java.math.BigDecimal getTotalAmount() { return gross; }\n}\n",
+        ),
+        (
+            "src/main/java/mn/shop/OrderController.java",
+            "package mn.shop;\npublic class OrderController {\n  \
+             public java.util.List<Order> orders() { return null; }\n}\n",
+        ),
+        (
+            "src/main/java/mn/shop/OrderReportController.java",
+            "package mn.shop;\npublic class OrderReportController {\n  \
+             public java.util.List<Order> orders() { return null; }\n}\n",
+        ),
+    ] {
+        let p = root.join(path);
+        fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+        fs::write(p, body).expect("write");
+    }
+    git(&root, &["init", "-q", "-b", "main"]);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "x"]);
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
+    engine.scan().expect("scan");
+    (root, engine)
+}
+
+/// `A1-idempotency-key-length`, the prompt verbatim.
+///
+/// `key` is below the length floor and never reaches the index; `idempotency` is a *prefix* of
+/// `idempotencyKey`, and the suffix match the index used to run could not see it. Every other
+/// word in the sentence names nothing, so the whole prompt anchored nothing and the agent was
+/// handed a lexical guess over a repository it had not been told anything about.
+#[test]
+fn a_prompt_naming_a_camel_case_field_in_prose_anchors_on_it() {
+    let (_root, engine) = scanned_camel("idempotency");
+    let pkg = package(
+        &engine,
+        "The idempotency key column is too short for the new upstream provider. \
+         Widen it to 128 characters everywhere it is constrained.",
+    );
+    let files: Vec<&String> = pkg.items.iter().map(|i| &i.anchor.file).collect();
+
+    assert!(
+        files.iter().any(|f| f.ends_with("Payment.java")),
+        "`idempotency` names the field the prompt is about: {files:?}"
+    );
+    assert!(
+        files.iter().any(|f| f.ends_with("PaymentRepository.java")),
+        "and the two repository methods constrained by the same column: {files:?}"
+    );
+    assert!(
+        pkg.items.iter().all(|i| !i.why.starts_with("bm25")),
+        "the prompt anchored, so this must be a graph answer and not a lexical guess: {:?}",
+        pkg.items.iter().map(|i| &i.why).collect::<Vec<_>>()
+    );
+}
+
+/// `B2-orphaned-field-diagnosis`, the prompt verbatim.
+///
+/// `orders` is the whole name of two symbols and must keep seeding nothing. What rescues this
+/// prompt is `total`, an interior token of `getTotalAmount` — the field whose rename is the
+/// bug being reported.
+#[test]
+fn a_symptom_naming_an_interior_token_anchors_on_the_field_it_describes() {
+    let (_root, engine) = scanned_camel("total");
+    let pkg = package(
+        &engine,
+        "The orders page shows NaN for every total. Find out why and fix it.",
+    );
+    let files: Vec<&String> = pkg.items.iter().map(|i| &i.anchor.file).collect();
+
+    assert!(
+        files.iter().any(|f| f.ends_with("Order.java")),
+        "`total` is a word in `getTotalAmount` and nothing else in the index: {files:?}"
+    );
+    assert!(
+        pkg.items.iter().all(|i| !i.why.starts_with("bm25")),
+        "the prompt anchored, so this must be a graph answer and not a lexical guess: {:?}",
+        pkg.items.iter().map(|i| &i.why).collect::<Vec<_>>()
+    );
+}
+
+/// The bound. A word can be a token of half the repository, and then it names nothing.
+///
+/// `payment` is a token of nine names here — four classes, an interface, the three declared
+/// constructors and `createPayment`. Seeding that is not a smaller package than seeding the
+/// repository, it
+/// is the same package with a story attached, so the word is refused and the request falls
+/// back to a guess that says out loud that it is one.
+#[test]
+fn a_word_that_names_half_the_repository_seeds_nothing() {
+    let (_root, engine) = scanned_camel("theme");
+    let pkg = package(&engine, "the payment behaves oddly under load");
+
+    assert!(
+        pkg.items.iter().all(|i| i.why.starts_with("bm25")),
+        "`payment` is a theme, not a name: nothing may anchor on it: {:?}",
+        pkg.items
+            .iter()
+            .map(|i| (&i.anchor.file, &i.why))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        pkg.notes.iter().any(|n| n.contains("no seed")),
+        "and the package has to say nothing anchored: {:?}",
+        pkg.notes
+    );
+}

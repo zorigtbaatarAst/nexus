@@ -147,8 +147,9 @@ pub struct SeedResult {
 /// comment here justified the narrow filter with that budget and was over-cautious by an
 /// order of magnitude.
 ///
-/// Noise control is not this function's job: `resolve` accepts a plain word only when it
-/// names exactly one symbol whose own last segment *is* the word.
+/// Noise control is not this function's job: `resolve` accepts a plain word only when it names
+/// exactly one symbol whose own last segment *is* the word, or — when it is the name of none
+/// of them — when the identifiers built from it are few enough to be one concept.
 pub(crate) fn targets(text: &str) -> Vec<String> {
     let mut out: Vec<String> = text
         .split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '"' | '\'' | '(' | ')'))
@@ -210,32 +211,114 @@ pub(crate) fn last_segment(fqn: &str) -> &str {
     after_colons.rsplit('.').next().unwrap_or(after_colons)
 }
 
+/// How many candidates the index is asked for about one word.
+///
+/// Above `TOKEN_FAMILY_CAP`, so that a word over the cap is *seen* to be over it rather than
+/// truncated back under it by the `LIMIT` and seeded as though it were a small family.
+const WORD_HIT_LIMIT: usize = 25;
+
+/// How many symbols a word may name as one *token* of their names before it names nothing.
+///
+/// A word that is the whole of a name is adjudicated by `exactly_named` and must be unique:
+/// two symbols actually called `handler` are two different things, and picking either is a
+/// coin flip. A word that is one token of several names is a different situation —
+/// `idempotency` reaches `idempotencyKey`, `getIdempotencyKey`, `existsByIdempotencyKey` and
+/// `findByIdempotencyKey`, which are one concept seen four ways. Seeding all four is not a
+/// guess between them, it is the family the word actually names.
+///
+/// The cap is what stops that argument running away, because past a handful a shared token is
+/// a *theme* rather than a name. Measured on the `spring-payments` fixture (39 symbols): the
+/// widest real family is `idempotency` at 4, while `payment` — the word that would drag the
+/// whole repository in — is a token of 13 of them. Six sits between the two and is deliberately
+/// nearer the family.
+const TOKEN_FAMILY_CAP: usize = 6;
+
+/// The symbols a word names outright: their own last segment *is* the word.
+///
+/// Filter before counting, not after. `find_symbols_by_word` matches through SQL `LIKE`, which
+/// SQLite treats case-insensitively for ASCII by default, so a word like "resolved" comes back
+/// with both `ResolveStats#resolved` and `report::Resolved` — two hits, neither of them wrong
+/// to return. Counting arity first would see 2 and refuse both, discarding the one piece of
+/// information, exact-case `last_segment`, that actually tells them apart. A real, unique match
+/// must not be hidden behind a mere case-variant elsewhere in the index.
+fn exactly_named<'a>(hits: &'a [SymbolRef], word: &str) -> Vec<&'a SymbolRef> {
+    hits.iter()
+        .filter(|s| last_segment(&s.fqn) == word)
+        .collect()
+}
+
+/// The camelCase and `snake_case` tokens a name is built from.
+///
+/// `getTotalAmount` is built from `get`, `Total` and `Amount`; `idempotency_key` from
+/// `idempotency` and `key`; `HTTPServer` from `HTTP` and `Server`. This is the word boundary
+/// SQL cannot express, and the reason `find_symbols_by_word` is allowed to over-match.
+fn name_tokens(name: &str) -> Vec<String> {
+    let chars: Vec<char> = name.chars().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for (i, &c) in chars.iter().enumerate() {
+        if !c.is_alphanumeric() {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+            continue;
+        }
+        // A capital starts a new token unless it is inside a run of capitals — an acronym is
+        // one token, and the capital that ends it belongs to the word that follows.
+        if !cur.is_empty() && c.is_uppercase() {
+            let previous_is_upper = chars[i - 1].is_uppercase();
+            let next_is_lower = chars.get(i + 1).is_some_and(|n| n.is_lowercase());
+            if !previous_is_upper || next_is_lower {
+                out.push(std::mem::take(&mut cur));
+            }
+        }
+        cur.push(c);
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// The symbols whose names are *built from* the word, when the word is the name of none of
+/// them — and only while they are few enough to be one concept rather than a theme.
+///
+/// Case-insensitive, because the hump that starts a token inside an identifier is exactly the
+/// capital a person writing prose does not type.
+fn token_family<'a>(hits: &'a [SymbolRef], word: &str) -> Vec<&'a SymbolRef> {
+    let family: Vec<&SymbolRef> = hits
+        .iter()
+        .filter(|s| {
+            name_tokens(last_segment(&s.fqn))
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case(word))
+        })
+        .collect();
+    if family.len() > TOKEN_FAMILY_CAP {
+        return Vec::new();
+    }
+    family
+}
+
 /// The one indexed symbol a word names, if it names exactly one.
 ///
-/// `find_symbols` matches by suffix, which is right for a name a person typed and wrong
-/// wherever the word came out of prose: without the last-segment check, "integration" once
-/// anchored six imported design claims on `NoContinuousIntegration`.
+/// The index is searched by suffix and by name, which is right for a name a person typed and
+/// wrong wherever the word came out of prose: without the last-segment check, "integration"
+/// once anchored six imported design claims on `NoContinuousIntegration`.
 ///
 /// Two callers, one rule: the seed stage reading a request, and the graphify import reading a
 /// claim's label. Two copies of this would drift, and the copy further from the failure would
-/// be the one still wrong.
+/// be the one still wrong. The seed stage needs the *other* two answers as well — several
+/// symbols, or none named outright — so it reads `exactly_named` directly; a claim's label may
+/// only ever anchor on a name it identifies, so this is what it asks.
 pub(crate) fn uniquely_named_symbol(
     store: &Store,
     project_id: i64,
     word: &str,
 ) -> Result<Option<SymbolRef>, StoreError> {
-    let hits = store.find_symbols(project_id, word, 8)?;
-    // Filter before counting, not after. `find_symbols` matches through SQL `LIKE`, which
-    // SQLite treats case-insensitively for ASCII by default, so a word like "resolved" comes
-    // back with both `ResolveStats#resolved` and `report::Resolved` — two hits, neither of
-    // them wrong to return. Counting arity first would see 2 and refuse both, discarding the
-    // one piece of information, exact-case `last_segment`, that actually tells them apart. A
-    // real, unique match must not be hidden behind a mere case-variant elsewhere in the index.
-    let matches: Vec<&SymbolRef> = hits
-        .iter()
-        .filter(|s| last_segment(&s.fqn) == word)
-        .collect();
-    let [only] = matches.as_slice() else {
+    let hits = store.find_symbols_by_word(project_id, word, WORD_HIT_LIMIT)?;
+    let named = exactly_named(&hits, word);
+    let [only] = named.as_slice() else {
         return Ok(None);
     };
     Ok(Some((*only).clone()))
@@ -331,19 +414,38 @@ pub fn resolve(
     for target in &targets {
         let exact_shape = target.contains('.') || target.contains('/') || target.contains('#');
         // A plain lowercase word is weaker evidence than a name someone qualified, so it is
-        // accepted only when it identifies one symbol outright. Without that rule the word
-        // "integration" reaches `NoContinuousIntegration`, and a symptom seeds the wrong file
-        // with confidence. `is_plain_word` is the same predicate `targets` used to let this
-        // word through in the first place — re-deriving "what counts as plain" here would be
-        // a second copy of that rule, and the two would drift the moment either one changed.
+        // accepted only when it identifies its symbols rather than merely matching them.
+        // Without that rule the word "integration" reaches `NoContinuousIntegration`, and a
+        // symptom seeds the wrong file with confidence. `is_plain_word` is the same predicate
+        // `targets` used to let this word through in the first place — re-deriving "what
+        // counts as plain" here would be a second copy of that rule, and the two would drift
+        // the moment either one changed.
         if is_plain_word(target) {
-            if let Some(s) = uniquely_named_symbol(store, project_id, target)? {
-                offer(
+            let hits = store.find_symbols_by_word(project_id, target, WORD_HIT_LIMIT)?;
+            match exactly_named(&hits, target).as_slice() {
+                [only] => offer(
                     &mut found,
-                    s,
+                    (*only).clone(),
                     SeedSource::NameMatch,
                     format!("'{target}' in the request names exactly one symbol"),
-                );
+                ),
+                // Several symbols are actually called this. The word cannot tell them apart,
+                // and guessing between them anchors the package on the wrong one — which is
+                // the whole reason this arm exists.
+                [_, _, ..] => {}
+                // Nothing is called this, so the word may still be a *part* of names. A prompt
+                // says "the idempotency key" where the code says `idempotencyKey`, and before
+                // this arm a prompt written that way anchored nothing at all.
+                [] => {
+                    for s in token_family(&hits, target) {
+                        offer(
+                            &mut found,
+                            s.clone(),
+                            SeedSource::NameMatch,
+                            format!("'{target}' is a word in the name {}", last_segment(&s.fqn)),
+                        );
+                    }
+                }
             }
             continue;
         }

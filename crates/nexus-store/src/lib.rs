@@ -1670,6 +1670,48 @@ impl Store {
         Ok(rows)
     }
 
+    /// The symbols a bare word out of prose could be naming: everything `find_symbols`
+    /// matches, plus every symbol whose own `name` merely *contains* the word.
+    ///
+    /// `find_symbols` matches an FQN suffix, which is right for a target a person typed and
+    /// blind to a word that is a *prefix* or an interior token of a camelCase identifier:
+    /// `'%' || 'idempotency'` never reaches `idempotencyKey`, and `'%' || 'total'` never
+    /// reaches `getTotalAmount`. Two of seven real benchmark prompts anchored nothing for
+    /// exactly that reason.
+    ///
+    /// The extra clause is only the coarse half of a token match — SQLite has no word
+    /// boundary — so it deliberately over-matches and the caller decides where a token
+    /// begins. That is why this is a separate query rather than a wider `find_symbols`:
+    /// `get-symbol`, `impact` and `verify` resolve a name someone typed and must not start
+    /// answering with every symbol that merely contains it.
+    pub fn find_symbols_by_word(
+        &self,
+        project_id: ProjectId,
+        word: &str,
+        limit: usize,
+    ) -> Result<Vec<SymbolRef>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.fqn, s.kind, f.path, s.start_line
+             FROM live_symbols s JOIN files f ON f.id = s.file_id
+             WHERE s.project_id = ?1
+               AND (s.fqn = ?2 OR s.fqn LIKE '%' || ?2 OR s.fqn LIKE '%' || ?2 || '(%'
+                    OR s.name = ?2 OR s.name LIKE '%' || ?2 || '%')
+             ORDER BY LENGTH(s.fqn) LIMIT ?3",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id, word, limit as i64], |r| {
+                Ok(SymbolRef {
+                    id: r.get(0)?,
+                    fqn: r.get(1)?,
+                    kind: r.get(2)?,
+                    file_path: r.get(3)?,
+                    start_line: r.get(4)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// The symbols declared inside a container — a class's methods and fields.
     ///
     /// Needed because the dependency graph is method-level: nothing calls a class, so a seed
