@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The grader's own test. It is the one component whose bugs are invisible in the results: a
 # grader stuck at `passed: false` reads as a devastating result for every arm rather than as a
-# bug, and 75 paid runs would be spent before anyone noticed nothing was ever graded.
+# bug, and 95 paid runs would be spent before anyone noticed nothing was ever graded.
 #
 # So every case here has a known answer, and each asserts something the others cannot:
 #
@@ -22,10 +22,12 @@
 #   7-9.           the three distinguishable outcomes of a red baseline: a project test that
 #                  genuinely failed, main sources that would not compile, and a build that never
 #                  ran. The third must not wear the costume of the first.
-#   10-11.         A2 and B2 on an empty diff — the only Gradle toolchain and the only
-#                  reflection-based hidden test, neither reached by any case above.
+#   10-13.         A2, B2, E1 and N1 on an empty diff — the two tasks no case above reaches at
+#                  all (the only Gradle toolchain, the only reflection-based hidden test), and
+#                  the two that joined the sweep last and whose hidden tests have never been run
+#                  through the grader.
 #
-# Runs eleven gradings, twenty-two containers, offline. Costs nothing but a few minutes.
+# Runs thirteen gradings, twenty-six containers, offline. Costs nothing but a few minutes.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -222,14 +224,26 @@ assert_grade unrecognised \
   '"baseline-failure-unrecognised" in g["adjudicate"]' \
   '"graded-failure-unrecognised" in g["adjudicate"]'
 
-# --- 10-11. the two tasks the cases above never touch --------------------------------------------------
+# --- 10-13. the four tasks the cases above never touch -------------------------------------------------
 
 # A2 is the only Gradle toolchain and the only multi-module placement; B2 is the only hidden test
 # that reads its subject by reflection. A placement or collection regression in either yields
-# `passed: true` on an empty diff — a false green on 30 of the 75 runs, and nothing would look
-# wrong. Both are empty-diff cases: red on L1 alone, hidden test in the right place.
+# `passed: true` on an empty diff — a false green on 30 of the 95 runs, and nothing would look
+# wrong. All four are empty-diff cases: red on L1 alone, hidden test in the right place.
+#
+# E1 and N1 route exactly like case 1 — `mn.pay` in single-module spring-payments — so they add
+# no placement coverage, and while they were outside the sweep that made them not worth a case.
+# They are in the sweep now, at ten paid runs each, and what these two cases actually assert is
+# not routing but that each task's hidden test *compiles and fails red at its own start commit*
+# (c2, which no other case grades). Both files say in their own javadoc that they are written to
+# compile where the fix does not exist yet and fail on a named assertion instead — an untested
+# claim about brand-new files until it is graded once. Were it wrong, every one of that task's
+# twenty runs would come back `hidden-test-compile-error`: unscoreable, and discovered after
+# paying. `adjudicate == []` below is the assertion that costs nothing and buys that.
 for case in "A2-shared-type-change:libs/common/src/test/java/mn/acme/common/HiddenTest.java" \
-            "B2-orphaned-field-diagnosis:api/src/test/java/mn/shop/api/HiddenTest.java"; do
+            "B2-orphaned-field-diagnosis:api/src/test/java/mn/shop/api/HiddenTest.java" \
+            "E1-untested-change:src/test/java/mn/pay/HiddenTest.java" \
+            "N1-null-task:src/test/java/mn/pay/HiddenTest.java"; do
   task="${case%%:*}"
   mkdir -p "$TMP/$task"
   : > "$TMP/$task/diff.patch"

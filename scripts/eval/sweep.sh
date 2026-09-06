@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# All 75 runs: 5 tasks x 3 arms x 5 repetitions. This is what spends real money — hundreds of
+# All 95 runs: 5 tasks x 3 arms x 5 reps, plus 2 ranking-only tasks x 2 arms x 5 reps. This is
+# what spends real money — hundreds of
 # paid `claude -p` invocations across `make bench` — so every decision below is aimed at not
 # spending it twice and not silently failing to spend it at all.
 #
@@ -22,21 +23,42 @@ REPS="${REPS:-5}"
 IMAGE="${IMAGE:-nexus-bench:latest}"
 NEXUS_BIN="$ROOT/target/release/nexus"
 
-# The five benchmark tasks, overridable so a dry run can exercise the refusal path (M1, E2) that
+# The seven benchmark tasks, overridable so a dry run can exercise the refusal path (M1, E2) that
 # never belongs in a real sweep — that path is proven by constructing it, not by argument.
-read -ra TASKS <<<"${TASKS:-A1-idempotency-key-length A2-shared-type-change B1-rename-crosses-the-seam B2-orphaned-field-diagnosis C1-regression-recognised}"
-ARMS=(A0 A1 A5)
+read -ra TASKS <<<"${TASKS:-A1-idempotency-key-length A2-shared-type-change B1-rename-crosses-the-seam B2-orphaned-field-diagnosis C1-regression-recognised E1-untested-change N1-null-task}"
 
-# A sweep with no ANTHROPIC_API_KEY runs the host's own ~/.claude credentials through 75 root
+# The corpus is asymmetric on purpose, and the asymmetry is the whole point of the two added
+# tasks — so it is expressed per task, travelling with the task id, rather than as a second task
+# list that a `TASKS=` override could silently drop half of.
+#
+# E1 and N1 exist here only to give the ranking comparison enough non-tied observations: with
+# five tasks and two ties the sign test's best achievable p is 0.125 and T7's threshold of 0.10
+# is unreachable. A0 contributes nothing to a ranking of two rankings, so running it would cost
+# five paid runs a task for no statistical power.
+#
+# Giving them A0 as well is the expensive mistake, and it is silent: the two pre-registered
+# thresholds rest on different task sets by design — T4 (efficiency, A1 vs A0) on five tasks at
+# three arms, T7 (ranking, A1 vs A5) on seven at two — and analyse.py derives each comparison's
+# task set from the run tree rather than from a list of its own. Run A0 here and both derived
+# sets become identical, T4 quietly becomes a seven-task threshold, and nothing in the output
+# says so. The error would land in the result rather than in the harness.
+arms_for() {  # task id -> the arms it runs, space separated
+  case "$1" in
+    E1-untested-change | N1-null-task) echo "A1 A5" ;;
+    *) echo "A0 A1 A5" ;;
+  esac
+}
+
+# A sweep with no ANTHROPIC_API_KEY runs the host's own ~/.claude credentials through 95 root
 # containers (see run.sh for why the mount is read-write and why read-only isn't a fix). A token
 # refresh inside any one of those containers rotates the host's copy server-side; every later
 # cell then replays a consumed refresh token, which can log the operator out mid-sweep and burn
 # hours producing nothing. It does not corrupt results (auth failures land in the infra bucket)
 # or leak anything off the host — it just wastes the sweep. Warning only: a stale key would fail
-# all 75 cells silently, which is worse, so this never overrides working ~/.claude credentials.
+# all 95 cells silently, which is worse, so this never overrides working ~/.claude credentials.
 if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   echo "sweep.sh: ANTHROPIC_API_KEY is not set — this sweep will run your host's ~/.claude" >&2
-  echo "credentials through 75 root containers. A token refresh inside one of them can rotate" >&2
+  echo "credentials through 95 root containers. A token refresh inside one of them can rotate" >&2
   echo "the host's copy and log you out mid-sweep. Set ANTHROPIC_API_KEY to avoid this." >&2
 fi
 
@@ -134,6 +156,7 @@ fi
 # --- the sweep itself -----------------------------------------------------------------------
 
 for task in "${TASKS[@]}"; do
+  read -ra ARMS <<<"$(arms_for "$task")"
   for arm in "${ARMS[@]}"; do
     for rep in $(seq 0 $((REPS - 1))); do
       out="$BASE/$task/$arm/$rep"

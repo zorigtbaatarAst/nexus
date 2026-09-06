@@ -18,7 +18,7 @@ help:
 	@echo "fixtures         build the benchmark corpus -> target/fixtures"
 	@echo "fixtures-verify  prove the corpus is reproducible (CI gate)"
 	@echo "bench-image      build the benchmark run image, with its offline caches warmed"
-	@echo "bench            Tier 2: 75 agent runs in containers (costs money, takes hours)"
+	@echo "bench            Tier 2: 95 agent runs in containers (costs money, takes hours)"
 	@echo "eval             measure resolution accuracy against a SCIP oracle (needs an indexer)"
 
 build:
@@ -66,7 +66,7 @@ IMAGE ?= nexus-bench:latest
 bench-image: release fixtures
 	docker build -t $(IMAGE) -f scripts/eval/Dockerfile .
 
-# The Tier 2 benchmark: 75 agent runs in containers, real money, hours. Never part of
+# The Tier 2 benchmark: 95 agent runs in containers, real money, hours. Never part of
 # `make check` — see docs/architecture-decisions.md and .superpowers/sdd/2026-09-04-tier2-benchmark/.
 # sweep.sh is resumable and gates on scripts/eval/test_grade.sh before spending anything, so
 # re-running this after an interruption is the expected way to finish a sweep, not a mistake —
