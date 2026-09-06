@@ -70,6 +70,15 @@ if [ "$ARM" != "A0" ]; then
   SETUP="if { nexus init && nexus scan; } >/bench/setup.log 2>&1; then echo 'setup exit=0'; else echo \"setup exit=\$?\"; fi >>/bench/setup.log;"
 fi
 
+# Written immediately before the container starts — not after, and not derived from anything
+# the container produces. The money is spent inside the call below; a host crash any time from
+# here through the diff/usage.json writes near the bottom of this script (OOM, a killed sweep,
+# a reboot) must leave evidence that the spend already happened, or a resumed sweep re-runs this
+# exact cell and pays for it twice. Every earlier guard in this script (start_state, the fixture
+# checkout, the credentials check) has already passed by this point, so this file is never
+# written for a cell that didn't reach the point of committing to spend.
+touch "$OUT/.run-started"
+
 # IS_SANDBOX=1 because the container runs as root and Claude Code otherwise refuses
 # bypassPermissions there; the container is the sandbox.
 # :Z relabels the per-run mounts for SELinux and is a no-op where SELinux is not enforcing.

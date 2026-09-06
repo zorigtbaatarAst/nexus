@@ -3,10 +3,10 @@
 # paid `claude -p` invocations across `make bench` — so every decision below is aimed at not
 # spending it twice and not silently failing to spend it at all.
 #
-# Resumable: a run whose grade.json already exists is skipped. A run whose usage.json exists
-# but grade.json does not already paid for the agent; only grading (offline, free) is redone —
-# re-running the agent there would spend the same run twice. Anything else — no usage.json at
-# all, including a directory run.sh's refusal guard left empty — is a full run.
+# Resumable: a run with a non-empty grade.json is skipped. A run with .run-started, diff.patch
+# or usage.json but no complete grade.json already paid for the agent (see run.sh: .run-started
+# is written immediately before the container starts, so it catches a crash during the run, not
+# only after); only grading (offline, free) is redone there. Anything else is a full run.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RUN="$ROOT/scripts/eval/run.sh"
@@ -66,13 +66,31 @@ IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null)" \
 mkdir -p "$BASE"
 META="$BASE/meta.json"
 if [ -f "$META" ]; then
-  # Resuming: the image and nexus build that produced the runs already in this tree must still
-  # be the ones on disk, or a rebuild between invocations would silently mix two builds' results
-  # into one sweep with nothing in the run tree to say so.
-  PREV_IMAGE_ID="$(python3 -c "import json; print(json.load(open('$META'))['image_id'])")"
+  # Resuming: the image, the nexus build and the model that produced the runs already in this
+  # tree must still be the ones this invocation is about to use, or the mismatch would silently
+  # mix two builds' — or two models' — results into one sweep with nothing in the run tree to
+  # say so. Neither comparison is skippable: not by SKIP_GATE, and the model one specifically
+  # not by ALLOW_MODEL_OVERRIDE, which is an escape hatch for a deliberate run on a *fresh*
+  # stamp, never for resuming an existing one under a different model.
+  #
+  # Note this does not cover a `make fixtures` regeneration between invocations of the same
+  # stamp: the corpus is copied into the image at build time, so the image id is unchanged, but
+  # a regenerated corpus would still change what run.sh/grade.sh actually clone at run time.
+  # Out of scope for what this task was asked to stamp (image + nexus version) — flagged here so
+  # a future reader doesn't assume this guard is complete.
+  read -r PREV_IMAGE_ID PREV_MODEL < <(python3 -c "
+import json
+m = json.load(open('$META'))
+print(m['image_id'], m['model'])
+")
   if [ "$PREV_IMAGE_ID" != "$IMAGE_ID" ]; then
     echo "sweep.sh: $BASE was stamped with image $PREV_IMAGE_ID," >&2
     echo "but $IMAGE is now $IMAGE_ID. Refusing to resume with a rebuilt image half-mixed in." >&2
+    exit 1
+  fi
+  if [ "$PREV_MODEL" != "$MODEL" ]; then
+    echo "sweep.sh: $BASE was stamped with model $PREV_MODEL, but this invocation is using" >&2
+    echo "$MODEL. Refusing to mix models within one sweep, even with ALLOW_MODEL_OVERRIDE set." >&2
     exit 1
   fi
 else
@@ -104,23 +122,32 @@ for task in "${TASKS[@]}"; do
     for rep in $(seq 0 $((REPS - 1))); do
       out="$BASE/$task/$arm/$rep"
 
-      if [ -f "$out/grade.json" ]; then
+      # -s, not -f: a grade.json that exists but is 0 bytes (a kill mid-write, before grade.sh's
+      # atomic rename was in place, or any other truncation) must not read as a completed grade —
+      # that silently drops the run from Task 9's medians instead of re-grading it for free.
+      if [ -s "$out/grade.json" ]; then
         echo "skip       $task/$arm/$rep (already graded)"
         continue
       fi
 
-      if [ -f "$out/usage.json" ]; then
-        # The agent already ran and cost money; only grading (offline, free) is owed here.
-        # Re-running run.sh would spend that run a second time for a diff it already produced.
-        echo "grade-only $task/$arm/$rep (usage.json present, no grade.json)"
+      # Any of these three means the agent already ran and the money is already spent: usage.json
+      # and diff.patch are both written only after the docker call returns, and .run-started is
+      # written immediately before it — before diff.patch and usage.json exist at all, so it also
+      # catches a host crash *during* the container run, not just after it. Re-running run.sh here
+      # would spend the same cell a second time. If .run-started is the only one of the three
+      # present, grade.sh will refuse loudly for lack of a diff.patch — correct: that host crash
+      # happened mid-spend, and whether it was billed is not something this script can know from
+      # here, so it fails loudly rather than guessing either "yes, redo it" or "no, count it done".
+      if [ -f "$out/usage.json" ] || [ -f "$out/diff.patch" ] || [ -f "$out/.run-started" ]; then
+        echo "grade-only $task/$arm/$rep (already paid, no completed grade)"
         "$GRADE" "$task" "$out" >/dev/null
         continue
       fi
 
-      # No usage.json: never started, or run.sh's refusal guard left an empty directory behind
-      # (it does `mkdir -p "$OUT"` before refusing). Either way a full run is owed, and if this
-      # is in fact a refused task, run.sh exits 1 here, `set -e` stops the sweep, and the refusal
-      # reaches whoever is watching instead of being swallowed as a skip.
+      # None of the three: never started, or run.sh's refusal guard left an empty directory
+      # behind (it does `mkdir -p "$OUT"` before refusing). Either way a full run is owed, and if
+      # this is in fact a refused task, run.sh exits 1 here, `set -e` stops the sweep, and the
+      # refusal reaches whoever is watching instead of being swallowed as a skip.
       echo "run        $task/$arm/$rep"
       "$RUN" "$task" "$arm" "$rep" "$out" >/dev/null
       "$GRADE" "$task" "$out" >/dev/null

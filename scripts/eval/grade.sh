@@ -375,7 +375,14 @@ grade = {
     # logs for before it is counted, rather than a silent scored zero.
     "adjudicate": adjudicate,
 }
-(run / "grade.json").write_text(json.dumps(grade, indent=2) + "\n")
+# Atomic: a kill mid-write must never leave a 0-byte or truncated grade.json next to a real
+# usage.json, where a resumed sweep would mistake it for a completed grade and never re-run
+# grade.sh — silently dropping the run from Task 9's analysis instead of failing loudly.
+# Path.replace() is a single rename on the same filesystem, so the final name is always either
+# absent or a complete write; there is no state in between an observer can catch.
+tmp = run / "grade.json.tmp"
+tmp.write_text(json.dumps(grade, indent=2) + "\n")
+tmp.replace(run / "grade.json")
 PY
 
 # The verdict is a file. Nothing about a run goes to stdout but the directory holding it.
