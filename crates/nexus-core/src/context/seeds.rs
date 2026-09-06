@@ -8,6 +8,14 @@
 //! from an empty vector. §4 is explicit about why: an empty package plus "I could not anchor
 //! this to the code" lets the agent ask a better question, where a package built from nothing
 //! sends it confidently into the wrong module.
+//!
+//! **That is no longer the whole behaviour, and this paragraph is being rewritten under #36.**
+//! Zero seeds still produces the note, and the note still travels with whatever is returned —
+//! but `Engine::task_package` now falls back to ranking file contents lexically instead of
+//! returning nothing, when the prompt shares at least two distinctive words with the corpus.
+//! The reasoning above is why the note survives and why every such item is labelled a guess;
+//! what changed is that on two of five real benchmark prompts, and on the planted bugs in
+//! `debug_supply`, the alternative to a labelled guess was measured and it was silence.
 
 use super::TaskRequest;
 use crate::context::intent::Intent;
@@ -38,6 +46,24 @@ pub(crate) const SEED_QUERY_CAP: usize = 256;
 /// for the same reason: a hint that matches everything produces a *wrong* seed rather than a
 /// missing one. Deliberately short and boring — English function words, and the handful of
 /// code words that appear in almost every sentence about a defect.
+/// Long enough, and distinctive enough, to be worth anything on its own.
+///
+/// The one place the length floor and the stopword list are applied. `is_plain_word` asks it
+/// when deciding whether a bare word may seed, and the lexical fallback's gate asks it through
+/// `is_noise_word` when deciding whether a prompt corroborates anything — two callers, one
+/// definition, so they cannot drift into disagreeing about what an ordinary word is.
+///
+/// The floor is why `it`, `by` and `one` never needed to be in the list below: nothing under
+/// four characters reaches it.
+fn is_ordinary_word(w: &str) -> bool {
+    w.len() >= 4 && !STOPWORDS.contains(&w.to_ascii_lowercase().as_str())
+}
+
+/// The inverse, for callers that are filtering noise out rather than letting evidence in.
+pub(crate) fn is_noise_word(w: &str) -> bool {
+    !is_ordinary_word(w)
+}
+
 const STOPWORDS: &[&str] = &[
     // English.
     "that", "this", "with", "from", "when", "then", "than", "them", "they", "there", "these",
@@ -170,8 +196,7 @@ fn is_plain_word(w: &str) -> bool {
         && !w.contains("::")
         && !w.trim_matches('_').contains('_')
         && !w.chars().next().is_some_and(char::is_uppercase)
-        && w.len() >= 4
-        && !STOPWORDS.contains(&w.to_ascii_lowercase().as_str())
+        && is_ordinary_word(w)
 }
 
 /// The last name in a qualified path, whichever separator wrote it.

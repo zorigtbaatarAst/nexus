@@ -10,6 +10,67 @@ use crate::context::{
     ItemKind, PackageBasis, ProjectSummary, Purpose, Seed, SeedResult, SignalIndex, TaskRequest,
 };
 
+/// Why a package was ranked lexically rather than by the graph.
+///
+/// The two are the same ranking over the same corpus, filling the same budget through the
+/// same code — what differs is what the caller should conclude from it. `Requested` is the
+/// benchmark's control arm asking for BM25 on purpose; `NoSeed` is the product falling back
+/// because nothing in the request anchored, and it carries seeding's own notes so the agent
+/// is told that rather than left to infer it from the absence of a graph.
+enum LexicalCause<'a> {
+    /// `--rank lexical`. Not a product path: see `RankMode`.
+    Requested,
+    /// Seeding anchored nothing. Carries the notes seeding produced, including the one
+    /// saying so, and the intent the turn resolved to — `Unknown` for an unanchored turn,
+    /// which is a signal in its own right and one the engine path has always reported.
+    NoSeed {
+        notes: &'a [String],
+        intent: crate::context::IntentMatch,
+    },
+}
+
+impl LexicalCause<'_> {
+    fn selection(&self) -> &'static str {
+        match self {
+            Self::Requested => "lexical control arm: bm25 over file contents, in rank order",
+            Self::NoSeed { .. } => "no symbol anchored: bm25 over file contents, in rank order",
+        }
+    }
+
+    fn notes(&self) -> Vec<String> {
+        match self {
+            Self::Requested => Vec::new(),
+            Self::NoSeed { notes, intent } => {
+                let mut out = notes.to_vec();
+                // The engine path says the same thing followed by "so balanced weights were
+                // used". That half would be false here — this ranking uses no weights at
+                // all — so the disclosure is kept and its reason corrected, rather than the
+                // sentence copied because a test greps its opening words.
+                if !intent.confident {
+                    out.push(
+                        "intent was not determined from the text, and nothing anchored, so \
+                         the ranking is lexical rather than weighted"
+                            .into(),
+                    );
+                }
+                out
+            }
+        }
+    }
+
+    /// The control arm reports no intent because it never classified one. The fallback
+    /// reports whatever the turn resolved to, because the caller either declared it or the
+    /// verb table decided it before seeding was ever consulted — and an unanchored turn
+    /// resolving to `Unknown` is the package saying it does not know, which is worth more
+    /// than a blank field.
+    fn intent(&self) -> Option<crate::context::IntentMatch> {
+        match self {
+            Self::Requested => None,
+            Self::NoSeed { intent, .. } => Some(intent.clone()),
+        }
+    }
+}
+
 impl Engine {
     pub fn status(&self) -> Result<StatusReport> {
         let (commit, dirty) = self.head();
@@ -274,7 +335,7 @@ impl Engine {
     /// indexed queries, one graph traversal and a sort.
     fn task_package(&self, req: &TaskRequest) -> Result<ContextPackage> {
         if req.rank == crate::context::RankMode::Lexical {
-            return self.lexical_package(req);
+            return self.lexical_package(req, LexicalCause::Requested);
         }
         let status = self.status()?;
         let Some(baseline) = status.baseline.clone() else {
@@ -316,6 +377,47 @@ impl Engine {
                 !req.carry_seeds.is_empty(),
             ),
         };
+        // Nothing anchored, so there is no graph to walk: rank the file contents instead of
+        // returning an empty package. Every candidate below comes from the seeds, from what
+        // expansion reached from them, or from facts about them — and `facts_for_seeds`
+        // returns nothing for an empty seed set — so this replaces packages that were empty
+        // and no others, which is what keeps a regression here attributable.
+        //
+        // Below the intent stage on purpose: an unanchored turn resolves to `Unknown`, and
+        // reporting that is the package saying it does not know. Returning above this would
+        // have traded one honesty signal for another instead of keeping both.
+        //
+        // The empty package used to be the answer, on the reasoning that a package built
+        // from nothing sends an agent confidently into the wrong module. That reasoning is
+        // why `seeded.notes` travels with the result and why every item says `bm25`: the
+        // agent is told this is a guess. What changed is that there is now something to
+        // offer instead of silence — measured, on two of three planted bugs, as the
+        // difference between a file the fix had to touch and no context at all.
+        if seeded.seeds.is_empty() {
+            // Two corroborating terms before anything is sent. One stray collision —
+            // "thanks, that works" catching `works` in a comment — is noise, and the
+            // `UserPromptSubmit` hook would pay for it on every prompt of every session:
+            // exactly the cost `--brief` exists to hold at zero, and what
+            // `nexus-cli/tests/overhead.rs` is there to catch. Below the bar, the empty
+            // package remains the honest answer and this falls through to produce it.
+            //
+            // Overlap rather than a score cutoff: BM25 scores scale with corpus size and
+            // term frequency, so a threshold calibrated here would mean nothing on another
+            // repository. Measured on the overhead fixture, chatter shares at most one term
+            // with the corpus and every real symptom shares two or more.
+            let (docs, total) = self.lexical_corpus()?;
+            if crate::context::lexical::query_overlap(&req.text, &docs) >= 2 {
+                return self.lexical_package_from(
+                    req,
+                    LexicalCause::NoSeed {
+                        notes: &seeded.notes,
+                        intent: intent.clone(),
+                    },
+                    docs,
+                    total,
+                );
+            }
+        }
         // 3 — expand.
         let reached = expand::run(&self.store, self.project_id, &seeded.seeds, intent.intent)?;
         // 4 — signals, once. `candidate_fqns` is every seed plus everything expansion
@@ -596,12 +698,10 @@ impl Engine {
     /// from disk, not the index. A file that no longer reads (deleted since the scan, not
     /// UTF-8) is skipped rather than failing the whole package, the same way a missing anchor
     /// is excluded rather than fatal elsewhere in this pipeline.
-    fn lexical_package(&self, req: &TaskRequest) -> Result<ContextPackage> {
-        let status = self.status()?;
-        let Some(baseline) = status.baseline.clone() else {
-            return Err(EngineError::NoBaseline);
-        };
-
+    /// Every live file with its body, and how many there were before unreadable ones were
+    /// dropped. Loaded once so the fallback's gate can read the corpus before deciding to
+    /// use it, rather than the decision and the ranking each paying for it.
+    fn lexical_corpus(&self) -> Result<(Vec<(String, String)>, usize)> {
         let paths = self.store.file_paths(self.project_id)?;
         let total = paths.len();
         let docs: Vec<(String, String)> = paths
@@ -611,11 +711,31 @@ impl Engine {
                 Some((path, body))
             })
             .collect();
+        Ok((docs, total))
+    }
+
+    fn lexical_package(&self, req: &TaskRequest, cause: LexicalCause) -> Result<ContextPackage> {
+        let (docs, total) = self.lexical_corpus()?;
+        self.lexical_package_from(req, cause, docs, total)
+    }
+
+    fn lexical_package_from(
+        &self,
+        req: &TaskRequest,
+        cause: LexicalCause,
+        docs: Vec<(String, String)>,
+        total: usize,
+    ) -> Result<ContextPackage> {
+        let status = self.status()?;
+        let Some(baseline) = status.baseline.clone() else {
+            return Err(EngineError::NoBaseline);
+        };
+
         // A skip here is meant to absorb binaries, not to hide a root mismatch or a corpus
         // that silently went empty — the second failure would report the control arm losing
         // for a reason invisible in the benchmark's numbers, so it goes in `notes` the same
         // way the engine arm discloses a capped seed set or a scope warning.
-        let mut notes = Vec::new();
+        let mut notes = cause.notes();
         let unread = total - docs.len();
         if unread > 0 {
             notes.push(format!(
@@ -668,12 +788,12 @@ impl Engine {
                 scan_uid: baseline.scan_uid,
                 commit: status.current.commit.clone(),
                 dirty: status.current.dirty,
-                selection: "lexical control arm: bm25 over file contents, in rank order".into(),
+                selection: cause.selection().into(),
             },
             budget_tokens: req.budget_tokens,
             tokens_estimated: 0,
             items_considered: considered,
-            intent: None,
+            intent: cause.intent(),
             notes,
         };
         let (items, tokens_estimated) = context::fill(

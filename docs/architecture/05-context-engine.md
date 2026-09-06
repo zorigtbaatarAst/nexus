@@ -104,6 +104,13 @@ Zero seeds is a legitimate result and is reported as such. A package built from 
 worse than an empty package plus "I could not anchor this to the code" — the second lets the
 agent ask a better question; the first sends it confidently into the wrong module.
 
+> **Superseded in part; being rewritten under #36.** Zero seeds is still reported, and the note
+> still travels with the package. But stage 2 returning nothing no longer ends the request: the
+> engine falls back to ranking file contents lexically, labelling every item as a guess, when
+> the prompt shares at least two distinctive words with the corpus. The paragraph above is why
+> the disclosure survives; what changed is that the measured alternative to a labelled guess
+> was silence — on two of five Tier 2 prompts, and on the planted bugs in `debug_supply`.
+
 ## 5. Stage 3 — Expand
 
 `impact::run`, reused unchanged. Direction follows intent: `Reverse` for `Refactor`/`Review`
