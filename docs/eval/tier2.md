@@ -148,8 +148,12 @@ task package — the multi-turn accumulation the design imagines is not what is 
 `PostToolUse` rescan runs on every edit, but nothing consumes its output in a single-prompt run.
 
 **A1 vs A5 differs in three things, not one.** Beyond the ranking function, A1 has a
-`SessionStart` package that A5 does not, and a `PostToolUse` rescan that A5 does not. All three
-differences point the same way — **towards A1**:
+`SessionStart` package that A5 does not, and a `PostToolUse` rescan that A5 does not — two
+structural advantages A5 lacks. But the [pre-sweep
+measurement](#pre-sweep-measurement-a1-receives-less-context-than-a5-on-all-five-tasks) above
+shows A1's own per-prompt package is smaller than A5's on every task, so the three differences do
+not all point the same way: two favour A1, the ranking function's measured effect favours A5. This
+is not a clean single-variable contrast in either direction:
 
 - A **negative** result (A1 no better than A5) is therefore safe to act on, and the
   pre-registered consequence stands: it would mean ranked context did not beat BM25 *even with

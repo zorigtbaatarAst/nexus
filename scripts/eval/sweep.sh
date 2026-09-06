@@ -27,6 +27,19 @@ NEXUS_BIN="$ROOT/target/release/nexus"
 read -ra TASKS <<<"${TASKS:-A1-idempotency-key-length A2-shared-type-change B1-rename-crosses-the-seam B2-orphaned-field-diagnosis C1-regression-recognised}"
 ARMS=(A0 A1 A5)
 
+# A sweep with no ANTHROPIC_API_KEY runs the host's own ~/.claude credentials through 75 root
+# containers (see run.sh for why the mount is read-write and why read-only isn't a fix). A token
+# refresh inside any one of those containers rotates the host's copy server-side; every later
+# cell then replays a consumed refresh token, which can log the operator out mid-sweep and burn
+# hours producing nothing. It does not corrupt results (auth failures land in the infra bucket)
+# or leak anything off the host — it just wastes the sweep. Warning only: a stale key would fail
+# all 75 cells silently, which is worse, so this never overrides working ~/.claude credentials.
+if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+  echo "sweep.sh: ANTHROPIC_API_KEY is not set — this sweep will run your host's ~/.claude" >&2
+  echo "credentials through 75 root containers. A token refresh inside one of them can rotate" >&2
+  echo "the host's copy and log you out mid-sweep. Set ANTHROPIC_API_KEY to avoid this." >&2
+fi
+
 # The model is pinned for every reported sweep. run.sh already defaults to claude-opus-5, but a
 # stray MODEL left set in the shell from an earlier cheap-model dry run must not ride along into
 # a real sweep and silently mix models — that produces numbers that mean nothing.
