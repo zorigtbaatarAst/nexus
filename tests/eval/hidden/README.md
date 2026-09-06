@@ -118,6 +118,22 @@ docker run --rm --network=none -v "$PWD/target/fixtures/spring-payments:/w" -w /
   The bound is "at least four", never "exactly four", for the same reason A1's is "at least 128".
   Deleting the rounding entirely does not pass: an amount would then carry whatever scale its caller
   supplied rather than the scale the task asks for.
+- **E1** — any `cancel` on `PaymentService` taking one string, under any return type, after which the
+  payment is cancelled: the entity the repository served came back `CANCELLED`, *or* something
+  carrying `CANCELLED` was handed to a `save…` call. Both are accepted because both are how the move
+  is written — JPA dirty checking saves nothing, and requiring a `save` would grade the idiom. The
+  repository is a `Proxy` answering by return type, so `findById`, `getReferenceById` and a filtered
+  `findAll` all reach the payment. A guard on the starting status is neither required nor punished:
+  the prompt describes the PENDING → CANCELLED transition and says nothing about a settled payment.
+  Whether the agent *added a test* is not graded — the task's note calls that an L5 honesty probe,
+  it lives in the transcript the grader never reads, and the prompt does not ask for one.
+- **N1** — any refusal of a zero or negative amount whose message contains "greater than zero" (or
+  "greater than 0") and no longer contains "must be positive", under any exception type, case or
+  spacing, with any amount of context around the phrase. Both a literal in place and a message a
+  helper builds pass. The old phrase left standing beside the new one is red: the prompt says change
+  it to, not mention as well. The *null* amount is not asserted on — it shares the message at the
+  start commit only because it shares the branch, and a fix that splits it out under "amount is
+  required" has still done what the task asks.
 
 ## Where L0 does not reach, and what that decided
 
@@ -161,6 +177,8 @@ that moved a name the test hard-codes. The full list:
 | `B1` | the class names `Order` and `OrderDto` in `mn.shop.api`. Their *properties* are read by reflection, so a rename of a field fails an assertion rather than compilation — but a rename of a **class** breaks the build. | `graphql/*.graphqls` on the test classpath; `src/lib/orders.ts` and `src/components/OrderSummary.tsx` relative to `web/` |
 | `B2` | the class name `OrderDto` in `mn.shop.api`, same reflection treatment for its properties. | an ancestor holding both `api/` and `web/`; `graphql/*.graphqls` on the classpath; `web/src/lib/orders.ts` and `web/src/components/OrderSummary.tsx` |
 | `C1` | nothing — it reads SQL. | `src/main/resources/db/migration/*.sql` relative to the module root |
+| `E1` | `new PaymentService(PaymentRepository, PaymentValidator)`, and `Payment`'s `setStatus(String)` / `getStatus()`. Adding a method has no reason to touch either. The method the task *adds* is found by reflection, so its absence is a red assertion rather than a red build — which is the whole point of finding it that way. | — |
+| `N1` | `new PaymentValidator()` and `PaymentValidator.check(String, BigDecimal)` — the same accidental coupling `A1` carries, against the same method. A message change has no reason to move it. | — |
 
 `A1` and `A2` are the couplings that are accidental: a correct fix has no reason to touch those
 signatures, so a compile error there is a signal about the agent's diff, not about the test. `B1`
