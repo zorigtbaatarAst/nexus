@@ -1,5 +1,6 @@
 package mn.pay;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -26,7 +27,13 @@ import org.junit.jupiter.api.Test;
  * as well, and leaving the old phrase standing is the half-fix this file exists to catch. Case
  * and run-of-whitespace differences are normalised away for the same reason.
  *
- * <p>Two amounts are checked, zero and negative, because they are the two the phrase "must be
+ * <p>A third test asserts that a valid amount is still <em>accepted</em>. It is vacuous at the start
+ * commit and stays vacuous under every correct fix, and it is not optional: without it a validator
+ * that throws the new wording at every input — valid amounts included — passes both assertions
+ * above, and nothing else in this build would catch it. The project's own test constructs
+ * {@code new PaymentService(null, null)} and never reaches the validator at all.
+ *
+ * <p>Two amounts are refused, zero and negative, because they are the two the phrase "must be
  * positive" describes and a fix that reworks the branch structure can update one and forget the
  * other. The <em>null</em> amount is deliberately not asserted on: it shares the message at the
  * start commit only because it shares the branch, and a fix that splits it out under a message of
@@ -90,5 +97,18 @@ class HiddenTest {
     @Test
     void aNegativeAmountIsRefusedInTheNewWording() {
         assertRefusedInTheNewWording(new BigDecimal("-1.00"));
+    }
+
+    /**
+     * The other half of "refused in the new wording": a valid amount is still accepted. Without
+     * this, a {@code check} that throws the new message at everything is green — the project's own
+     * test never constructs a validator, so nothing else in the build would notice.
+     */
+    @Test
+    void aValidAmountIsStillAccepted() {
+        assertDoesNotThrow(
+                () -> new PaymentValidator().check(KEY, new BigDecimal("10.00")),
+                "the validator now refuses a valid amount of 10.00; the message changed but so did"
+                        + " what passes validation");
     }
 }

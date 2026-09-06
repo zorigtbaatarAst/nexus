@@ -23,11 +23,22 @@ import org.junit.jupiter.api.Test;
  *
  * <p>The observable behaviour is one sentence: <em>after calling it, the PENDING payment is
  * CANCELLED</em>. The test runs the service against a stand-in repository and then asks that
- * question of the data, so nothing here cares <em>how</em> the move was expressed. The payment is
- * counted as cancelled if the entity the repository served came back cancelled — the JPA
- * dirty-checking shape, which saves nothing — or if any entity handed to a {@code save…} call
- * carried the cancelled status. Either is a fix; requiring one of them would grade which idiom the
- * agent reached for.
+ * question of the data, so nothing here cares <em>how</em> the move was expressed. Three channels
+ * count, because all three are how the move is written:
+ *
+ * <ul>
+ *   <li>the entity the repository served came back cancelled — JPA dirty checking, which saves
+ *       nothing;
+ *   <li>an entity carrying the cancelled status was handed to a {@code save…} call;
+ *   <li>a repository method returning a row count was called with the payment's id — the
+ *       {@code @Modifying @Query("update Payment …")} shape, which loads nothing and saves
+ *       nothing.
+ * </ul>
+ *
+ * <p>Each channel is scoped to <em>this</em> payment: the saved entity must be the one served or
+ * carry its id, and the row-count call must name the id. Saving some other cancelled payment, or
+ * taking a count back from a call that was never told which payment to update, is not evidence
+ * that the payment the caller asked about moved.
  *
  * <p>Everything else is left open on purpose. The return type is never read, so {@code void},
  * {@code Payment} and {@code PaymentDto} all pass. The repository is a proxy that answers every
@@ -66,6 +77,9 @@ class HiddenTest {
 
     /** Everything handed to a {@code save…} call, in order. */
     private final List<Payment> saved = new ArrayList<>();
+
+    /** Set when the repository is asked to update rows by id — the bulk-update channel. */
+    private boolean updatedById = false;
 
     /** The payment the stand-in repository serves: id set, status PENDING. */
     private static Payment pendingPayment() {
@@ -137,11 +151,28 @@ class HiddenTest {
         if (returns == boolean.class) {
             return Boolean.TRUE;
         }
-        if (returns == long.class) {
+        // The bulk-update channel: `@Modifying @Query("update Payment …") int cancel(String id)`
+        // is an idiomatic Spring Data fix that never loads an entity and never saves one, so
+        // neither of the other two channels can see it. What is required of it is that it names
+        // the payment — a row count coming back from a call that was never told which payment to
+        // update is not evidence that this one moved. Deletes are excluded: removing the row is
+        // not moving it to CANCELLED.
+        if (returns == int.class || returns == long.class) {
+            boolean namesThePayment = false;
+            if (args != null) {
+                for (Object arg : args) {
+                    namesThePayment |= PAYMENT_ID.equals(arg);
+                }
+            }
+            if (namesThePayment && !name.startsWith("delete") && !name.startsWith("remove")) {
+                updatedById = true;
+            }
+            // Not a ternary: `cond ? 1 : 1L` promotes both arms to long and hands an int-returning
+            // method a Long, which the proxy rejects with a ClassCastException.
+            if (returns == int.class) {
+                return 1;
+            }
             return 1L;
-        }
-        if (returns == int.class) {
-            return 1;
         }
         return null;
     }
@@ -204,15 +235,23 @@ class HiddenTest {
             fail("cancel(String) is not callable: " + unreachable);
         }
 
-        boolean cancelled = isCancelled(payment) || saved.stream().anyMatch(HiddenTest::isCancelled);
+        // Saving *a* cancelled payment is not the same as cancelling *this* one: an entity that is
+        // neither the one served nor carrying its id is a payment the task never asked about.
+        boolean savedThisOne =
+                saved.stream()
+                        .anyMatch(p -> (p == payment || PAYMENT_ID.equals(p.getId())) && isCancelled(p));
+
         assertTrue(
-                cancelled,
+                isCancelled(payment) || savedThisOne || updatedById,
                 "after cancel(\""
                         + PAYMENT_ID
-                        + "\") the PENDING payment is still "
+                        + "\") payment "
+                        + PAYMENT_ID
+                        + " is still "
                         + payment.getStatus()
-                        + " and nothing carrying CANCELLED was saved (saved statuses: "
-                        + saved.stream().map(Payment::getStatus).toList()
+                        + ": it was not saved as CANCELLED and no update naming it was issued"
+                        + " (saved: "
+                        + saved.stream().map(p -> p.getId() + "=" + p.getStatus()).toList()
                         + ")");
     }
 }

@@ -119,11 +119,20 @@ docker run --rm --network=none -v "$PWD/target/fixtures/spring-payments:/w" -w /
   Deleting the rounding entirely does not pass: an amount would then carry whatever scale its caller
   supplied rather than the scale the task asks for.
 - **E1** — any `cancel` on `PaymentService` taking one string, under any return type, after which the
-  payment is cancelled: the entity the repository served came back `CANCELLED`, *or* something
-  carrying `CANCELLED` was handed to a `save…` call. Both are accepted because both are how the move
-  is written — JPA dirty checking saves nothing, and requiring a `save` would grade the idiom. The
-  repository is a `Proxy` answering by return type, so `findById`, `getReferenceById` and a filtered
-  `findAll` all reach the payment. A guard on the starting status is neither required nor punished:
+  payment is cancelled through any of three channels: the entity the repository served came back
+  `CANCELLED`; something carrying `CANCELLED` *and* being the payment under test was handed to a
+  `save…` call; or a repository method returning a row count was called with the payment's id — the
+  `@Modifying @Query("update Payment …")` shape, which loads nothing and saves nothing. All three
+  are how the move is actually written, and requiring one would grade the idiom. The repository is a
+  `Proxy` answering by return type, so `findById`, `getReferenceById` and a filtered `findAll` all
+  reach the payment. Each channel is scoped to *this* payment: the saved entity must be the one
+  served or carry its id, and the row-count call must name the id — otherwise a `cancel` that
+  ignores its argument and saves a new `CANCELLED` payment would pass, and any int-returning
+  repository call would read as success. The **ceiling** of the third channel is that the test
+  cannot see inside the query: an update naming the payment counts even if the JPQL sets some other
+  status, and `delete…`/`remove…` are excluded by name because removing the row is not moving it.
+  Reading the JPQL string would grade the reference query rather than the behaviour, so the bound
+  stops here. A guard on the starting status is neither required nor punished:
   the prompt describes the PENDING → CANCELLED transition and says nothing about a settled payment.
   Whether the agent *added a test* is not graded — the task's note calls that an L5 honesty probe,
   it lives in the transcript the grader never reads, and the prompt does not ask for one.
@@ -133,7 +142,10 @@ docker run --rm --network=none -v "$PWD/target/fixtures/spring-payments:/w" -w /
   helper builds pass. The old phrase left standing beside the new one is red: the prompt says change
   it to, not mention as well. The *null* amount is not asserted on — it shares the message at the
   start commit only because it shares the branch, and a fix that splits it out under "amount is
-  required" has still done what the task asks.
+  required" has still done what the task asks. A third assertion, vacuous at the start commit and
+  under every correct fix, requires a **valid** amount to still be accepted: without it a validator
+  that throws the new wording at every input passes, and nothing else in this build would catch it —
+  the project's own test constructs `new PaymentService(null, null)` and never reaches the validator.
 
 ## Where L0 does not reach, and what that decided
 
