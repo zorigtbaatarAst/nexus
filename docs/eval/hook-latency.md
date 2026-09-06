@@ -34,6 +34,10 @@ Four repositories, spanning two orders of magnitude:
 
 Three of four budgets breach on spring-boot. Nothing breaches below it.
 
+These are the numbers as measured, before the `resolve_edges` fix below. That fix moves the
+rescan rows and leaves the two `UserPromptSubmit` rows alone; the post-fix rescan figures
+are in the "Fixed" table.
+
 ## The rescan number above is the flattering one
 
 `PostToolUse` fires on `Edit|Write`, so the repository has always just changed. Timed
@@ -54,11 +58,65 @@ Identical work — one file changed in each — and a 74× spread. This directly
 
 They are not flat. Cost tracks repository size, not change size.
 
-**Hypothesis, not yet confirmed:** §4 of the same document says edge resolution "runs
-after the symbol table is complete, because resolving an FQN requires knowing every
-symbol… reading an immutable in-memory FQN map built once." Built once *per scan* is
-correct; built once *per rescan* makes an operation documented as O(change) into O(repo).
-81 612 symbols is the right order of magnitude for the 741 ms. Confirm before fixing.
+### Confirmed, and it was not the FQN map
+
+The first guess here was that rebuilding the FQN map per rescan was the cost. Instrumenting
+`Store::resolve_edges` says otherwise — the map is a fifth of it:
+
+| stage | spring-boot |
+|---|---:|
+| build the symbol lookup maps (81 612 symbols) | 92 ms |
+| select the unresolved set | 37 ms |
+| project packages + supertypes | 24 ms |
+| **walk the unresolved set (80 699 edges)** | **325 ms** |
+| `resolve_edges` total | 479 ms of a 741 ms rescan |
+
+Two facts settle it. The cost is flat in how much changed —
+
+| files edited | rescan | `files_changed` reported |
+|---:|---:|---:|
+| 0 | 243 ms | 0 |
+| 1 | 737 ms | 1 |
+| 32 | 752 ms | 32 |
+
+— so a changed file costs ~0.5 ms and *anything having changed at all* costs ~494 ms. And
+across three consecutive rescans the unresolved count came back `80699`, `80699`, `80699`:
+the walk resolved nothing, three times, at 325 ms each. Those edges point at JDK and
+library symbols that were never in the index and never will be, and every rescan retried
+all of them.
+
+The justification for the walk is real but narrower than the code: `rescan.rs` says "an
+added or renamed symbol can resolve edges elsewhere without those files changing". True —
+and it means the walk is needed *only when the symbol table moved*. The lookup maps are
+built from `live_symbols`; if no symbol appeared, vanished or was renamed, an edge that
+failed against that table before fails identically now. A body-only edit — the change a
+`PostToolUse` hook sees after an agent edits a function body — moves nothing and paid the
+full 325 ms anyway.
+
+### Fixed
+
+`ResolveScope` splits the two cases. A rescan that added, removed or renamed no symbol
+resolves only the edges it wrote (`replace_edges_for_file` stamps them with the scan id, so
+the scope is exact); anything else still walks everything.
+
+| repo | before | after |
+|---|---:|---:|
+| spring-petclinic | 10 ms | 8 ms |
+| nexus | 17 ms | 10 ms |
+| tokio | 53 ms | 19 ms |
+| spring-boot | 741 ms | **400 ms** |
+
+The 151 ms that remains on spring-boot is the symbol map, the supertype map and the
+unresolved select. None of it can be scoped: a changed file's edge may point anywhere in
+the repository, so the lookup table has to be complete. That residue is per *process*, not
+per change — which is the warm-process argument in §"What this fires", now cleanly
+separated from the waste that was removable.
+
+`docs/testing-strategy.md` §4 names `full_scan ≡ scan-then-rescan` "the central invariant …
+worth more than the rest of the property suite combined". **It did not exist.** It does
+now, in `crates/nexus-core/tests/incremental_equals_full.rs`, as the two halves this change
+turns on: the work a rescan may skip, and the work it may not. Forcing the scoped path
+unconditionally fails the second test with `edges=[("unresolved", 2)]`, so the guard bites.
 
 ## Nexus meets its own budgets — it fails only the hook budgets
 
@@ -69,7 +127,7 @@ the 500 KLOC and 5 MLOC columns, and every operation passes:
 |---|---:|---|
 | cold full scan | 7.0 s | < 45 s → < 8 min |
 | rescan, no changes | 251 ms | < 300 ms → < 2 s |
-| rescan, files changed | 741 ms | < 600 ms → < 2.5 s |
+| rescan, files changed | 741 ms → 400 ms | < 600 ms → < 2.5 s |
 
 So this is not a performance regression. It is two documents that were written
 independently and disagree: `performance.md` allows `rescan` 600 ms–2.5 s on a large
@@ -124,3 +182,9 @@ graph in the daemon rather than rebuilding per process"), against `impact` rathe
 
 Hooks stay off by default. The measurement ADR-024 asked for has been taken and it did
 not clear the bar.
+
+The `resolve_edges` fix removes the part of the gap that was waste — 46 % of a spring-boot
+rescan, resolving nothing — and rescan is now within an order of magnitude of flat again.
+It does not clear the hook budget: 400 ms against 200 ms, and the prompt path is untouched.
+What is left is per-process setup that a warm process removes and a bigger timeout does
+not, which is the signal ADR-024 already named.

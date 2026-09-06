@@ -160,6 +160,28 @@ pub struct EdgeRow {
     pub confidence: f64,
 }
 
+/// Which unresolved edges a resolution pass has to walk.
+///
+/// The lookup maps `resolve_edges` matches hints against are built from `live_symbols`. So
+/// if a scan added no symbol, renamed none and removed none, that table is byte-for-byte
+/// what the previous pass saw, and every edge it failed to resolve then fails identically
+/// now — re-walking them is guaranteed to change nothing.
+///
+/// It is not a small saving. On spring-boot (81 612 symbols) that walk is 80 699 edges and
+/// 325 ms, on every rescan, resolving nothing: the edges point at JDK and library symbols
+/// that were never in the index and never will be. It ran on a one-comment-line edit, which
+/// is exactly the change a `PostToolUse` hook sees after an agent edits a body.
+#[derive(Debug, Clone, Copy)]
+pub enum ResolveScope {
+    /// Every unresolved edge in the project. What a full scan does, and what a rescan must
+    /// still do whenever the symbol table moved — an appearance elsewhere is precisely what
+    /// makes an edge in an untouched file resolvable.
+    All,
+    /// Only the edges this scan wrote. `replace_edges_for_file` stamps them with the scan
+    /// id, so this is exact rather than approximate.
+    ThisScan(ScanId),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ResolveStats {
     pub total: usize,
@@ -1014,7 +1036,11 @@ impl Store {
     /// Runs once per scan, after every symbol is written — an analyzer cannot do this
     /// because it only ever sees one file. Each edge records which tier resolved it, so a
     /// three-hop heuristic chain is visibly a guess rather than silently a compiler fact.
-    pub fn resolve_edges(tx: &Transaction<'_>, project_id: ProjectId) -> Result<ResolveStats> {
+    pub fn resolve_edges(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        scope: ResolveScope,
+    ) -> Result<ResolveStats> {
         let mut by_fqn: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
         let mut by_prefix: std::collections::HashMap<String, Vec<i64>> =
             std::collections::HashMap::new();
@@ -1065,21 +1091,28 @@ impl Store {
             }
         }
 
-        let unresolved: Vec<(i64, String, String, String)> = {
-            let mut stmt = tx.prepare(
-                "SELECT e.id, e.dst_fqn_hint, e.edge_type, f.path
+        const UNRESOLVED: &str = "SELECT e.id, e.dst_fqn_hint, e.edge_type, f.path
                  FROM symbol_edges e
                  JOIN symbols s ON s.id = e.src_symbol_id
                  JOIN files f ON f.id = s.file_id
                  WHERE e.project_id = ?1 AND e.dst_symbol_id IS NULL
-                   AND e.dst_fqn_hint IS NOT NULL",
-            )?;
-            let rows = stmt
-                .query_map(params![project_id], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            rows
+                   AND e.dst_fqn_hint IS NOT NULL";
+        let read = |r: &rusqlite::Row<'_>| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?));
+        let unresolved: Vec<(i64, String, String, String)> = match scope {
+            ResolveScope::All => {
+                let mut stmt = tx.prepare(UNRESOLVED)?;
+                let rows = stmt
+                    .query_map(params![project_id], read)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                rows
+            }
+            ResolveScope::ThisScan(scan_id) => {
+                let mut stmt = tx.prepare(&format!("{UNRESOLVED} AND e.last_seen_scan_id = ?2"))?;
+                let rows = stmt
+                    .query_map(params![project_id, scan_id], read)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                rows
+            }
         };
 
         // Packages this project actually defines. A hint outside all of them points at a

@@ -545,7 +545,14 @@ impl Engine {
             }
         }
         // Tier 3: an added or renamed symbol can resolve edges elsewhere without those
-        // files changing, so resolution re-runs over the unresolved set every scan.
+        // files changing, so resolution re-runs over the whole unresolved set — but only
+        // when the symbol table actually moved. A body-only edit, which is what a
+        // `PostToolUse` hook sees most of the time, moves nothing: the hints that failed to
+        // resolve against `live_symbols` last time fail against the identical table now.
+        // Walking them anyway cost 325 ms of the 741 ms a one-line edit took on spring-boot
+        // and resolved nothing — the unresolved count came back at 80 699 every time.
+        // Deletions are in the guard because a vanished symbol changes the table too, in
+        // the direction that can only lose resolutions.
         // The commit ledger. Append-only and idempotent, so a rescan that sees the same
         // history re-inserts nothing. Recorded here rather than in a separate pass because
         // it belongs to the same transaction as the index it describes.
@@ -557,7 +564,12 @@ impl Engine {
         {
             Store::insert_commit(&tx, self.project_id, &crate::history::to_record(c))?;
         }
-        Store::resolve_edges(&tx, self.project_id)?;
+        let scope = if appeared.is_empty() && vanished.is_empty() && deleted_paths.is_empty() {
+            nexus_store::ResolveScope::ThisScan(scan_id)
+        } else {
+            nexus_store::ResolveScope::All
+        };
+        Store::resolve_edges(&tx, self.project_id, scope)?;
         // A fact about code this scan changed or removed is a trap for the next reader.
         // Inside the transaction, so a crash cannot leave the index new and the memory old.
         let (facts_invalidated, facts_validated) =
