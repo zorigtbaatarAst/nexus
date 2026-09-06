@@ -80,16 +80,86 @@ B1=B1-rename-crosses-the-seam
 # a five-task one, and analyse.py — which derives each comparison's task set from the run tree —
 # reports an asymmetry that no longer exists. The error lands in the result, not in the harness.
 # DRY_RUN=1 prints the plan and exits before the guards, the gate and any docker call.
+#
+# The expected count is computed from TASKS/ARMS/REPS as this process sees them — the same
+# variables sweep.sh itself defaults from — rather than a hardcoded 95, so a validation run
+# (Task 4 of the tier2-instrument-repair plan: ARMS=A0, checking the corpus before A1 exists to
+# compare against) is checked on its own terms instead of being refused by a gate that only knows
+# the full sweep. This is what lets `sweep.sh` call this file as its own pre-flight gate no
+# matter what TASKS/ARMS/REPS the operator passed it — those env vars reach this subprocess the
+# same way they reach sweep.sh's own defaults. Which tasks are ranking-only is duplicated here
+# rather than asked of arms_for() itself: asking sweep.sh the same question this check exists to
+# answer would let the exact arms_for() typo this file was written to catch slip straight through.
+RANKING_ONLY_TASKS="E1-untested-change N1-null-task"
+FULL_ARM_SET="A0 A1 A5"
+RANKING_ARM_SET="A1 A5"
+DEFAULT_TASKS="A1-idempotency-key-length A2-shared-type-change B1-rename-crosses-the-seam B2-orphaned-field-diagnosis C1-regression-recognised E1-untested-change N1-null-task"
+
+expected_cell_count() {  # tasks (space separated), arms restriction ("" = none), reps
+  local tasks="$1" arms="$2" reps="$3" total=0 task base_arms n arm
+  for task in $tasks; do
+    case " $RANKING_ONLY_TASKS " in
+      *" $task "*) base_arms="$RANKING_ARM_SET" ;;
+      *) base_arms="$FULL_ARM_SET" ;;
+    esac
+    n=0
+    for arm in $base_arms; do
+      if [ -z "$arms" ]; then
+        n=$((n + 1))
+      else
+        case " $arms " in
+          *" $arm "*) n=$((n + 1)) ;;
+        esac
+      fi
+    done
+    total=$((total + n * reps))
+  done
+  echo "$total"
+}
+
+REQ_TASKS="${TASKS:-$DEFAULT_TASKS}"
+REQ_REPS="${REPS:-5}"
+EXPECTED_CELLS="$(expected_cell_count "$REQ_TASKS" "${ARMS:-}" "$REQ_REPS")"
+
 PLAN="$(DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" | tail -n +2)"  # line 1 is the stamp line
 PLAN_CELLS="$(printf '%s\n' "$PLAN" | wc -l)"
-[ "$PLAN_CELLS" = 95 ] \
-  || { echo "FAIL [plan] the sweep plans $PLAN_CELLS cells, not 95 (5x3x5 + 2x2x5)" >&2; exit 1; }
+[ "$PLAN_CELLS" = "$EXPECTED_CELLS" ] \
+  || {
+    echo "FAIL [plan] the sweep plans $PLAN_CELLS cells, not $EXPECTED_CELLS for" \
+      "TASKS=${TASKS:-<default>} ARMS=${ARMS:-<none>} REPS=${REPS:-<default>}" >&2
+    exit 1
+  }
 if printf '%s\n' "$PLAN" | grep -E '^(E1-untested-change|N1-null-task)/A0/'; then
   echo "FAIL [plan] a ranking-only task is planned at A0 (printed above); T4's task set would" >&2
   echo "silently become seven tasks instead of five and nothing in the output would say so." >&2
   exit 1
 fi
-echo "ok   plan 95 cells, neither ranking-only task at A0"
+echo "ok   plan $PLAN_CELLS cells (matches TASKS/ARMS/REPS as requested), neither ranking-only" \
+  "task at A0"
+
+# --- 0b. ARMS restricts per task, and only ever narrows arms_for() ------------------------------
+
+# The A0-only validation run Task 4 exists for: the five three-arm tasks contribute one arm each,
+# the two ranking-only tasks — which arms_for() never gives A0 in the first place — contribute
+# none. 5 tasks x 1 arm x 5 reps = 25.
+PLAN_A0="$(ARMS=A0 DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" | tail -n +2)"
+PLAN_A0_CELLS="$(printf '%s\n' "$PLAN_A0" | wc -l)"
+[ "$PLAN_A0_CELLS" = 25 ] \
+  || { echo "FAIL [arms=A0] ARMS=A0 plans $PLAN_A0_CELLS cells, not 25 (5 tasks x 1 arm x 5 reps)" >&2; exit 1; }
+if printf '%s\n' "$PLAN_A0" | grep -E '^(E1-untested-change|N1-null-task)/'; then
+  echo "FAIL [arms=A0] a ranking-only task has cells under ARMS=A0 (printed above)" >&2
+  exit 1
+fi
+echo "ok   ARMS=A0 plans 25 cells over the five three-arm tasks, zero on the ranking-only tasks"
+
+# An ARMS value naming an arm arms_for() never returns for any task must be refused outright, not
+# silently intersected down to nothing — a plan that silently narrows to zero cells for every task
+# still exits 0 and reads as "ran, found nothing" rather than "you mistyped an arm."
+if ARMS="A0 A9" DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" >/dev/null 2>&1; then
+  echo "FAIL [arms=widen] ARMS='A0 A9' should be refused: A9 is not an arm arms_for() ever returns" >&2
+  exit 1
+fi
+echo "ok   ARMS naming an arm arms_for() never returns is refused, not silently honoured"
 
 # --- 1. an empty diff must not pass ------------------------------------------------------------
 

@@ -60,15 +60,39 @@ the A0-only validation isolates the corpus from the arm.
 
 ### Task 1 — the prompt path returns nothing on real prompts
 
-Two of seven benchmark prompts anchor no seed and produce an empty package. Fix the cause
-named in the diagnosis. A regression test must use the real failing prompt text.
+Two of seven benchmark prompts anchor no seed and produce an empty package. Three stacked
+causes, all in seeding, none of them the fallback gate:
 
-### Task 2 — the lexical fallback's gate never clears
+- `find_symbols` matches by **suffix only** (`crates/nexus-store/src/lib.rs:1651-1655`), so
+  `idempotency` cannot reach `idempotencyKey`, nor `total` reach `getTotalAmount`.
+- `uniquely_named_symbol` bails at **arity >= 2** (`crates/nexus-core/src/context/seeds.rs:238`):
+  `orders` ties `graphql:api:Query.orders` with `OrderController#orders()`, so B2's most
+  informative word seeds nothing.
+- The **>= 4-character floor** (`seeds.rs:62`) drops `key` (A1) and `nan` (B2) before lookup.
 
-`query_overlap(&req.text, &docs) >= 2` admitted nothing across 35 prompts. Either the gate
-is mis-tuned or the discriminating-term ceiling cannot admit a term at fixture corpus sizes.
-Fix per the diagnosis' arithmetic. A fallback that cannot fire is worse than no fallback,
-because it reads as a shipped mitigation.
+Fix what is genuinely wrong, not all three reflexively — the arity and length rules exist to
+stop a common word dragging in the whole repository, and loosening them without a bound
+trades an empty package for a useless one. Regression tests use the real failing prompt text
+verbatim.
+
+### Task 2 — the sweep cannot detect that it is running a stale binary
+
+**Revised after diagnosis. The gate is not the bug.** `query_overlap` returns exactly 2 on
+both failing prompts and passes. The fallback never fired because it was absent from
+`nexus-bench:latest`, which was built 24 hours before the fallback landed. `--version` reads
+`nexus 0.3.0` on both binaries, so the provenance stamp in `meta.json` matched a binary a
+day older than itself.
+
+`make bench` rebuilds the image (`Makefile:79`); invoking `scripts/eval/sweep.sh` directly
+does not, and nothing refuses the resulting mismatch. `sweep.sh:186` already pins the image
+id so a *changing* image cannot be half-mixed into a resumed sweep — the same rigour is
+missing against a *stale* one.
+
+Make the mismatch impossible to run: before any paid cell, compare the image's `nexus`
+against the tree's built binary by **content**, not by version string, and refuse with an
+instruction to rebuild. A version number that is not bumped between two commits cannot carry
+this and must not be trusted to. Cover it with a test that fails if the comparison is
+weakened back to a version string.
 
 ### Task 3 — make the corpus discriminate
 

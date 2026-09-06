@@ -49,19 +49,53 @@ arms_for() {  # task id -> the arms it runs, space separated
   esac
 }
 
+# ARMS restricts which arms each task runs, for a validation sweep that only needs one arm (see
+# Task 4 of the tier2-instrument-repair plan: an A0-only run to check the corpus, before any A1
+# exists to compare against). It can only ever narrow arms_for()'s answer, never widen it: it is
+# intersected per task, so ARMS=A0 still runs zero cells on E1/N1, which arms_for() never gives
+# A0 in the first place. Reusing the intersected result as the loop variable inside arms_for()'s
+# own case statement would be the same silent-widening bug this file is written to avoid, so the
+# per-task result below is named TASK_ARMS, never ARMS — arms_for() itself never sees the override.
+#
+# Any arm named in ARMS that arms_for() would never return for *any* task is refused up front
+# rather than silently intersected away to nothing: a typo here should fail loudly, not produce
+# a quietly-empty plan that reads as "ran, found nothing."
+if [ -n "${ARMS:-}" ]; then
+  ALL_ARMS="$(arms_for '')"  # the "*" branch is arms_for()'s superset of every arm any task gets
+  for arm in $ARMS; do
+    case " $ALL_ARMS " in
+      *" $arm "*) ;;
+      *)
+        echo "sweep.sh: ARMS names '$arm', which arms_for() never returns for any task" \
+          "(known arms: $ALL_ARMS). Refusing rather than silently planning zero cells for it." >&2
+        exit 1
+        ;;
+    esac
+  done
+fi
+
 # The cell plan, built once and then *executed* below — the plan and the sweep cannot disagree
 # because they are the same list. That is what makes DRY_RUN worth having: a typo in either arm
 # of the case above silently hands an added task three arms, and this ticket's own trap would
 # then be living in the line meant to prevent it. Nothing else in the repo executes this file,
-# so test_grade.sh asserts the plan (95 cells, no A0 on the added tasks) before it grades
-# anything — free, and ahead of every container.
+# so test_grade.sh asserts the plan (against the requested TASKS/ARMS/REPS, 95 cells by default,
+# no A0 on the added tasks) before it grades anything — free, and ahead of every container.
 #
 # The exit is here, before the credential warning, the guards and the gate: no docker, no built
 # binary, nothing on disk, and no recursion when the gate is the caller.
 CELLS=()
 for task in "${TASKS[@]}"; do
-  read -ra ARMS <<<"$(arms_for "$task")"
-  for arm in "${ARMS[@]}"; do
+  read -ra TASK_ARMS <<<"$(arms_for "$task")"
+  if [ -n "${ARMS:-}" ]; then
+    SELECTED_ARMS=()
+    for arm in "${TASK_ARMS[@]}"; do
+      case " $ARMS " in
+        *" $arm "*) SELECTED_ARMS+=("$arm") ;;
+      esac
+    done
+    TASK_ARMS=("${SELECTED_ARMS[@]}")
+  fi
+  for arm in "${TASK_ARMS[@]}"; do
     for rep in $(seq 0 $((REPS - 1))); do
       CELLS+=("$task/$arm/$rep")
     done

@@ -36,36 +36,62 @@ not discriminate on correctness, so the whole sweep reduces to a token-cost comp
 and the tasks written specifically to need cross-file knowledge, `B1-rename-crosses-the-seam`
 and `B2-orphaned-field-diagnosis`, are among the ones the bare agent solved 5 times out of 5.
 
-## The finding that undercuts A1's own arm
+## Correction: the arm ran a stale binary
 
-`UserPromptSubmit` injected **zero bytes on 10 of A1's 35 prompts** — two entire tasks,
-every repetition:
+**The first version of this document said the lexical fallback's `query_overlap >= 2` gate
+never cleared. That was wrong, and the truth is worse.**
 
-| task | A1 injected | A5 injected |
-|---|---|---|
-| A1-idempotency-key-length | **0 B on 5/5** | 892 B |
-| B2-orphaned-field-diagnosis | **0 B on 5/5** | 941 B |
-| A2-shared-type-change | 645 B | 1 033 B |
-| B1-rename-crosses-the-seam | 1 168 B | 1 192 B |
-| C1-regression-recognised | 286 B | 1 444 B |
-| E1-untested-change | 1 001 B | 1 236 B |
-| N1-null-task | 338 B | 1 122 B |
+The fallback did not fire because **it was not in the binary the sweep ran.**
 
-On two of seven tasks the Nexus arm *was* the bare agent. And the lexical fallback ADR-027
-shipped for exactly this case — the graph anchors nothing, so guess rather than stay silent —
-**fired zero times in 35 prompts**. Its gate demands two corroborating discriminating terms,
-and on real benchmark prompts that bar is never cleared. A fallback that never fires is not a
-fallback.
+| | |
+|---|---|
+| `nexus-bench:latest` built | 2026-09-05 17:11 |
+| fallback landed (`0215372`) | 2026-09-06 17:42 |
+| `"no symbol anchored"` in the image binary | **0 occurrences** |
+| same string in the HEAD binary | 1 occurrence |
+| `nexus --version`, both | `nexus 0.3.0` |
 
-This cuts both ways and neither is comfortable:
+The gate is fine. Measured directly on the two failing prompts, `query_overlap` returns
+**exactly 2** for both — `idempotency` (df 3) and `column` (df 1) over 12 docs, ceiling 6;
+`orders` (df 6) and `total` (df 1) over 15 docs, ceiling 8. It passes, on the bar.
 
-- It weakens T7 as a test of the Context Engine, since 2 of 7 tasks are ties by construction.
-- It is itself a product finding, and a worse one than the threshold miss: on 29 % of real
-  prompts Nexus produces nothing, silently, and the mechanism built to prevent that is inert.
+Three things had to line up:
 
-The clearest evidence that the remaining differences are noise: **B2 is one of A1's four
-"wins" over A5 — and it is a task where A1 injected nothing at all.** An arm cannot win on
-context it did not supply.
+1. `make bench` rebuilds the image before sweeping (`Makefile:79`). **The sweep was started
+   with `bash scripts/eval/sweep.sh` directly, which does not.** That was operator error —
+   mine — and `sweep.sh` prints `make bench STAMP=…` as the resume command, so the right
+   entry point was on screen the whole time.
+2. `sweep.sh` pins the image id so a *changing* image cannot be half-mixed into a resumed
+   sweep (`sweep.sh:186`), but nothing checks the image against the tree it is reported
+   against.
+3. The provenance line it does stamp is the **host** binary's `--version`. The version was
+   not bumped between those commits, so host and image both read `nexus 0.3.0` and the stamp
+   matched a binary a day older than itself.
+
+So `meta.json` recorded a provenance that was true of the wrong binary. A version string
+cannot detect this class of drift and never could.
+
+**What it changes.** The A1 arm in run `20260906T131608Z` is not HEAD's A1. On the two tasks
+where seeding anchors nothing it injected nothing, where HEAD would have injected a BM25
+package. The other five tasks are unaffected — the harness supplies its own `nexus-hook.sh`
+wrapper that reads the prompt from stdin in shell, so the `--task-stdin` fix (`7778592`,
+also missing from the image) did not matter to them.
+
+**What it does not change.** A0 passed 25/25 on a binary-independent path — the control uses
+no Nexus at all. The corpus failure below stands on its own and is fatal to the sweep by
+itself.
+
+## Why the packages were empty (the real cause)
+
+Seeding anchors nothing on those two prompts for three stacked reasons, none of them the gate:
+
+- **`find_symbols` matches by suffix only** (`crates/nexus-store/src/lib.rs:1651`), so
+  `idempotency` cannot reach `idempotencyKey` and `total` cannot reach `getTotalAmount`.
+- **`uniquely_named_symbol` bails at arity ≥ 2** (`crates/nexus-core/src/context/seeds.rs:238`):
+  `orders` ties `graphql:api:Query.orders` against `OrderController#orders()`, so B2's best
+  word seeds nothing.
+- **The ≥ 4-character floor** (`seeds.rs:62`) deletes `key` (A1) and `nan` (B2) before any
+  lookup happens.
 
 ## What this does and does not license
 
