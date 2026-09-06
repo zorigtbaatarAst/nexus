@@ -27,6 +27,20 @@ fi
 # Which repository and commit this task starts from, read from the fixture manifests.
 read -r REPO COMMIT PROMPT < <(python3 "$ROOT/scripts/eval/task_lookup.py" "$TASK")
 
+# scripts/eval/parity.sh needs a prompt cheap enough to run twice and trivial enough that the
+# two arms' input differs by the injected package and by nothing the agent chose to do. The
+# override lives here rather than in a second runner because a parity check that walks a
+# different code path proves parity for a path the sweep never takes.
+#
+# NEVER set this for a sweep: it replaces the task the run tree claims to be measuring. It says
+# so on stderr and leaves a marker in the output directory, so a run tree carrying one is
+# identifiable afterwards rather than merely wrong.
+if [ -n "${BENCH_PROMPT:-}" ]; then
+  echo "run.sh: BENCH_PROMPT is set — running an override prompt, NOT $TASK's own" >&2
+  PROMPT="$BENCH_PROMPT"
+  touch "$OUT/.prompt-override"
+fi
+
 FIXTURE="$ROOT/target/fixtures/$REPO"
 [ -d "$FIXTURE" ] || { echo "run make fixtures first" >&2; exit 1; }
 
