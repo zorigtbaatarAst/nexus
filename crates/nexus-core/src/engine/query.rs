@@ -391,8 +391,12 @@ impl Engine {
         // from nothing sends an agent confidently into the wrong module. That reasoning is
         // why `seeded.notes` travels with the result and why every item says `bm25`: the
         // agent is told this is a guess. What changed is that there is now something to
-        // offer instead of silence — measured, on two of three planted bugs, as the
-        // difference between a file the fix had to touch and no context at all.
+        // offer instead of silence — measured in `debug_supply` as one of three planted bugs
+        // moving from no context at all to a file the fix had to touch. One, not two: the
+        // gate below costs the apparent second win, and should. That prompt's every content
+        // word — `customer`, `charged`, `twice`, `order` — appears in zero files of its
+        // corpus, so the `PaymentService.java` an ungated version returned for it was BM25
+        // matching stopwords. A coincidence removed, not a result. ADR-027.
         if seeded.seeds.is_empty() {
             // Two corroborating terms before anything is sent. One stray collision —
             // "thanks, that works" catching `works` in a comment — is noise, and the

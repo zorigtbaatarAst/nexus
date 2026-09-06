@@ -31,7 +31,9 @@ Neither number needs a sweep, and neither has to be taken on trust. Both are rep
 offline for free. For each task, resolve its repository and start commit, scan a copy, and ask
 for the package the per-prompt hook would have asked for:
 
-```sh
+From the repository root, with `nexus` on `PATH` (or substitute `./target/debug/nexus`):
+
+```bash
 read -r REPO COMMIT PROMPT < <(scripts/eval/task_lookup.py A1-idempotency-key-length)
 cp -r "target/fixtures/$REPO" /tmp/t && git -C /tmp/t checkout "$COMMIT" && rm -rf /tmp/t/.nexus
 nexus --project /tmp/t scan
@@ -53,8 +55,9 @@ The three that already anchored are byte-identical, which is the trigger being n
 than a claim about it. On the two that did not, the product arm and the lexical arm now agree
 exactly, because on those prompts the product *is* the lexical ranker — a tie by construction,
 which is what §"Costs" below means about the benchmark's ranking comparison.
-[`docs/eval/tier2.md`](../../eval/tier2.md) §"Pre-sweep measurement" records the same table with
-the arms' full hook arguments. `debug_supply` reproduces with
+[`docs/eval/tier2.md`](../../eval/tier2.md) §"Pre-sweep measurement" records the same
+measurement in more detail — the lexical arm on all five tasks and each task's SessionStart
+package, which the table above leaves at `—` because neither moves. `debug_supply` reproduces with
 `cargo test -p nexus-core --test debug_supply`.
 
 The argument for silence was never wrong. It was made without a third option on the table:
@@ -72,7 +75,7 @@ instead of returning an empty package — and labels every part of the result as
 | Gate | ≥ 2 discriminating query terms present in the corpus |
 | Discriminating | not a stopword, ≥ 4 characters (`seeds::is_noise_word`), and in fewer than half the files |
 | Ranker | `lexical_package` verbatim — same corpus, same budget, same `fill`/`finish` |
-| Package notes | seeding's own "no seed" note, carried through unchanged |
+| Package notes | seeding's own notes, "no seed" included, carried through unchanged — plus an intent-not-determined note when the turn resolved to `Unknown`, and a corpus-unread note when files could not be read from disk |
 | `basis.selection` | `no symbol anchored: bm25 over file contents, in rank order` |
 | Item `why` | `bm25 <score>` |
 | Intent | whatever the turn resolved to, `Unknown` included |
