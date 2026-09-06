@@ -25,16 +25,22 @@ pub const SESSION_START_COMMAND: &str = "nexus context --session --budget 800 2>
 /// developer just described. It is also the one on the critical path of every prompt, which
 /// is why it is opt-in and why its latency is measured before anyone is asked to enable it.
 ///
-/// The prompt arrives on stdin as JSON, and a hook that tried to parse it would be logic in a
-/// hook — the thing ADR-024 forbids, because then a hook regression costs more than the
-/// automatic path. The harness substitutes the variable; if it is empty the command still
-/// exits 0 and Nexus reports that it anchored nothing.
+/// The prompt arrives on stdin as JSON. It was previously read from `$CLAUDE_USER_PROMPT`,
+/// which the harness does not set: the variable expanded to empty, the command asked for
+/// context about nothing, injected nothing, and exited 0 — indistinguishable from a healthy
+/// hook whose ranker found nothing, on every prompt.
+///
+/// `--task-stdin` fixes that without breaking ADR-024's rule. Parsing the payload in a shell
+/// pipeline would be logic in a hook, and would acquire a dependency on whatever parsed it;
+/// `--task-stdin` keeps this one `nexus <verb>` with a timeout and puts the parsing in the
+/// binary, where a test covers it.
+///
 /// `--brief` because this runs on every prompt. Without it the package repeats the project
 /// profile the `SessionStart` hook already sent — 234-256 tokens a turn, which is half of a
 /// small package and all of an empty one — and prints that header even when the prompt named
 /// nothing and nothing was selected.
 pub const USER_PROMPT_COMMAND: &str =
-    "nexus context --task \"$CLAUDE_USER_PROMPT\" --budget 4000 --brief 2>/dev/null || true";
+    "nexus context --task-stdin --budget 4000 --brief 2>/dev/null || true";
 
 /// Keep the index warm after an edit (ADR-024). A no-op rescan is the fast path, so this is
 /// the cheapest hook in the set and the one that makes the others cheap.
