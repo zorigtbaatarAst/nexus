@@ -85,10 +85,21 @@ Two consequences for how the result must be read:
 
 `analyse.py` carries this into every sweep rather than leaving it to this page. Each run
 directory keeps the `injected.log` its hooks wrote; the arm table reports **median injected
-bytes** and a **zero-injection count**, the A1-vs-A5 comparison line and the T7 line both repeat
-the zero-injection counts, and `summary.json` carries them as `median_injected_bytes`,
-`n_zero_injection` and `n_with_injection_log`. An arm with no hooks (A0) has no log and reads
-`— (no hooks)`, never `0` — "no hooks" and "the ranker selected nothing" are different facts.
+bytes**, an **empty-package count** and a **lexical-package count**, the A1-vs-A5 comparison line
+and the T7 line both repeat them, and `summary.json` carries them as `median_injected_bytes`,
+`n_empty_packages`, `n_lexical_packages`, `n_prompt_packages` and `n_with_injection_log`. An arm
+with no hooks (A0) has no log and reads `— (no hooks)`, never `0` — "no hooks" and "the ranker
+selected nothing" are different facts.
+
+The two counts are separate because the lexical fallback changed what silence looks like. A1 now injects something on almost every prompt, so a count of zero-byte
+packages reads as good news while the condition it was watching for — the graph anchored nothing
+— is exactly as frequent as before. `n_lexical_packages` counts packages whose every item is a
+BM25 hit: **for A1 that is the fallback firing**, and those tasks are a tie with A5 by
+construction rather than a contrast between two rankings; for A5 every package is lexical by
+design, so `A5 lexical == all` is that arm's sanity check. `n_empty_packages` survives alongside
+it because nothing-at-all is still a real outcome: the fallback demands two corroborating terms
+between the prompt and the corpus before it will guess, and below that bar the empty package
+remains the answer.
 
 ---
 
@@ -265,12 +276,12 @@ but a low pass rate at C1 must not be read as "no arm could fix double-charging"
 
 ## Result
 
-*(paste `analyse.py`'s table here — arm statistics **including the injected-bytes and
-zero-injection columns**, cost detail, flagged runs, infra failures, the A1-vs-A0 and A1-vs-A5
-comparisons, and the **T4 and T7** lines. `summary.json` in the same run directory holds the same
-numbers machine-readably. Read the zero-injection counts against the pre-sweep table above before
-reading anything else: a task where A1 was handed a zero-byte package is not a contrast between
-two rankings.)*
+*(paste `analyse.py`'s table here — arm statistics **including the injected-bytes, empty-package
+and lexical-package columns**, cost detail, flagged runs, infra failures, the A1-vs-A0 and
+A1-vs-A5 comparisons, and the **T4 and T7** lines. `summary.json` in the same run directory holds
+the same numbers machine-readably. Read the empty and lexical counts against the pre-sweep table
+above before reading anything else: a task where A1 was handed nothing, or handed the same BM25
+ranking A5 uses, is not a contrast between two rankings.)*
 
 ## A1 vs A5 — did ranking earn its complexity
 
@@ -281,6 +292,14 @@ Pre-registered, unchanged since the design, and reported against rather than gat
 | **T4 — cost** | median CPS reduction **≥ 30 %** (A1 vs A0), paired bootstrap 95 % CI excluding zero |
 | **T7 — ranking** | A1 CPS **< A5 CPS**, sign test p < 0.10 across tasks |
 
+**The two thresholds rest on different task sets, and `analyse.py` says so beside each number.**
+T4 is computed over the five tasks that run all three arms; T7 over the seven that run A1 and A5,
+because `E1-untested-change` and `N1-null-task` joined for the ranking comparison only — A0
+contributes nothing to a ranking comparison and running it would cost five runs a task for no
+statistical power. Each threshold line names its own task set and size, the arm table carries a
+`tasks` column per arm, and `summary.json` carries `task_sets` plus a `task_set`/`n_task_set` on
+each threshold. One corpus, two sample sizes.
+
 Five tasks cannot carry a release gate, so `analyse.py` prints `MEETS T4` / `does not meet T4`
 and `MEETS T7` / `does not meet T7` as reported facts, and refuses to evaluate either below three
 surviving tasks. T7's p-value is a **one-sided** exact binomial over the non-tied per-task CPS
@@ -288,8 +307,10 @@ deltas — one-sided because the threshold is directional ("A1 CPS *<* A5 CPS"),
 differ". Both rules were written into `analyse.py` before any sweep ran, so neither was chosen
 after seeing the numbers.
 
-Read T7 next to the zero-injection count on the same line. A task where A1's per-prompt package
-was empty contributes a delta that measures A0-plus-a-session-summary against BM25 — see the
+Read T7 next to the empty and lexical counts on the same line. A task where A1's per-prompt
+package was empty contributes a delta that measures A0-plus-a-session-summary against BM25; a
+task where it came from the lexical fallback contributes a delta between BM25 and itself, which
+is a tie by construction rather than a ranking result — see the
 [pre-sweep measurement](#pre-sweep-measurement-a1-receives-less-context-than-a5-on-all-five-tasks).
 
 **The falsifier stands.** `13-evaluation.md` §5: if A1 does not beat A5 — if ranked context is

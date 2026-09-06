@@ -2,7 +2,7 @@ BIN     := target/release/nexus
 CAP_BIN := target/release/bughunter
 PREFIX  ?= $(HOME)/.local
 
-.PHONY: help build release test lint fmt check install uninstall clean demo smoke \
+.PHONY: help build release test lint fmt check eval-selftest install uninstall clean demo smoke \
         fixtures fixtures-verify bench-image bench
 
 help:
@@ -10,7 +10,8 @@ help:
 	@echo "release  optimized binaries -> nexus and bughunter"
 	@echo "test     unit tests + architecture boundary tests"
 	@echo "lint     clippy, warnings denied"
-	@echo "check    fmt + lint + test — what CI runs"
+	@echo "check    fmt + lint + analyse.py self-test + test — what CI runs"
+	@echo "eval-selftest  the benchmark analysis' own statistics self-test (stdlib, ~0.2s)"
 	@echo "install  copy the binary to $(PREFIX)/bin"
 	@echo "smoke    scan a public Spring repo and assert the cascade works"
 	@echo "demo     scan a repository and prove the incremental cascade (REPO=path)"
@@ -35,7 +36,14 @@ lint:
 fmt:
 	cargo fmt --all
 
-check: fmt lint test
+# scripts/eval/analyse.py's --self-test is the only guard on the numbers a ship-or-delete
+# decision is read from, and until now no target ran it: `make check` was vacuous for that file.
+# Pure stdlib, ~0.2s, no build — it belongs in front of the compile so a broken statistic is
+# reported in the first second rather than the tenth minute.
+eval-selftest:
+	python3 scripts/eval/analyse.py --self-test
+
+check: fmt lint eval-selftest test
 
 # The benchmark corpus of docs/architecture/13-evaluation.md §3. Written under target/
 # because it is already git-ignored: a generated repository inside the working tree would be

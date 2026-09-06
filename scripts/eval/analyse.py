@@ -40,6 +40,28 @@ any different:
     runs' spend entirely, and both `pass_rate` (flagged excluded) and
     `pass_rate_with_flagged_as_fail` (flagged counted as failures) are reported side by side.
     See ADJUDICATE_MEANING below for what each flag means.
+
+  * Two task sets, one corpus. `E1-untested-change` and `N1-null-task` run A1 and A5 only —
+    A0 contributes nothing to a ranking comparison and running it would cost five runs a task
+    for no statistical power — so T4 (efficiency, A1 vs A0) rests on five tasks at three arms
+    while T7 (ranking, A1 vs A5) rests on seven at two. Every comparison below is computed over
+    the tasks its two arms were both actually run on (`comparison_task_set`), and states that
+    set and its size on its own line. Reporting all seven under T4 would have listed the two
+    ranking-only tasks as "skipped for missing data", which reads as data loss rather than as
+    the deliberate shape of the corpus; hard-coding the five here would have been a second
+    place for the corpus to be declared, and the two would eventually disagree.
+
+  * What the injected package was, not just how big it was. `n_zero_injection` used to exist to
+    expose that A1's per-prompt package was empty on two of five tasks. The lexical fallback
+    (see `crates/nexus-core/src/engine/query.rs`) means A1 now almost always injects something,
+    so that counter reads ~0 while the condition it was watching for — the graph anchored
+    nothing and BM25 over file contents was substituted — is exactly as frequent as before. A
+    counter that reads zero for the wrong reason looks like good news, so packages are
+    classified from `injected.log` instead: `empty` (nothing was sent at all — the fallback's
+    two-corroborating-term gate refused too, so the empty package is still the answer),
+    `lexical` (every item is a BM25 hit) and `graph`. Both counts are reported per arm. For A1
+    a lexical package is the fallback firing; for A5 every package is lexical by construction,
+    which is what makes `A5 lexical == all of them` the arm's own sanity check.
 """
 import json
 import math
@@ -59,6 +81,24 @@ import sys
 # is the thing A1-vs-A5 is a contrast between, and a hook renamed one day must keep being
 # counted rather than silently reading as "injected nothing".
 INJECTED_RE = re.compile(r"^=== (\S+)[^\n]*?\binjected=(\d+) bytes\s*$")
+
+# One rendered item inside a package body, as `render::context_items` writes it (the only
+# renderer the arms' `--brief` hooks reach):
+#
+#     "  com.acme.OrderService.cancel        src/main/java/OrderService.java:42 · seed: names …"
+#     "  db/migration/V1__init.sql           db/migration/V1__init.sql:1 · bm25 4.312"
+#
+# The `why` is the whole point: it is the only place in `injected.log` that says how the item
+# was chosen. `basis.selection` — which names the fallback outright — is printed by `--explain`
+# and never by `--brief`, so it is not in the log the sweep collects and cannot be parsed from
+# it. The `file:line` anchor is required by the pattern so that a footer line
+# ("considered 8 · included 5 · …") cannot be mistaken for an item.
+ITEM_WHY_RE = re.compile(r"^\s+\S.* \S+:\d+ · (\S+)")
+
+# The prefix every lexically-ranked item's `why` carries (`format!("bm25 {score:.3}")`). Both
+# lexical paths emit it: the fallback (the graph anchored nothing) and A5's `--rank lexical`
+# control arm. Which of the two it was is not in the item — it is in the arm.
+LEXICAL_WHY_PREFIX = "bm25"
 
 # 124 = SIGTERM-then-timeout, 137 = SIGKILL (OOM), -1 = run.sh never wrote a status file at all
 # (the container did not even get that far). All three come with all-zero usage.json fields.
@@ -186,24 +226,59 @@ def is_infra(run):
     return run.get("claude_exit", 0) != 0 and run.get("total_tokens", 0) == 0
 
 
-def injected_prompt_bytes(run_dir):
-    """Bytes the arm's hook injected at the prompt, summed over that run's `injected.log`.
+def package_kind(size_bytes, whys):
+    """What the hook injected, from the item explanations it rendered.
 
-    Returns None when there is no log at all — A0 has no hooks by design, and "no hooks" must
-    never read as "the hooks selected nothing", which is a finding about the ranker. SessionStart
-    records are excluded: they are a fixed project summary that does not depend on the prompt,
-    and folding them in would mask exactly the case this field exists to expose (A1's per-prompt
-    package is empty on the tasks whose prompt names no identifier — see docs/eval/tier2.md).
+      * `empty`   — nothing was sent at all. Still a real condition after the lexical fallback
+                    shipped: the fallback demands two corroborating terms between the prompt and
+                    the corpus before it will guess, and below that bar the empty package
+                    remains the honest answer (see the `query_overlap(...) >= 2` gate in
+                    `crates/nexus-core/src/engine/query.rs`). A dead hook, a missing baseline
+                    and a timeout land here too, which is why it is reported and not assumed.
+      * `lexical` — every item is a BM25 hit over file contents. In A1 that is the fallback: the
+                    graph anchored nothing and a guess was substituted. In A5 it is the arm.
+      * `graph`   — anything else: at least one item the engine path selected.
+
+    `whys and all(...)` rather than `all(...)`: `all([])` is True, so a package with no item
+    lines at all would otherwise be classified as a lexical guess, which is the specific
+    false-good-news this counter exists to avoid.
+    """
+    if size_bytes == 0:
+        return "empty"
+    if whys and all(w.startswith(LEXICAL_WHY_PREFIX) for w in whys):
+        return "lexical"
+    return "graph"
+
+
+def injected_packages(run_dir):
+    """Every per-prompt package the arm's hooks injected in this run, as (bytes, kind) pairs.
+
+    Returns None when there is no `injected.log` at all — A0 has no hooks by design, and "no
+    hooks" must never read as "the hooks selected nothing", which is a finding about the ranker.
+    SessionStart records are excluded: they are a fixed project summary that does not depend on
+    the prompt, and folding them in would mask exactly what these counters exist to expose. Their
+    bodies are dropped with them, so a SessionStart summary's items can never be attributed to
+    the prompt package that follows it.
     """
     log = run_dir / "injected.log"
     if not log.is_file():
         return None
-    total = 0
+    packages, current = [], None
     for line in log.read_text(errors="replace").splitlines():
-        m = INJECTED_RE.match(line)
-        if m and m.group(1) != "SessionStart":
-            total += int(m.group(2))
-    return total
+        header = INJECTED_RE.match(line)
+        if header:
+            if header.group(1) == "SessionStart":
+                current = None
+                continue
+            current = {"bytes": int(header.group(2)), "whys": []}
+            packages.append(current)
+            continue
+        if current is None:
+            continue
+        item = ITEM_WHY_RE.match(line)
+        if item:
+            current["whys"].append(item.group(1))
+    return [(p["bytes"], package_kind(p["bytes"], p["whys"])) for p in packages]
 
 
 def is_flagged(run):
@@ -247,7 +322,12 @@ def load(base):
         run = {**u, **g}
         run["total_tokens"] = run_total_tokens(u)
         run["cost_usd"] = u.get("total_cost_usd", 0.0)
-        run["injected_prompt_bytes"] = injected_prompt_bytes(usage_path.parent)
+        packages = injected_packages(usage_path.parent)
+        run["injected_packages"] = packages
+        # Kept as the per-run total the byte median has always been over: one `claude -p` fires
+        # UserPromptSubmit once, so this is normally that single package's size, and summing is
+        # what keeps it right if a run ever carries more than one.
+        run["injected_prompt_bytes"] = None if packages is None else sum(b for b, _ in packages)
         run["path"] = str(usage_path.parent.relative_to(base))
         runs.append(run)
     return runs, ungraded
@@ -306,8 +386,13 @@ def arm_cps_clean_only(rs, field="total_tokens"):
     return _cps(spend, passes)
 
 
-def arm_stats(rs, n_infra):
-    """rs: every non-infra run for one arm (flagged included). n_infra: how many were dropped."""
+def arm_stats(rs, n_infra, tasks=None):
+    """rs: every non-infra run for one arm (flagged included). n_infra: how many were dropped.
+
+    `tasks`: the arm's full task set, infra runs included — the corpus is asymmetric (A0 does
+    not run the two ranking-only tasks) and the arm table has to say so, which it cannot do
+    from `rs` alone if an arm's only run at some task was killed by the harness.
+    """
     clean = [r for r in rs if is_clean(r)]
     flagged = [r for r in rs if is_flagged(r)]
     toks = [r["total_tokens"] for r in rs]
@@ -319,6 +404,8 @@ def arm_stats(rs, n_infra):
     # only the second is a fact about the product. Runs with no injected.log (A0) are not in the
     # denominator at all; a run whose log records a zero-byte package is.
     injected = [r["injected_prompt_bytes"] for r in rs if r.get("injected_prompt_bytes") is not None]
+    packages = [p for r in rs if r.get("injected_packages") for p in r["injected_packages"]]
+    task_set = sorted(tasks) if tasks is not None else sorted({r["task"] for r in rs if r.get("task")})
     passes = sum(1 for r in clean if r.get("passed"))
     l1 = sum(1 for r in clean if r.get("L1_hidden"))
     false_done = sum(1 for r in clean if r.get("claimed_done") and not r.get("passed"))
@@ -334,8 +421,15 @@ def arm_stats(rs, n_infra):
         "median_cache_read_tokens": median(cache),
         "median_cost_usd": median(costs),
         "median_injected_bytes": median(injected) if injected else None,
-        "n_zero_injection": sum(1 for b in injected if b == 0),
         "n_with_injection_log": len(injected),
+        # Per prompt package, not per run: "how many packages came from the fallback" is a
+        # question about packages. One `claude -p` fires UserPromptSubmit once, so these are
+        # normally also per-run counts.
+        "n_prompt_packages": len(packages),
+        "n_empty_packages": sum(1 for _, k in packages if k == "empty"),
+        "n_lexical_packages": sum(1 for _, k in packages if k == "lexical"),
+        "tasks": task_set,
+        "n_tasks": len(task_set),
         "passes": passes,
         "pass_rate": passes / len(clean) if clean else 0.0,
         # The mirror image of excluding flagged runs from the denominator: what the pass rate
@@ -361,6 +455,26 @@ def task_arm_tokens(runs, task, arm):
 def task_arm_cps(runs, task, arm):
     rs = [r for r in runs if r["task"] == task and r["arm"] == arm and not is_infra(r)]
     return arm_cps(rs) if rs else None
+
+
+def comparison_task_set(runs, arms):
+    """The tasks a comparison between `arms` is over: those every one of those arms was run on.
+
+    The corpus is asymmetric on purpose. `E1-untested-change` and `N1-null-task` run A1 and A5
+    only, so T4 (A1 vs A0) rests on five tasks at three arms and T7 (A1 vs A5) on seven at two.
+    Derived from the run tree rather than listed here, because a task list in this file would be
+    a second declaration of the corpus and the two would eventually disagree.
+
+    Membership is "has any run at that arm", infra runs included, and that distinction carries
+    weight: a task whose A0 runs all timed out IS missing data and must keep being reported as a
+    skipped task, while a task that never ran A0 was never in this comparison's corpus at all
+    and reporting it as skipped would read as data loss.
+    """
+    by_arm = {}
+    for r in runs:
+        by_arm.setdefault(r["arm"], set()).add(r["task"])
+    sets = [by_arm.get(a, set()) for a in arms]
+    return sorted(set.intersection(*sets)) if sets else []
 
 
 def token_deltas(runs, tasks, baseline_arm, treatment_arm="A1"):
@@ -415,10 +529,33 @@ def report(base):
 
     tasks = sorted({r["task"] for r in runs})
     arms = sorted({r["arm"] for r in runs})
+    task_sets = {
+        "A1_vs_A0": comparison_task_set(runs, ("A1", "A0")),
+        "A1_vs_A5": comparison_task_set(runs, ("A1", "A5")),
+    }
 
     lines = []
     lines.append(f"# Tier 2 sweep — {base}\n")
     lines.append(f"{len(runs)} graded runs · {len(tasks)} tasks · {len(arms)} arms · model {model}\n")
+    # First thing under the headline, because every threshold below is read against it: the two
+    # pre-registered numbers rest on different task sets, and a reader who assumes one corpus
+    # will over-read whichever number came from the larger one.
+    t4_set, t7_set = task_sets["A1_vs_A0"], task_sets["A1_vs_A5"]
+    ranking_only = [t for t in t7_set if t not in t4_set]
+    lines.append(
+        "_**Two task sets, one corpus.** **T4** (efficiency, A1 vs A0) is computed over the "
+        f"**{len(t4_set)}** task(s) that ran both A0 and A1: {', '.join(t4_set) or '—'}. "
+        f"**T7** (ranking, A1 vs A5) is computed over the **{len(t7_set)}** task(s) that ran "
+        f"both A1 and A5: {', '.join(t7_set) or '—'}. "
+        + (
+            f"{', '.join(ranking_only)} joined for the ranking comparison only and never ran "
+            "A0 — A0 contributes nothing to a ranking comparison and running it would cost five "
+            "runs a task for no statistical power. "
+            if ranking_only else ""
+        )
+        + "The `tasks` column below is each arm's own count. Two sample sizes over one corpus, "
+        "not two corpora._\n"
+    )
     if ungraded:
         lines.append(
             f"_{len(ungraded)} run(s) have no grade.json yet and are not in any number below: "
@@ -452,37 +589,47 @@ def report(base):
         infra = [r for r in all_rs if is_infra(r)]
         rs = [r for r in all_rs if not is_infra(r)]
         infra_by_arm[arm] = infra
-        arm_data[arm] = arm_stats(rs, len(infra))
+        arm_data[arm] = arm_stats(rs, len(infra), tasks={r["task"] for r in all_rs})
         for r in rs:
             for flag in r.get("adjudicate") or []:
                 flag_counts[flag] = flag_counts.get(flag, 0) + 1
 
     lines.append(
         "_`injected` is what the arm's hooks put into the turn at the prompt, from "
-        "`injected.log`: the median package size and how many runs got a **zero-byte** package. "
-        "A0 has no hooks and no log, so it reads `—` rather than 0 — \"no hooks\" and \"the "
-        "ranker selected nothing\" are different facts. A zero-injection count above zero means "
-        "the arm was untreated on those runs, and no comparison involving it is a contrast "
-        "between two rankings._\n"
+        "`injected.log`: the median package size, and then what those packages were. **empty** "
+        "counts packages where nothing was sent at all — still a real condition after the "
+        "lexical fallback shipped, because the fallback demands two corroborating terms before "
+        "it will guess and the empty package remains the answer below that bar. **lexical** "
+        "counts packages ranked by BM25 over file contents: **for A1 that is the fallback "
+        "firing — the graph anchored nothing and a guess was substituted** — while for A5 every "
+        "package is lexical by construction, so `A5 lexical == all` is that arm's sanity check "
+        "rather than a finding. Both are per prompt package. A0 has no hooks and no log, so it "
+        "reads `— (no hooks)` rather than 0: \"no hooks\" and \"the ranker selected nothing\" "
+        "are different facts. An empty or lexical count above zero means no comparison over "
+        "those runs is a contrast between two graph rankings. `tasks` is how many tasks the arm "
+        "ran — it is not the same number for every arm, and which threshold rests on which set "
+        "is stated under the headline above and again on each threshold's own line._\n"
     )
     lines.append(
-        "| arm | n (total/clean/flagged/infra) | median tokens | IQR | median cache-read | "
-        "median injected | zero-injection | pass rate (clean) | pass rate (flagged=fail) | "
-        "L1-only rate | false-done |"
+        "| arm | tasks | n (total/clean/flagged/infra) | median tokens | IQR | median cache-read | "
+        "median injected | empty pkgs | lexical pkgs | pass rate (clean) | "
+        "pass rate (flagged=fail) | L1-only rate | false-done |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for arm in arms:
         s = arm_data[arm]
         lo, hi = s["iqr_tokens"]
         if s["n_with_injection_log"]:
             inj = f"{s['median_injected_bytes']:,.0f} B"
-            zero = f"{s['n_zero_injection']}/{s['n_with_injection_log']}"
+            empty = f"{s['n_empty_packages']}/{s['n_prompt_packages']}"
+            lexical = f"{s['n_lexical_packages']}/{s['n_prompt_packages']}"
         else:
-            inj = zero = "— (no hooks)"
+            inj = empty = lexical = "— (no hooks)"
         lines.append(
-            f"| {arm} | {s['n_total']}/{s['n_clean']}/{s['n_flagged']}/{s['n_infra']} | "
+            f"| {arm} | {s['n_tasks']} | "
+            f"{s['n_total']}/{s['n_clean']}/{s['n_flagged']}/{s['n_infra']} | "
             f"{s['median_tokens']:,.0f} | {lo:,.0f}–{hi:,.0f} | {s['median_cache_read_tokens']:,.0f} | "
-            f"{inj} | {zero} | "
+            f"{inj} | {empty} | {lexical} | "
             f"{s['passes']}/{s['n_clean']} | {s['passes']}/{s['n_clean']+s['n_flagged']} | "
             f"{s['l1_only_rate']*100:,.0f}% (n={s['n_clean']}) | {s['false_done']}/{s['n_clean']} |"
         )
@@ -531,31 +678,46 @@ def report(base):
     for baseline in ("A0", "A5"):
         if baseline not in arms or "A1" not in arms:
             continue
-        deltas, skipped = token_deltas(runs, tasks, baseline)
+        cmp_tasks = task_sets[f"A1_vs_{baseline}"]
+        deltas, skipped = token_deltas(runs, cmp_tasks, baseline)
         lo, hi = paired_bootstrap(deltas)
         better, total = sign_test(deltas)
         note = f" ({len(skipped)} task(s) skipped for missing data: {skipped})" if skipped else ""
+        outside = [t for t in tasks if t not in cmp_tasks]
+        set_note = (
+            f" Task set: the {len(cmp_tasks)} task(s) run at both arms ({', '.join(cmp_tasks) or '—'})"
+            + (
+                f"; {', '.join(outside)} never ran {baseline} and "
+                f"{'is' if len(outside) == 1 else 'are'} not in this comparison."
+                if outside else "."
+            )
+        )
         # Carried on the line itself, not left to the arm table: a comparison where one arm was
-        # handed a zero-byte package on some runs is not a contrast between two rankings there,
-        # and a reader quoting this delta has to see that in the same sentence.
+        # handed an empty package, or a guess in place of a graph ranking, is not a contrast
+        # between two graph rankings there, and a reader quoting this delta has to see that in
+        # the same sentence.
         inj_note = "".join(
-            f" {a}: {arm_data[a]['n_zero_injection']}/{arm_data[a]['n_with_injection_log']} run(s) "
-            f"with a zero-byte injected package."
+            f" {a}: {arm_data[a]['n_empty_packages']} empty and "
+            f"{arm_data[a]['n_lexical_packages']} lexical of "
+            f"{arm_data[a]['n_prompt_packages']} injected package(s)."
             for a in ("A1", baseline)
-            if arm_data.get(a, {}).get("n_with_injection_log")
+            if arm_data.get(a, {}).get("n_prompt_packages")
         )
         lines.append(
             f"\n**A1 vs {baseline}, token cost** — median per-task delta {median(deltas):,.0f}, "
             f"95% CI [{lo:,.0f}, {hi:,.0f}], favourable (A1 cheaper) on {better}/{total} tasks"
-            f"{note}.{inj_note}"
+            f"{note}.{set_note}{inj_note}"
         )
         comparisons[f"A1_vs_{baseline}_tokens"] = {
             "deltas": deltas, "skipped_tasks": skipped,
+            "task_set": cmp_tasks, "n_task_set": len(cmp_tasks),
             "median_delta": median(deltas), "ci": [lo, hi],
             "sign_test": {"favourable": better, "total": total},
-            "zero_injection": {
+            "injection": {
                 a: {
-                    "n_zero_injection": arm_data[a]["n_zero_injection"],
+                    "n_empty_packages": arm_data[a]["n_empty_packages"],
+                    "n_lexical_packages": arm_data[a]["n_lexical_packages"],
+                    "n_prompt_packages": arm_data[a]["n_prompt_packages"],
                     "n_with_injection_log": arm_data[a]["n_with_injection_log"],
                 }
                 for a in ("A1", baseline)
@@ -565,7 +727,8 @@ def report(base):
 
     threshold = {}
     if "A0" in arms and "A1" in arms:
-        deltas, skipped = cps_reduction_deltas(runs, tasks, "A0")
+        t4_tasks = task_sets["A1_vs_A0"]
+        deltas, skipped = cps_reduction_deltas(runs, t4_tasks, "A0")
         lo, hi = paired_bootstrap(deltas)
         better, total = sign_test(deltas, favourable=lambda d: d > 0)
         med = median(deltas)
@@ -584,15 +747,21 @@ def report(base):
             gate_note = ""
         lines.append(
             f"\n**T4 (pre-registered): median CPS reduction ≥ 30% (A1 vs A0), 95% CI excluding "
-            f"zero.** Observed: {med:,.1f}% median reduction, 95% CI [{lo:,.1f}%, {hi:,.1f}%], "
+            f"zero.** **Task set: the {len(t4_tasks)} task(s) run at three arms "
+            f"({', '.join(t4_tasks) or '—'}) — not the T7 set below.** "
+            f"Observed: {med:,.1f}% median reduction, 95% CI [{lo:,.1f}%, {hi:,.1f}%], "
             f"favourable on {better}/{total} tasks{note}. "
-            f"**{'MEETS' if meets else 'does not meet'} T4**{gate_note} at n={total} tasks "
-            f"(minimum {MIN_T4_TASKS} required). "
+            f"**{'MEETS' if meets else 'does not meet'} T4**{gate_note} at n={total} of "
+            f"{len(t4_tasks)} tasks (minimum {MIN_T4_TASKS} required). "
             f"Reported against the threshold, not gated on it — five tasks cannot carry a "
             f"release gate."
         )
         threshold = {
             "deltas_pct": deltas, "skipped_tasks": skipped,
+            # `task_set`/`n_task_set` is the corpus this threshold is over; `n_tasks` is how many
+            # of those survived a defined CPS at both arms. They are different numbers and both
+            # belong in the record — collapsing them is how "5 tasks" and "7 tasks" become one.
+            "task_set": t4_tasks, "n_task_set": len(t4_tasks),
             "median_reduction_pct": med, "ci_pct": [lo, hi],
             "sign_test": {"favourable": better, "total": total},
             "n_tasks": total,
@@ -608,7 +777,8 @@ def report(base):
     # subset of one or two tasks is selection on outcome whatever it says.
     t7 = {}
     if "A5" in arms and "A1" in arms:
-        deltas, skipped = cps_reduction_deltas(runs, tasks, "A5")
+        t7_tasks = task_sets["A1_vs_A5"]
+        deltas, skipped = cps_reduction_deltas(runs, t7_tasks, "A5")
         lo, hi = paired_bootstrap(deltas)
         better, total = sign_test(deltas, favourable=lambda d: d > 0)
         # Ties are dropped from the sign test, not counted against either side.
@@ -625,25 +795,33 @@ def report(base):
         meets = enough_tasks and med > 0.0 and p < 0.10
         note = f" ({len(skipped)} task(s) skipped, CPS undefined: {skipped})" if skipped else ""
         gate_note = "" if enough_tasks else f" (fewer than {MIN_T4_TASKS} surviving tasks — not evaluated)"
-        a1_zero = arm_data.get("A1", {}).get("n_zero_injection", 0)
-        a5_zero = arm_data.get("A5", {}).get("n_zero_injection", 0)
+        a1 = arm_data.get("A1", {})
+        a5 = arm_data.get("A5", {})
         inj_note = (
-            f" **Injection:** A1 got a zero-byte package on {a1_zero} run(s), A5 on {a5_zero}. "
-            "A task where one arm was handed nothing is not a contrast between two rankings."
-            if (a1_zero or a5_zero) else ""
+            f" **Injection:** of A1's {a1.get('n_prompt_packages', 0)} injected package(s), "
+            f"{a1.get('n_empty_packages', 0)} were empty and "
+            f"{a1.get('n_lexical_packages', 0)} came from the lexical fallback — the graph "
+            f"anchored nothing there and BM25 over file contents was substituted, which is the "
+            f"same ranking A5 uses, so those tasks are a tie by construction and not a contrast "
+            f"between two rankings. A5: {a5.get('n_empty_packages', 0)} empty of "
+            f"{a5.get('n_prompt_packages', 0)} (all of A5's packages are lexical by design)."
+            if (a1.get("n_prompt_packages") or a5.get("n_prompt_packages")) else ""
         )
         lines.append(
             f"\n**T7 (pre-registered): A1 CPS < A5 CPS, sign test p < 0.10 across tasks.** "
+            f"**Task set: the {len(t7_tasks)} task(s) run at A1 and A5 "
+            f"({', '.join(t7_tasks) or '—'}) — a different, larger set than T4's above.** "
             f"Observed: {med:,.1f}% median CPS reduction vs A5, 95% CI [{lo:,.1f}%, {hi:,.1f}%], "
             f"favourable on {better}/{total} tasks (p = {p:.4f}, one-sided exact binomial over "
             f"{n_effective} non-tied task(s)){note}. "
-            f"**{'MEETS' if meets else 'does not meet'} T7**{gate_note} at n={total} tasks "
-            f"(minimum {MIN_T4_TASKS} required).{inj_note} "
+            f"**{'MEETS' if meets else 'does not meet'} T7**{gate_note} at n={total} of "
+            f"{len(t7_tasks)} tasks (minimum {MIN_T4_TASKS} required).{inj_note} "
             f"Reported against the threshold, not gated on it — but this is the comparison whose "
             f"pre-registered consequence is shipping BM25 and deleting the Context Engine."
         )
         t7 = {
             "deltas_pct": deltas, "skipped_tasks": skipped,
+            "task_set": t7_tasks, "n_task_set": len(t7_tasks),
             "median_reduction_pct": med, "ci_pct": [lo, hi],
             "sign_test": {"favourable": better, "total": total},
             "n_tasks": total,
@@ -670,6 +848,7 @@ def report(base):
         "ungraded_paths": ungraded,
         "tasks": tasks,
         "arms": arms,
+        "task_sets": {k: {"tasks": v, "n": len(v)} for k, v in task_sets.items()},
         "flag_counts": flag_counts,
         "arms_stats": arm_data,
         "comparisons": comparisons,
@@ -899,9 +1078,12 @@ def self_test():
     # -- Important 3: T4 must not declare victory off a single surviving task's point CI. --------
     _self_test_t4_min_tasks()
 
-    # -- C-1: what the hooks actually injected, including the zero-byte package and the arm ------
-    # -- that has no log at all. -----------------------------------------------------------------
+    # -- C-1: what the hooks actually injected — the empty package, the lexical fallback, and ----
+    # -- the arm that has no log at all. ----------------------------------------------------------
     _self_test_injection()
+
+    # -- #38: two thresholds, two task sets, each stated with its own sample size. ---------------
+    _self_test_task_sets()
 
     # -- I-3: T7, the A1-vs-A5 threshold the ship-or-delete decision is read from. ---------------
     _self_test_t7()
@@ -1020,42 +1202,113 @@ def _self_test_t4_min_tasks():
 
 
 def _self_test_injection():
-    """What each arm's hooks put into the turn, through report() itself.
+    """What each arm's hooks put into the turn, and *what kind of package it was*, through
+    report() itself.
 
-    The finding this exists to make unmissable (C-1): the engine seeds from identifiers, so a
-    prompt naming none produces a zero-byte package while the arm looks, from every other column,
-    like a treated arm. Three shapes are built by hand:
+    The old counter here counted zero-byte packages, to expose that the engine seeds from
+    identifiers and a prompt naming none got nothing. The lexical fallback changed what that
+    number means without changing the condition: A1 now almost always injects something, so a
+    zero count reads as good news while the graph is anchoring exactly as little as before. So
+    packages are classified, from the only evidence `injected.log` actually carries under the
+    arms' `--brief` hooks — each item's rendered `why`. (`basis.selection`, which names the
+    fallback outright, is a `--explain` line and is not in the log at all.)
 
-      * A1 rep 0: SessionStart 50 B + prompt package 100 B  -> 100
-      * A1 rep 1: SessionStart 50 B + prompt package   0 B  ->   0   <- the finding
-      * A1 rep 2: SessionStart 50 B + prompt package 200 B  -> 200
+    Seven A1 packages are built by hand across six reps, each rep's log preceded by a
+    SessionStart record:
 
-    median(100, 0, 200) = 100, one zero-injection run of three. Two mutants are caught by exact
-    value: counting SessionStart records too gives 150/50/250 -> median 150 and NO zero-injection
-    run at all (the finding erased); ignoring the log gives None.
+      rep | injected  | body                                   | kind    | why
+      ----|-----------|----------------------------------------|---------|--------------------
+       0  |    300 B  | two items, `seed:` and `downstream:`    | graph   | the engine path
+       1  |    200 B  | two items, both `bm25`, plus a footer   | lexical | the fallback fired
+       2  |      0 B  | nothing                                 | empty   | nothing was sent
+       3  |    250 B  | one `bm25` item and one `seed:` item    | graph   | a mixed package
+       4  |    120 B  | a scope warning, no items at all        | graph   | not a lexical guess
+       5  | 0 + 300 B | two prompt packages in one run          | empty,  | the counters are per
+          |           |                                         | graph   | package, not per run
 
-      * A0: no injected.log at all. Must not crash, must not read as a zero-injection run, and
-        must not enter the median as a 0 — "no hooks" and "the ranker selected nothing" are
-        different facts and the second is the one about the product.
+    Hand-computed: per-run bytes [300, 200, 0, 250, 120, 300] -> sorted
+    [0, 120, 200, 250, 300, 300] -> median 225 (rep 5's two packages sum, as they always have).
+    7 packages, 2 empty, 1 lexical. A5: 2 packages, both lexical, 400 B each -> median 400,
+    0 empty, 2 lexical. A0: no log at all -> None / 0 / 0.
+
+    Every SessionStart body here is written to *look* lexical (a `bm25` item at 50 B), which no
+    real SessionStart package contains — it is there so that a parser which fails to drop those
+    records is caught by value rather than by inspection.
+
+    The wrong implementations this discriminates against, each by an exact assertion:
+
+      * counting SessionStart records as packages     -> 13 packages, 7 lexical, median 275
+      * counting per run rather than per package (what the old zero-byte counter did) -> rep 5's
+        empty package hides behind its sibling's 300 bytes and the empty count reads 1, not 2
+      * `any(bm25)` instead of `all(bm25)`            -> 2 lexical (rep 3 wrongly included)
+      * dropping the `whys and` guard in package_kind -> 2 lexical (rep 4's empty item list
+        makes `all([])` True, so a package with no items at all reads as a lexical guess —
+        precisely the false good news this counter replaced)
+      * a loose item pattern that does not require the `file:line` anchor -> rep 1's footer line
+        ("considered 8 · included 2 · …") yields a non-`bm25` why, so rep 1 reads graph and the
+        lexical count drops to 0
+      * classifying from the byte count alone         -> 0 lexical
+      * keeping only the old zero-byte counter        -> KeyError / no lexical column at all
     """
     import io
     import tempfile
     from contextlib import redirect_stdout
 
-    def log(prompt_bytes):
-        return (
-            "=== SessionStart injected=50 bytes\n"
-            "Project: repo\n"
-            f"=== UserPromptSubmit prompt=93 injected={prompt_bytes} bytes\n"
-            "Code (0)\n"
-        )
+    session = (
+        "=== SessionStart injected=50 bytes\n"
+        "Code (1)\n"
+        "  crates/nexus-core/src/lib.rs      crates/nexus-core/src/lib.rs:1 · bm25 9.999\n"
+    )
+
+    def log(body):
+        return session + body
+
+    graph_pkg = (
+        "=== UserPromptSubmit prompt=93 injected=300 bytes\n"
+        "Code (2)\n"
+        "  com.acme.OrderService.cancel      src/main/java/OrderService.java:42 · seed: names OrderService\n"
+        "  com.acme.OrderRepo.find           src/main/java/OrderRepo.java:11 · downstream: via calls\n"
+    )
+    lexical_pkg = (
+        "=== UserPromptSubmit prompt=93 injected=200 bytes\n"
+        "Code (2)\n"
+        "  db/migration/V1__init.sql         db/migration/V1__init.sql:1 · bm25 4.312\n"
+        "  db/migration/V2__add.sql          db/migration/V2__add.sql:1 · bm25 2.008\n"
+        "  considered 8 · included 2 · excluded 6 · 100 of 4000 tokens\n"
+    )
+    empty_pkg = "=== UserPromptSubmit prompt=93 injected=0 bytes\n"
+    mixed_pkg = (
+        "=== UserPromptSubmit prompt=93 injected=250 bytes\n"
+        "Code (2)\n"
+        "  db/migration/V1__init.sql         db/migration/V1__init.sql:1 · bm25 4.312\n"
+        "  com.acme.OrderService.cancel      src/main/java/OrderService.java:42 · seed: names OrderService\n"
+    )
+    itemless_pkg = (
+        "=== UserPromptSubmit prompt=93 injected=120 bytes\n"
+        "Scope warning: the index covers 3 of 9 files\n"
+    )
+    a5_pkg = (
+        "=== UserPromptSubmit prompt=93 injected=400 bytes\n"
+        "Code (2)\n"
+        "  db/migration/V1__init.sql         db/migration/V1__init.sql:1 · bm25 4.312\n"
+        "  db/migration/V2__add.sql          db/migration/V2__add.sql:1 · bm25 2.008\n"
+    )
 
     with tempfile.TemporaryDirectory() as d:
         base = pathlib.Path(d)
         (base / "meta.json").write_text(json.dumps({"model": "claude-opus-5"}))
-        for rep, prompt_bytes in enumerate((100, 0, 200)):
+        # Rep 5's log carries two prompt packages, an empty one and a graph one. Nothing in the
+        # harness produces that today — `claude -p` fires UserPromptSubmit exactly once — but it
+        # is the only fixture that separates "how many packages were empty" from "how many runs
+        # injected zero bytes in total", and the counter claims to be the first.
+        two_packages = empty_pkg + graph_pkg
+        bodies = (graph_pkg, lexical_pkg, empty_pkg, mixed_pkg, itemless_pkg, two_packages)
+        for rep, body in enumerate(bodies):
             _write_run(base, "T", "A1", rep, tokens=(1000, 0, 0, 0), passed=True,
-                       injected_log=log(prompt_bytes))
+                       injected_log=log(body))
+        for rep in range(2):
+            _write_run(base, "T", "A5", rep, tokens=(1500, 0, 0, 0), passed=True,
+                       injected_log=a5_pkg)
         for rep in range(3):
             _write_run(base, "T", "A0", rep, tokens=(2000, 0, 0, 0), passed=False)
 
@@ -1066,21 +1319,170 @@ def _self_test_injection():
 
         summary = json.loads((base / "summary.json").read_text())
         a1 = summary["arms_stats"]["A1"]
-        assert a1["median_injected_bytes"] == 100, a1["median_injected_bytes"]
-        assert a1["n_zero_injection"] == 1, a1["n_zero_injection"]
-        assert a1["n_with_injection_log"] == 3, a1["n_with_injection_log"]
+        assert a1["median_injected_bytes"] == 225, a1["median_injected_bytes"]
+        assert a1["n_with_injection_log"] == 6, a1["n_with_injection_log"]
+        assert a1["n_prompt_packages"] == 7, a1["n_prompt_packages"]
+        assert a1["n_empty_packages"] == 2, a1["n_empty_packages"]
+        assert a1["n_lexical_packages"] == 1, a1["n_lexical_packages"]
+        # 7 packages over 6 runs: the unit is the package, not the run.
+        assert a1["n_prompt_packages"] > a1["n_with_injection_log"]
+        # The old counter is gone, not renamed alongside a stale twin: two counters for one
+        # condition is how a report comes to disagree with itself.
+        assert "n_zero_injection" not in a1, a1
+
+        a5 = summary["arms_stats"]["A5"]
+        assert a5["n_prompt_packages"] == 2, a5["n_prompt_packages"]
+        assert a5["n_lexical_packages"] == 2, "every A5 package is lexical by construction"
+        assert a5["n_empty_packages"] == 0, a5["n_empty_packages"]
 
         a0 = summary["arms_stats"]["A0"]
         assert a0["median_injected_bytes"] is None, a0["median_injected_bytes"]
-        assert a0["n_zero_injection"] == 0, "an arm with no hooks has no zero-injection runs"
         assert a0["n_with_injection_log"] == 0, a0["n_with_injection_log"]
+        assert a0["n_prompt_packages"] == 0, "an arm with no hooks has no packages at all"
+        assert a0["n_empty_packages"] == 0, "no hooks is not an empty package"
+        assert a0["n_lexical_packages"] == 0, a0["n_lexical_packages"]
 
-        # The number has to reach the page, not just summary.json: an operator reads the table.
+        # The numbers have to reach the page, not just summary.json: an operator reads the table.
         stdout = buf.getvalue()
-        assert "1/3" in stdout, stdout
-        assert "zero-byte injected package" in stdout, stdout
+        assert "| 2/7 | 1/7 |" in stdout, stdout          # A1: empty pkgs, lexical pkgs
+        assert "| 0/2 | 2/2 |" in stdout, stdout          # A5: none empty, all lexical
+        assert "lexical fallback" in stdout, stdout       # the T7 line names it
         # And the A0 column must say "no hooks", never a bare 0 that reads as a ranker failure.
         assert "— (no hooks)" in stdout, stdout
+
+    # The classifier itself, on the cases the tree above exercises through report(). Same
+    # expectations, stated where a reader can check them by eye.
+    assert package_kind(0, []) == "empty"
+    assert package_kind(0, ["bm25 1.0"]) == "empty"      # bytes decide "nothing was sent"
+    assert package_kind(200, ["bm25 4.3", "bm25 2.0"]) == "lexical"
+    assert package_kind(250, ["bm25 4.3", "seed:"]) == "graph"
+    assert package_kind(120, []) == "graph", "no items at all is not a lexical guess"
+    assert package_kind(300, ["seed:", "downstream:"]) == "graph"
+
+
+def _self_test_task_sets():
+    """The two thresholds rest on two task sets, and each must be computed over — and report —
+    its own.
+
+    Six tasks, deliberately asymmetric, exactly as the corpus is: P, Q, R and S run all three
+    arms; E1 and N1 run A1 and A5 only, because A0 contributes nothing to a ranking comparison.
+    Every cell is one rep and one clean pass unless the table says otherwise, so a cell's CPS is
+    its token count.
+
+        task | A0    | A1  | A5   | T4 reduction (A0-A1)/A0 | T7 reduction (A5-A1)/A5
+        -----|-------|-----|------|-------------------------|------------------------
+        E1   |  —    | 800 | 1000 | not in the T4 set       | 20%
+        N1   |  —    | 400 | 1000 | not in the T4 set       | 60%
+        P    | 1000  | 500 | 1000 | 50%                     | 50%
+        Q    | 1000  | 250 | 1000 | 75%                     | 75%
+        R    | fail  | 500 | 1000 | skipped: A0 CPS is inf  | 50%
+        S    | infra | 500 | 1000 | skipped: no A0 data     | 50%
+
+    Three shapes of "A0 has no usable number at this task", which must not collapse into each
+    other: E1/N1 (**never ran A0** — not in the corpus, not missing data), R (**ran and failed**
+    — CPS infinite), S (**ran and was killed by the harness** — its only A0 cell is infra, so it
+    IS in the corpus and IS missing data). S is the case the `tasks=` kwarg and
+    `comparison_task_set`'s "any run, infra included" rule both exist for, and the only fixture
+    where an arm's *entire* presence at a task is an infra run.
+
+    So T4's task set is 4 (P, Q, R, S) of which 2 survive. Its deltas are [50, 75], median 62.5,
+    and it does NOT meet T4: 2 surviving tasks is below MIN_T4_TASKS, however good 62.5% looks.
+    T7's task set is 6, all surviving, deltas in sorted-task order [20, 60, 50, 75, 50, 50] ->
+    sorted [20, 50, 50, 50, 60, 75] -> median 50, favourable 6 of 6, p = 1/64 = 0.015625 < 0.10
+    -> MEETS.
+
+    The wrong implementations this discriminates against:
+
+      * computing both thresholds over every task in the tree (what this file did before the
+        corpus went asymmetric) -> T4's task set is 6 and E1/N1 appear in its `skipped_tasks`
+        as missing data, which is the specific misreading — corpus shape reported as data loss
+      * a union instead of an intersection                 -> same, T4 n_task_set 6
+      * the two sets swapped                               -> T4 n_task_set 6, T7 4
+      * `n_task_set` collapsed onto `n_tasks` (surviving)  -> T4 n_task_set 2, not 4; R and S
+        exist in the corpus and were paid for, they just have no defined CPS
+      * `comparison_task_set` skipping infra runs when building membership -> S drops out of
+        T4's task set entirely and out of its `skipped_tasks`, so a task that was paid for and
+        lost to the harness reads as a task that was never in the corpus
+      * `arm_stats` deriving its task count from non-infra runs (i.e. dropping the `tasks=`
+        kwarg report() passes) -> A0's `n_tasks` reads 3, not 4, and the arm table under-counts
+        exactly the tasks the harness took away
+    """
+    import io
+    import tempfile
+    from contextlib import redirect_stdout
+
+    with tempfile.TemporaryDirectory() as d:
+        base = pathlib.Path(d)
+        (base / "meta.json").write_text(json.dumps({"model": "claude-opus-5"}))
+
+        for task, a1_tokens in (
+            ("P", 500), ("Q", 250), ("R", 500), ("S", 500), ("E1", 800), ("N1", 400)
+        ):
+            _write_run(base, task, "A1", 0, tokens=(a1_tokens, 0, 0, 0), passed=True)
+            _write_run(base, task, "A5", 0, tokens=(1000, 0, 0, 0), passed=True)
+        _write_run(base, "P", "A0", 0, tokens=(1000, 0, 0, 0), passed=True)
+        _write_run(base, "Q", "A0", 0, tokens=(1000, 0, 0, 0), passed=True)
+        # R's A0 cell ran and failed: CPS is infinite there, so R is genuinely skipped — a
+        # different fact from E1/N1, which never ran A0 at all.
+        _write_run(base, "R", "A0", 0, tokens=(1000, 0, 0, 0), passed=False)
+        # S's ONLY A0 cell was killed by the harness. That run was still paid for and S is still
+        # in T4's corpus; it belongs in the task set and in `skipped_tasks`, and in A0's arm-table
+        # task count. Deriving either from non-infra runs erases it.
+        _write_run(base, "S", "A0", 0, tokens=(0, 0, 0, 0), passed=False, claude_exit=124)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = report(base)
+        assert rc == 0, buf.getvalue()
+        stdout = buf.getvalue()
+
+        summary = json.loads((base / "summary.json").read_text())
+        assert summary["task_sets"] == {
+            "A1_vs_A0": {"tasks": ["P", "Q", "R", "S"], "n": 4},
+            "A1_vs_A5": {"tasks": ["E1", "N1", "P", "Q", "R", "S"], "n": 6},
+        }, summary["task_sets"]
+
+        t4 = summary["t4_threshold"]
+        assert t4["task_set"] == ["P", "Q", "R", "S"], t4["task_set"]
+        assert t4["n_task_set"] == 4, t4["n_task_set"]
+        # E1 and N1 are not in this comparison's corpus, so they are not "missing data" either.
+        # R and S are: one arm ran and could not pass, the other was killed mid-run.
+        assert t4["skipped_tasks"] == ["R", "S"], t4["skipped_tasks"]
+        assert t4["deltas_pct"] == [50.0, 75.0], t4["deltas_pct"]
+        assert t4["median_reduction_pct"] == 62.5, t4["median_reduction_pct"]
+        assert t4["n_tasks"] == 2, t4["n_tasks"]
+        assert t4["meets_t4"] is False, "2 surviving tasks is below MIN_T4_TASKS whatever the median"
+
+        t7 = summary["t7_threshold"]
+        assert t7["task_set"] == ["E1", "N1", "P", "Q", "R", "S"], t7["task_set"]
+        assert t7["n_task_set"] == 6, t7["n_task_set"]
+        assert t7["skipped_tasks"] == [], t7["skipped_tasks"]
+        assert t7["deltas_pct"] == [20.0, 60.0, 50.0, 75.0, 50.0, 50.0], t7["deltas_pct"]
+        assert t7["median_reduction_pct"] == 50.0, t7["median_reduction_pct"]
+        assert t7["n_tasks"] == 6 and t7["n_non_tied"] == 6, t7
+        assert t7["p_value"] == 1 / 64, t7["p_value"]
+        assert t7["meets_t7"] is True, t7
+
+        # The token comparisons are on their own task sets too, not on all six.
+        assert summary["comparisons"]["A1_vs_A0_tokens"]["n_task_set"] == 4
+        assert summary["comparisons"]["A1_vs_A5_tokens"]["n_task_set"] == 6
+
+        # Per-arm task counts, so the asymmetry is visible in the table itself and not only in
+        # the prose above it. A0's 4 includes S, whose only A0 run was infra: the harness took
+        # the measurement away, it did not take the task out of the corpus.
+        assert summary["arms_stats"]["A0"]["n_tasks"] == 4, summary["arms_stats"]["A0"]
+        assert summary["arms_stats"]["A0"]["n_infra"] == 1, summary["arms_stats"]["A0"]
+        assert summary["arms_stats"]["A1"]["n_tasks"] == 6
+        assert summary["arms_stats"]["A5"]["n_tasks"] == 6
+
+        # And a reader of the page — not of summary.json — must see both sizes stated beside the
+        # thresholds, or the whole change bought nothing.
+        assert "Task set: the 4 task(s) run at three arms (P, Q, R, S)" in stdout, stdout
+        assert "Task set: the 6 task(s) run at A1 and A5 (E1, N1, P, Q, R, S)" in stdout, stdout
+        assert "| A0 | 4 |" in stdout, stdout
+        assert "Two task sets, one corpus" in stdout, stdout
+        assert "E1, N1 joined for the ranking comparison only" in stdout, stdout
+        assert "not the T7 set below" in stdout and "a different, larger set than T4's" in stdout
 
 
 def _self_test_t7():
