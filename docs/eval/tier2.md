@@ -110,9 +110,9 @@ Filled in from `meta.json` and `summary.json` when a sweep completes.
 | | |
 |---|---|
 | Model | `claude-opus-5`, pinned; `sweep.sh` refuses anything else without `ALLOW_MODEL_OVERRIDE=1`, and refuses it unconditionally on resume |
-| Tasks | 5 — `A1-idempotency-key-length`, `A2-shared-type-change`, `B1-rename-crosses-the-seam`, `B2-orphaned-field-diagnosis`, `C1-regression-recognised` |
+| Tasks | 7 — `A1-idempotency-key-length`, `A2-shared-type-change`, `B1-rename-crosses-the-seam`, `B2-orphaned-field-diagnosis`, `C1-regression-recognised` at all three arms; `E1-untested-change`, `N1-null-task` at A1 and A5 only |
 | Arms | A0 bare · A1 Nexus · A5 BM25 lexical control |
-| Repetitions | 5 per (task × arm) — 75 paid runs |
+| Repetitions | 5 per (task × arm) — 95 paid runs (5×3×5 + 2×2×5) |
 | Stamp | *(from `meta.json`)* |
 | Nexus version | *(from `meta.json`)* |
 | Image id | *(from `meta.json`)* |
@@ -356,7 +356,7 @@ author's own*, is evidence. Read `tests/eval/hidden/README.md` before touching a
 ```bash
 make bench-image          # release binary + fixtures + the pinned run image
 ./scripts/eval/parity.sh  # 2 cheap paid runs: token accounting is identical across arms
-make bench                # 75 paid runs on claude-opus-5. Hours. Real money.
+make bench                # 95 paid runs on claude-opus-5. Hours. Real money.
 python3 scripts/eval/analyse.py docs/eval/runs/<stamp>
 ```
 
@@ -367,14 +367,14 @@ tested (2026-09-06, invalid token, no spend) and **breaks authentication outrigh
 reports `Not logged in · Please run /login` instead of even attempting the token, and the
 read-write control reaches `OAuth session expired and could not be refreshed`. So `:ro` is not
 available as a mitigation. It would not be the right one either — the container's copy is a copy,
-and the exposure is that a **refresh inside any of 75 root containers rotates the token
+and the exposure is that a **refresh inside any of 95 root containers rotates the token
 server-side**, which a read-only mount does not prevent. If that matters for your account, export
 `ANTHROPIC_API_KEY` before the sweep: `run.sh` passes it into the container, an API key is not
 rotated by use, and it can be revoked on its own.
 
 **Pre-flight.** `sweep.sh` runs `scripts/eval/test_grade.sh` before it spends anything and
 refuses to start if it fails. A grader stuck at `passed: false` reads as a devastating result
-for every arm rather than as a bug, and finding that out after 75 paid runs is the single most
+for every arm rather than as a bug, and finding that out after 95 paid runs is the single most
 expensive mistake available here. `--skip-gate` exists for a re-run where nothing about
 `grade.sh` changed.
 

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # The grader's own test. It is the one component whose bugs are invisible in the results: a
 # grader stuck at `passed: false` reads as a devastating result for every arm rather than as a
-# bug, and 75 paid runs would be spent before anyone noticed nothing was ever graded.
+# bug, and 95 paid runs would be spent before anyone noticed nothing was ever graded.
 #
 # So every case here has a known answer, and each asserts something the others cannot:
 #
+#   0. plan        not a grading at all: the sweep's own cell plan, which nothing else in this
+#                  repository executes. Free, and first for that reason.
 #   1. empty       an empty diff must fail — and must fail on L1 *only*. L0 and L2 true proves
 #                  the container, the mount and the build actually worked; a mechanical failure
 #                  would zero them too and be indistinguishable from a bad agent.
@@ -22,10 +24,12 @@
 #   7-9.           the three distinguishable outcomes of a red baseline: a project test that
 #                  genuinely failed, main sources that would not compile, and a build that never
 #                  ran. The third must not wear the costume of the first.
-#   10-11.         A2 and B2 on an empty diff — the only Gradle toolchain and the only
-#                  reflection-based hidden test, neither reached by any case above.
+#   10-13.         A2, B2, E1 and N1 on an empty diff — the two tasks no case above reaches at
+#                  all (the only Gradle toolchain, the only reflection-based hidden test), and
+#                  the two that joined the sweep last and whose hidden tests have never been run
+#                  through the grader.
 #
-# Runs eleven gradings, twenty-two containers, offline. Costs nothing but a few minutes.
+# Runs thirteen gradings, twenty-six containers, offline. Costs nothing but a few minutes.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -66,6 +70,26 @@ PY
 
 A1=A1-idempotency-key-length
 B1=B1-rename-crosses-the-seam
+
+# --- 0. the sweep's own cell plan ---------------------------------------------------------------
+
+# Free, so it runs first — ahead of every container, and ahead of anything that could spend.
+# Nothing else in this repository executes sweep.sh, and its per-task arm split is exactly the
+# mistake this file exists to catch before money moves: a typo in either arm of `arms_for`
+# silently hands an added task three arms, T4 quietly becomes a seven-task threshold instead of
+# a five-task one, and analyse.py — which derives each comparison's task set from the run tree —
+# reports an asymmetry that no longer exists. The error lands in the result, not in the harness.
+# DRY_RUN=1 prints the plan and exits before the guards, the gate and any docker call.
+PLAN="$(DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" | tail -n +2)"  # line 1 is the stamp line
+PLAN_CELLS="$(printf '%s\n' "$PLAN" | wc -l)"
+[ "$PLAN_CELLS" = 95 ] \
+  || { echo "FAIL [plan] the sweep plans $PLAN_CELLS cells, not 95 (5x3x5 + 2x2x5)" >&2; exit 1; }
+if printf '%s\n' "$PLAN" | grep -E '^(E1-untested-change|N1-null-task)/A0/'; then
+  echo "FAIL [plan] a ranking-only task is planned at A0 (printed above); T4's task set would" >&2
+  echo "silently become seven tasks instead of five and nothing in the output would say so." >&2
+  exit 1
+fi
+echo "ok   plan 95 cells, neither ranking-only task at A0"
 
 # --- 1. an empty diff must not pass ------------------------------------------------------------
 
@@ -222,14 +246,27 @@ assert_grade unrecognised \
   '"baseline-failure-unrecognised" in g["adjudicate"]' \
   '"graded-failure-unrecognised" in g["adjudicate"]'
 
-# --- 10-11. the two tasks the cases above never touch --------------------------------------------------
+# --- 10-13. the four tasks the cases above never touch -------------------------------------------------
 
 # A2 is the only Gradle toolchain and the only multi-module placement; B2 is the only hidden test
 # that reads its subject by reflection. A placement or collection regression in either yields
-# `passed: true` on an empty diff — a false green on 30 of the 75 runs, and nothing would look
-# wrong. Both are empty-diff cases: red on L1 alone, hidden test in the right place.
+# `passed: true` on an empty diff — a false green on 30 of the 95 runs, and nothing would look
+# wrong. All four are empty-diff cases: red on L1 alone, hidden test in the right place.
+#
+# E1 and N1 route exactly like case 1 — `mn.pay` in single-module spring-payments — so they add
+# no placement coverage, and while they were outside the sweep that made them not worth a case.
+# They are in the sweep now, at ten paid runs each, and what these two cases actually assert is
+# not routing but that each task's hidden test *compiles and fails red at its own start commit*.
+# Neither file had ever been compiled by the grader — they arrived with the tasks — and both say
+# in their own javadoc that they are written to compile where the fix does not exist yet and fail
+# on a named assertion instead, which is not a claim reading can check. Were it wrong, every one
+# of that task's ten runs would come back `hidden-test-compile-error`: unscoreable, and
+# discovered after paying. `adjudicate == []` below is the assertion that costs nothing and
+# buys that.
 for case in "A2-shared-type-change:libs/common/src/test/java/mn/acme/common/HiddenTest.java" \
-            "B2-orphaned-field-diagnosis:api/src/test/java/mn/shop/api/HiddenTest.java"; do
+            "B2-orphaned-field-diagnosis:api/src/test/java/mn/shop/api/HiddenTest.java" \
+            "E1-untested-change:src/test/java/mn/pay/HiddenTest.java" \
+            "N1-null-task:src/test/java/mn/pay/HiddenTest.java"; do
   task="${case%%:*}"
   mkdir -p "$TMP/$task"
   : > "$TMP/$task/diff.patch"
