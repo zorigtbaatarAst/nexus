@@ -165,6 +165,8 @@ print(' '.join(m.get('tasks', [])))
   if [ "$PREV_REPS" != "$REPS" ]; then
     echo "sweep.sh: $BASE was stamped with reps=$PREV_REPS, but this invocation is using" >&2
     echo "reps=$REPS. Resuming at a different rep count gives one sweep two sample sizes." >&2
+    echo "To resume this sweep: re-run with REPS=$PREV_REPS. To take more repetitions, start a" >&2
+    echo "fresh stamp (unset STAMP) at the rep count you want; do not extend this one in place." >&2
     exit 1
   fi
   # A subset, deliberately, not equality: `TASKS=` naming one task is the documented way to
@@ -178,8 +180,10 @@ print(' '.join(m.get('tasks', [])))
         *" $task "*) ;;
         *)
           echo "sweep.sh: $BASE was stamped for tasks: $PREV_TASKS" >&2
-          echo "$task is not one of them. Refusing to add a task to a sweep already in progress;" >&2
-          echo "run it under its own stamp. A subset of the stamped tasks resumes normally." >&2
+          echo "$task is not one of them. Refusing to add a task to a sweep already in progress." >&2
+          echo "To resume this sweep: pass TASKS= naming only stamped tasks, or omit it. To run" >&2
+          echo "$task, start a fresh stamp (unset STAMP) — a task added here would enlarge the" >&2
+          echo "corpus analyse.py derives T4's and T7's task sets from, with nothing reporting it." >&2
           exit 1
           ;;
       esac
