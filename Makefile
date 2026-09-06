@@ -61,9 +61,15 @@ bench-image: release fixtures
 # The Tier 2 benchmark: 75 agent runs in containers, real money, hours. Never part of
 # `make check` — see docs/architecture-decisions.md and .superpowers/sdd/2026-09-04-tier2-benchmark/.
 # sweep.sh is resumable and gates on scripts/eval/test_grade.sh before spending anything, so
-# re-running this after an interruption is the expected way to finish a sweep, not a mistake.
+# re-running this after an interruption is the expected way to finish a sweep, not a mistake —
+# but only with the SAME stamp. Without one, sweep.sh mints a fresh stamp, starts a new run
+# tree, and pays for every cell that was already done:
+#
+#   make bench STAMP=<the stamp the first invocation printed>
+#
+# An unset STAMP expands to empty, so a first run still mints its own.
 bench: bench-image
-	./scripts/eval/sweep.sh
+	STAMP="$(STAMP)" ./scripts/eval/sweep.sh
 
 install: release
 	install -Dm755 $(BIN) $(PREFIX)/bin/nexus

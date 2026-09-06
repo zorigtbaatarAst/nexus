@@ -15,6 +15,9 @@ GATE="$ROOT/scripts/eval/test_grade.sh"
 
 STAMP="${STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
 BASE="$ROOT/docs/eval/runs/$STAMP"
+# Printed first, and printed on every invocation: an interrupted sweep is resumed by passing
+# this stamp back, and an operator who cannot find it re-pays for every completed cell.
+echo "sweep.sh: STAMP=$STAMP — resume this sweep with: make bench STAMP=$STAMP"
 REPS="${REPS:-5}"
 IMAGE="${IMAGE:-nexus-bench:latest}"
 NEXUS_BIN="$ROOT/target/release/nexus"

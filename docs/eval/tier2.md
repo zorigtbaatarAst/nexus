@@ -28,7 +28,8 @@ nexus context --task "$CLAUDE_USER_PROMPT" --budget 4000 --brief 2>/dev/null || 
 Claude Code 2.1.261 does not set `$CLAUDE_USER_PROMPT`. The prompt arrives on the hook's
 **stdin, as JSON**. The variable expands to empty, `nexus context --task ""` selects nothing,
 and the hook injects zero bytes on every prompt — while exiting 0, so nothing anywhere reports
-a problem. This repository's own `.claude/settings.json:30` carries the same string. The doc
+a problem. This repository's own `.claude/settings.json:30` carries the same defect — the same dead
+`$CLAUDE_USER_PROMPT`, without the `--brief`. The doc
 comment above the constant states both mechanisms in consecutive sentences, which is how the
 wrong one survived.
 
@@ -106,8 +107,11 @@ The same two rows carry the caching warning below in miniature: A1 read more tok
 and paid **44 % less in dollars**, because more of its prefix landed in cache reads. On a
 single trivial prompt that is noise; across a sweep it is the reason both numbers are reported.
 
-Re-run it with `./scripts/eval/parity.sh` (two paid runs on a cheap model), or
-`REUSE=1 ./scripts/eval/parity.sh` to re-assert against an existing output directory for free.
+Re-run it with `./scripts/eval/parity.sh` — which always pays for two fresh runs on a cheap
+model, because reusing whatever is on disk would return `parity ok` for a `run.sh` it never
+ran. `REUSE=1 ./scripts/eval/parity.sh` re-asserts against an existing output directory for
+free, and `./scripts/eval/parity_selftest.sh` mutation-tests the assertions themselves without
+spending anything.
 
 ### Cache reads are counted at full weight
 
@@ -187,9 +191,10 @@ one nobody read closely.)*
 
 ### What the method got wrong before any money was spent
 
-Evidence about the instrument, kept because it is the strongest thing this build produced.
-Every one of these was in the plan text as a finished artefact, and every one was caught only
-by writing a *different* correct fix and running it:
+Evidence about the instrument, kept because it is the strongest thing this build produced. Each
+was a finished artefact — four of them written into the plan text — and none was caught by
+reading it. The first four were caught by writing a *different* correct fix and running it; the
+last two by a smoke run and by opening the `pom.xml`:
 
 - **The B2 hidden test was green at its own start commit.** It never read the Java side. It
   would have graded nothing across 15 paid runs and reported a perfect score for every arm.
@@ -225,16 +230,16 @@ for every arm rather than as a bug, and finding that out after 75 paid runs is t
 expensive mistake available here. `--skip-gate` exists for a re-run where nothing about
 `grade.sh` changed.
 
-**Resuming.** `sweep.sh` is resumable, and re-running it is the expected way to finish an
-interrupted sweep — **but it resumes only when you pass the original stamp**:
+**Resuming.** The sweep is resumable, and re-running it is the expected way to finish an
+interrupted one — **but only with the original stamp**:
 
 ```bash
-STAMP=20260906T101500Z ./scripts/eval/sweep.sh
+make bench STAMP=20260906T101500Z
 ```
 
-`make bench` takes no stamp and `STAMP` defaults to the current UTC time, so `make bench` after
-an interruption starts a *new* run tree and pays for every cell again. Note the stamp the first
-invocation prints.
+Without a stamp the sweep mints a fresh one, starts a *new* run tree, and pays again for every
+cell that was already done. `sweep.sh` prints its stamp as its first line, on every invocation,
+for exactly this reason.
 
 Within a stamp, each cell is one of:
 
@@ -250,5 +255,8 @@ and the message you see says only that. Check the account's billing for the run,
 delete `.run-started` to pay for the cell again or leave the cell out of the sweep. Guessing
 either way silently double-charges or silently drops a run, which is why it stops.
 
-`meta.json` pins the image id, the nexus version and the model at the top of the run tree, and
-a resume that disagrees with any of them is refused rather than half-mixed in.
+`meta.json` pins the image id, the nexus version and the model at the top of the run tree. A
+resume that disagrees with **the image or the model** is refused rather than half-mixed in; the
+nexus version is stamped and never compared, and the resume invocation above skips
+`bench-image`, so that is precisely the path where the host binary can differ from the version
+the tree claims.

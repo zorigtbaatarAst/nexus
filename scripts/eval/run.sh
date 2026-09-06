@@ -36,6 +36,15 @@ read -r REPO COMMIT PROMPT < <(python3 "$ROOT/scripts/eval/task_lookup.py" "$TAS
 # so on stderr and leaves a marker in the output directory, so a run tree carrying one is
 # identifiable afterwards rather than merely wrong.
 if [ -n "${BENCH_PROMPT:-}" ]; then
+  # A stderr line is easy to lose in a multi-hour sweep and nothing reads the marker, so a run
+  # tree is refused outright rather than merely annotated.
+  case "$OUT" in
+    */docs/eval/runs/*)
+      echo "run.sh: BENCH_PROMPT is set and $OUT is a sweep run tree. An override prompt there" >&2
+      echo "would silently measure a different task than the tree claims. Refusing." >&2
+      exit 1
+      ;;
+  esac
   echo "run.sh: BENCH_PROMPT is set — running an override prompt, NOT $TASK's own" >&2
   PROMPT="$BENCH_PROMPT"
   touch "$OUT/.prompt-override"

@@ -18,11 +18,12 @@
 # select nothing and A1 injects zero bytes — a healthy hook with nothing to say, which is
 # exactly the state this check must not mistake for a dead one.
 #
-# Cost: two paid `claude -p` runs. Cheap model by default; re-running the assertions against an
-# existing output directory is free (see REUSE below).
+# Cost: two paid `claude -p` runs, on a cheap model by default. The bare invocation always pays;
+# re-asserting against runs already on disk is free but has to be asked for.
 #
 #   ./scripts/eval/parity.sh              # two paid runs, then assert
 #   REUSE=1 ./scripts/eval/parity.sh      # assert against an existing $OUT, spend nothing
+#   ./scripts/eval/parity_selftest.sh     # the assertions' own mutation test, free
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -48,14 +49,16 @@ something to select: idempotency key length, Payment entity, PaymentService, Pay
 payment migration schema.}"
 export BENCH_PROMPT
 
-if [ -s "$OUT/A0/usage.json" ] && [ -s "$OUT/A1/usage.json" ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "parity.sh: $OUT already holds both arms — asserting against them, spending nothing."
-  echo "parity.sh: FORCE=1 to pay for two fresh runs."
-else
-  if [ "${REUSE:-0}" = "1" ]; then
+# The bare invocation always pays. Reusing whatever is already in $OUT by default would mean
+# that changing run.sh and re-running the R-b check returns `parity ok` from a week-old
+# directory, having measured nothing — silence in exactly the place this check exists to break.
+if [ "${REUSE:-0}" = "1" ]; then
+  if [ ! -s "$OUT/A0/usage.json" ] || [ ! -s "$OUT/A1/usage.json" ]; then
     echo "parity.sh: REUSE=1 but $OUT does not hold both arms' usage.json" >&2
     exit 1
   fi
+  echo "parity.sh: REUSE=1 — asserting against the runs already in $OUT, spending nothing."
+else
   echo "parity.sh: two paid runs on $MODEL — $TASK, arms A0 and A1, override prompt."
   rm -rf "$OUT"
   mkdir -p "$OUT"
@@ -187,16 +190,21 @@ if worked:
         f"injected package. INCONCLUSIVE on magnitude; the field parity above still holds."
     )
 else:
-    # A floor, not an estimate: English runs about 4 characters per token and the package is
-    # denser than English (paths, camelCase identifiers), which tokenises to *more* tokens per
-    # character, so 8 leaves roughly a factor of two of headroom below what is expected.
+    # Bounded on both sides, because the asymmetric direction is R-b itself: an A0 whose cache
+    # counters are not being recorded, or an A1 charged for something that is not the package,
+    # both make A1 look larger — and a lower bound alone calls that `parity ok`.
+    #
+    # The floor is loose: English runs about 4 characters per token and the package is denser
+    # than English (paths, camelCase identifiers), which tokenises to *more* tokens per
+    # character, so 8 leaves roughly a factor of two of headroom. The ceiling is exact rather
+    # than loose — no text tokenises to more tokens than it has bytes.
     floor = injected_bytes / 8
     delta = input_side(a1) - input_side(a0)
     check(
-        delta >= floor,
-        f"A1 injected {injected_bytes:,} bytes but its input-side total exceeds A0's by only "
-        f"{delta:,} tokens (floor {floor:,.0f}). The injected package is not being charged to "
-        f"A1 the way A0's prompt is charged to A0 — which is R-b.",
+        floor <= delta <= injected_bytes,
+        f"A1 injected {injected_bytes:,} bytes and its input-side total exceeds A0's by "
+        f"{delta:,} tokens, outside [{floor:,.0f}, {injected_bytes:,}]. The difference between "
+        f"the arms is not the injected package — which is R-b, in whichever direction it went.",
     )
 
 # --- report ------------------------------------------------------------------------------------
