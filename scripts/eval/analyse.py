@@ -19,21 +19,27 @@ any different:
     total is cheap re-reads rather than fresh spend.
 
   * Runs that did not happen. `claude_exit` 124 (timeout), 137 (OOM-killed) or -1 (the
-    container never got far enough to record a status) all come with all-zero token counts.
-    Taking a median over those zeros drags every arm's number down by however many of these it
-    has, which is not a fact about the arm — it is a fact about the harness that day. These are
-    dropped before any statistic below is computed, and the count is reported per arm so a
-    systematic pattern (one arm always timing out) stays visible instead of vanishing into a
-    lower median.
+    container never got far enough to record a status) all come with all-zero token counts —
+    and so does any other nonzero exit that still spent nothing ("anything else a crash", per
+    run.sh's own comment). Taking a median over those zeros drags every arm's number down by
+    however many of these it has, which is not a fact about the arm — it is a fact about the
+    harness that day. These are dropped before any statistic below is computed, and the count
+    is reported per arm so a systematic pattern (one arm always timing out) stays visible
+    instead of vanishing into a lower median.
 
   * Runs whose grade is not a clean measurement. `grade.json`'s `adjudicate` array (see
     `scripts/eval/grade.sh`) flags a run where L0/L1/L2 answer a question other than "did the
     agent's fix work" — a red baseline that makes L1 unattributable, a hidden test that failed
-    to compile rather than to pass, a build failure grade.sh could not explain. These runs did
-    spend real tokens, so they are not "infra" in the sense above and their tokens still count
-    as spend. But `passed` on a flagged run is not trustworthy, so flagged runs are dropped from
-    every *correctness* number (pass rate, the L1-only rate, and the denominator of CPS) and
-    reported separately instead. See ADJUDICATE_MEANING below for what each flag means.
+    to compile rather than to pass, a build failure grade.sh could not explain (or, for
+    `collateral-unknown-build-failed` specifically, one it explained perfectly well: the agent's
+    own diff doesn't compile, a trustworthy False that just leaves L2 unmeasured). These runs
+    did spend real tokens, so they are not "infra" in the sense above. Charging that spend
+    against zero credit is not free of judgment either — a `hidden-test-compile-error` is a
+    legitimate fix the grader can't score — so this script reports both bounds rather than
+    picking one: `cps` counts the spend against clean passes, `cps_clean_only` excludes flagged
+    runs' spend entirely, and both `pass_rate` (flagged excluded) and
+    `pass_rate_with_flagged_as_fail` (flagged counted as failures) are reported side by side.
+    See ADJUDICATE_MEANING below for what each flag means.
 """
 import json
 import math
@@ -46,6 +52,18 @@ import sys
 # (the container did not even get that far). All three come with all-zero usage.json fields.
 INFRA_EXIT_CODES = {-1, 124, 137}
 
+# A grade.json missing any of these is not "a run that failed" — it is a field grade.sh no
+# longer writes, and every .get() downstream would default it falsy, silently converting a
+# whole sweep into failures across every arm the moment grade.sh's schema drifts. Checked in
+# load(), which fails loudly and names the path rather than letting that happen quietly.
+REQUIRED_GRADE_KEYS = {"passed", "L0_build", "L1_hidden", "L2_collateral", "adjudicate"}
+
+# Five real tasks total. A single surviving task after the others are skipped for undefined CPS
+# has a bootstrap CI that is a single point by construction (every resample draws that one
+# value) — trivially "excludes zero" and proves nothing about the arm. T4 requires at least this
+# many surviving tasks before "meets" can be True at all.
+MIN_T4_TASKS = 3
+
 # What each adjudicate flag means, so the report can explain itself rather than just listing
 # strings. Kept in sync with scripts/eval/grade.sh, which is the only writer of these values.
 ADJUDICATE_MEANING = {
@@ -57,8 +75,10 @@ ADJUDICATE_MEANING = {
         "to the hidden tests alone",
     "hidden-test-compile-error": "the baseline compiled and the graded tree did not — a "
         "legitimate fix that broke the hidden test's own compilation",
-    "collateral-unknown-build-failed": "the baseline did not compile for an unrecognised "
-        "reason, so L2 (its own tests) was never actually measured",
+    "collateral-unknown-build-failed": "the baseline (start commit + the agent's own diff) "
+        "failed a *recognised* compiler check — L0 and L2 are both False, and L0 is a "
+        "trustworthy False (the agent's code does not compile). L2 specifically never got to "
+        "run any tests, so it is not a measurement, but `passed` is correctly False either way",
     "diff-did-not-apply": "graded against the unpatched tree; L1 fails by construction and "
         "says nothing about the diff the agent actually produced",
 }
@@ -126,8 +146,18 @@ def run_total_tokens(run):
 
 
 def is_infra(run):
-    """Did not really happen: killed before it could do or record anything."""
-    return run.get("claude_exit") in INFRA_EXIT_CODES
+    """Did not really happen: killed before it could do or record anything.
+
+    124/137/-1 are the named cases, but run.sh's own comment is blunter: "anything else a
+    crash" also produces zero tokens. A `claude_exit` of 1, 2, or anything nonzero that still
+    left every token counter at zero is the same non-event under a different number — it must
+    not be folded into medians as though it were a genuine zero-cost success. A nonzero exit
+    that *did* spend tokens (a real, if failed, attempt) is not infra; that run happened and its
+    cost is real.
+    """
+    if run.get("claude_exit") in INFRA_EXIT_CODES:
+        return True
+    return run.get("claude_exit", 0) != 0 and run.get("total_tokens", 0) == 0
 
 
 def is_flagged(run):
@@ -161,8 +191,16 @@ def load(base):
             continue
         u = json.loads(usage_path.read_text())
         g = json.loads(grade_path.read_text())
+        missing = REQUIRED_GRADE_KEYS - g.keys()
+        if missing:
+            sys.exit(
+                f"analyse.py: {grade_path} is missing required field(s) {sorted(missing)} — "
+                f"refusing to guess. A grade.sh field rename must fail loudly here, not turn "
+                f"every run into a silent clean failure downstream."
+            )
         run = {**u, **g}
         run["total_tokens"] = run_total_tokens(u)
+        run["cost_usd"] = u.get("total_cost_usd", 0.0)
         run["path"] = str(usage_path.parent.relative_to(base))
         runs.append(run)
     return runs, ungraded
@@ -193,14 +231,32 @@ def check_model(base, runs):
 # ---------------------------------------------------------------------------
 
 
-def arm_cps(rs):
-    """Cost per success over `rs`: total tokens actually spent (every non-infra run, flagged
-    ones included — that spend happened) divided by the count of *clean* passes (flagged runs
-    never count as a pass, whatever `passed` says). Infinite if there is no clean pass.
+def _cps(spend, passes):
+    return float("inf") if passes == 0 else spend / passes
+
+
+def arm_cps(rs, field="total_tokens"):
+    """Cost per success over `rs`: `field` actually spent (every non-infra run, flagged ones
+    included — that spend happened) divided by the count of *clean* passes (flagged runs never
+    count as a pass, whatever `passed` says). Infinite if there is no clean pass.
+
+    This bounds one edge rather than resolving it: charging a flagged run's spend against zero
+    credit penalises an arm for the grader's own limitation (a `hidden-test-compile-error` is
+    documented as a legitimate fix the grader simply can't score). `arm_cps_clean_only` is the
+    other bound — spend and passes both restricted to clean runs — so a reader gets both ends
+    rather than one number presented as settled.
     """
     passes = sum(1 for r in rs if is_clean(r) and r.get("passed"))
-    spend = sum(r["total_tokens"] for r in rs)
-    return float("inf") if passes == 0 else spend / passes
+    spend = sum(r.get(field, 0) for r in rs)
+    return _cps(spend, passes)
+
+
+def arm_cps_clean_only(rs, field="total_tokens"):
+    """The other bound: flagged runs' spend excluded entirely, not just their pass credit."""
+    clean = [r for r in rs if is_clean(r)]
+    passes = sum(1 for r in clean if r.get("passed"))
+    spend = sum(r.get(field, 0) for r in clean)
+    return _cps(spend, passes)
 
 
 def arm_stats(rs, n_infra):
@@ -209,10 +265,12 @@ def arm_stats(rs, n_infra):
     flagged = [r for r in rs if is_flagged(r)]
     toks = [r["total_tokens"] for r in rs]
     cache = [r.get("cache_read_tokens", 0) for r in rs]
+    costs = [r.get("cost_usd", 0.0) for r in rs]
     lo, hi = iqr(toks)
     passes = sum(1 for r in clean if r.get("passed"))
     l1 = sum(1 for r in clean if r.get("L1_hidden"))
     false_done = sum(1 for r in clean if r.get("claimed_done") and not r.get("passed"))
+    correctness_n = len(clean) + len(flagged)  # flagged counted as failures in the second rate
     return {
         "n_total": len(rs) + n_infra,
         "n_infra": n_infra,
@@ -220,13 +278,21 @@ def arm_stats(rs, n_infra):
         "n_clean": len(clean),
         "median_tokens": median(toks),
         "iqr_tokens": [lo, hi],
+        "max_run_tokens": max(toks) if toks else 0,
         "median_cache_read_tokens": median(cache),
+        "median_cost_usd": median(costs),
         "passes": passes,
         "pass_rate": passes / len(clean) if clean else 0.0,
+        # The mirror image of excluding flagged runs from the denominator: what the pass rate
+        # looks like if every flagged run is instead charged as a failure. Neither is "the" pass
+        # rate; printing both is how a flagged run avoids silently reading as a clean anything.
+        "pass_rate_with_flagged_as_fail": passes / correctness_n if correctness_n else 0.0,
         "l1_only_rate": l1 / len(clean) if clean else 0.0,
         "false_done": false_done,
         "false_done_rate": false_done / len(clean) if clean else 0.0,
         "cps": arm_cps(rs),
+        "cps_clean_only": arm_cps_clean_only(rs),
+        "cps_usd": arm_cps(rs, field="cost_usd"),
     }
 
 
@@ -306,12 +372,14 @@ def report(base):
 
     lines.append(
         f"_Runs with `claude_exit` in {sorted(INFRA_EXIT_CODES)} (timeout / OOM-killed / never "
-        "started) have all-zero token counts and did not really happen; they are dropped before any "
+        "started), or any other non-zero exit that still left every token counter at zero (a "
+        "crash — run.sh's own words), did not really happen; they are dropped before any "
         "statistic below, per arm, so a systematic pattern stays visible instead of dragging a "
         "median down. Runs flagged by `adjudicate` spent real tokens but their `passed`/"
-        "`L1_hidden` is not trustworthy; their tokens still count as spend, but they are "
-        "excluded from every correctness number (pass rate, the L1-only rate, and the pass "
-        "count CPS divides by)._\n"
+        "`L1_hidden` is not trustworthy; their tokens still count toward the main CPS's spend "
+        "(see `CPS (clean-only)` for the bound that excludes them entirely), and both a "
+        "pass rate that excludes them and one that counts them as failures are reported side "
+        "by side so neither reading is silently the only one offered._\n"
     )
     lines.append(
         "_`L1_hidden` is `L0 ∧ L2 ∧ hidden`, not an independent measurement — the \"L1-only "
@@ -336,18 +404,41 @@ def report(base):
 
     lines.append(
         "| arm | n (total/clean/flagged/infra) | median tokens | IQR | median cache-read | "
-        "pass rate | L1-only rate | CPS | false-done |"
+        "pass rate (clean) | pass rate (flagged=fail) | L1-only rate | false-done |"
     )
     lines.append("|---|---|---|---|---|---|---|---|---|")
     for arm in arms:
         s = arm_data[arm]
         lo, hi = s["iqr_tokens"]
-        cps_str = "inf" if math.isinf(s["cps"]) else f"{s['cps']:,.0f}"
         lines.append(
             f"| {arm} | {s['n_total']}/{s['n_clean']}/{s['n_flagged']}/{s['n_infra']} | "
             f"{s['median_tokens']:,.0f} | {lo:,.0f}–{hi:,.0f} | {s['median_cache_read_tokens']:,.0f} | "
-            f"{s['passes']}/{s['n_clean']} | {s['l1_only_rate']*100:,.0f}% (n={s['n_clean']}) | "
-            f"{cps_str} | {s['false_done']}/{s['n_clean']} |"
+            f"{s['passes']}/{s['n_clean']} | {s['passes']}/{s['n_clean']+s['n_flagged']} | "
+            f"{s['l1_only_rate']*100:,.0f}% (n={s['n_clean']}) | {s['false_done']}/{s['n_clean']} |"
+        )
+
+    lines.append(
+        "\n**Cost detail** — CPS brackets the flagged-spend question with two numbers rather "
+        "than settling it (see the caveat above); `max run tokens` names the single largest "
+        "contributor to the median-tokens column, since CPS is a ratio of sums (a mean in "
+        "disguise) and one thrashing run can move it while the median holds steady; the two "
+        "dollar columns come straight from `total_cost_usd` in `usage.json` — the API's own "
+        "price-weighted figure, which already weights a cache read at its real ~0.1x — so they "
+        "read $0.00 rather than erroring under subscription auth, where the API reports no "
+        "per-call price.\n"
+    )
+    lines.append(
+        "| arm | CPS (all spend) | CPS (clean-only) | max run tokens | median $/run | CPS ($) |"
+    )
+    lines.append("|---|---|---|---|---|---|")
+    for arm in arms:
+        s = arm_data[arm]
+        cps_str = "inf" if math.isinf(s["cps"]) else f"{s['cps']:,.0f}"
+        cps_clean_str = "inf" if math.isinf(s["cps_clean_only"]) else f"{s['cps_clean_only']:,.0f}"
+        cps_usd_str = "inf" if math.isinf(s["cps_usd"]) else f"${s['cps_usd']:,.4f}"
+        lines.append(
+            f"| {arm} | {cps_str} | {cps_clean_str} | {s['max_run_tokens']:,.0f} | "
+            f"${s['median_cost_usd']:,.4f} | {cps_usd_str} |"
         )
 
     if flag_counts:
@@ -391,13 +482,25 @@ def report(base):
         lo, hi = paired_bootstrap(deltas)
         better, total = sign_test(deltas, favourable=lambda d: d > 0)
         med = median(deltas)
-        meets = bool(deltas) and med >= 30.0 and lo > 0.0
+        # A task is skipped here precisely when one arm's CPS was infinite at it — often the
+        # tasks the arms differ *most* on. Skipping them and then declaring victory on whatever
+        # is left is selection on outcome, and with few enough tasks left the CI collapses to a
+        # single point (every bootstrap resample draws the same one value) that trivially
+        # "excludes zero" without meaning anything. MIN_T4_TASKS blocks that regardless of how
+        # good the surviving numbers look.
+        enough_tasks = len(deltas) >= MIN_T4_TASKS
+        meets = enough_tasks and med >= 30.0 and lo > 0.0
         note = f" ({len(skipped)} task(s) skipped, CPS undefined: {skipped})" if skipped else ""
+        if not enough_tasks:
+            gate_note = f" (fewer than {MIN_T4_TASKS} surviving tasks — not evaluated)"
+        else:
+            gate_note = ""
         lines.append(
             f"\n**T4 (pre-registered): median CPS reduction ≥ 30% (A1 vs A0), 95% CI excluding "
             f"zero.** Observed: {med:,.1f}% median reduction, 95% CI [{lo:,.1f}%, {hi:,.1f}%], "
             f"favourable on {better}/{total} tasks{note}. "
-            f"**{'MEETS' if meets else 'does not meet'} T4** at n={total} tasks. "
+            f"**{'MEETS' if meets else 'does not meet'} T4**{gate_note} at n={total} tasks "
+            f"(minimum {MIN_T4_TASKS} required). "
             f"Reported against the threshold, not gated on it — five tasks cannot carry a "
             f"release gate."
         )
@@ -405,6 +508,8 @@ def report(base):
             "deltas_pct": deltas, "skipped_tasks": skipped,
             "median_reduction_pct": med, "ci_pct": [lo, hi],
             "sign_test": {"favourable": better, "total": total},
+            "n_tasks": total,
+            "min_tasks_required": MIN_T4_TASKS,
             "meets_t4": meets,
         }
 
@@ -430,8 +535,27 @@ def report(base):
         "comparisons": comparisons,
         "t4_threshold": threshold,
     }
-    (base / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    # An infinite CPS (no clean pass in an arm) is the *designed* representation of "nothing
+    # passed", and Python's json module happily emits the bare token `Infinity` for it by
+    # default — not valid JSON per RFC 8259. `jq` reads it back as a float silently; a strict
+    # parser (JSON.parse, most typed languages) throws. allow_nan=False turns that into a loud
+    # ValueError here instead of a downstream parse failure days later, and _json_safe removes
+    # the cause by writing `null` (the adjacent `passes`/`n_clean` fields explain why).
+    (base / "summary.json").write_text(json.dumps(_json_safe(summary), indent=2, allow_nan=False) + "\n")
     return 0
+
+
+def _json_safe(value):
+    """Recursively replace non-finite floats (inf, -inf, nan) with None, so the emitted JSON
+    is valid RFC 8259 rather than the `Infinity`/`NaN` tokens Python's json module allows by
+    default. Everything else passes through unchanged."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -547,6 +671,61 @@ def self_test():
     # flagged run's *pass* status would still give 1 pass here since it's not passed anyway, but
     # the numerator must not silently drop the flagged run's spend.
     assert stats["cps"] == 3100 / 1, stats["cps"]
+    # Important 5: the other bound. Excluding the flagged run's spend entirely (not just its
+    # pass credit) drops the numerator to clean_pass + clean_fail = 2200, same 1 pass.
+    assert stats["cps_clean_only"] == 2200 / 1, stats["cps_clean_only"]
+    # Important 1: the mirror image of excluding a flagged run from the denominator is printing
+    # what the rate looks like if it's counted as a failure instead — neither is "the" rate.
+    # clean-only: 1 pass / 2 clean = 0.5 (asserted above as stats["pass_rate"]). Counting the
+    # flagged run as a failure too: 1 pass / 3 (2 clean + 1 flagged).
+    assert abs(stats["pass_rate_with_flagged_as_fail"] - (1 / 3)) < 1e-9, stats["pass_rate_with_flagged_as_fail"]
+    assert stats["pass_rate_with_flagged_as_fail"] != stats["pass_rate"]
+    # Important 4: CPS is a ratio of sums (a mean in disguise) — the largest single contributor
+    # to the numerator must be visible next to it. Of {1000, 1200, 900}, 1200 is largest.
+    assert stats["max_run_tokens"] == 1200, stats["max_run_tokens"]
+
+    # -- dollar CPS (Important 6): usage.json's own total_cost_usd, price-weighted by the API, --
+    # -- reported alongside the token-based numbers rather than only implied by them. ------------
+    usd_a = {"total_tokens": 1000, "cost_usd": 0.30, "passed": True, "adjudicate": [], "claude_exit": 0}
+    usd_b = {"total_tokens": 1000, "cost_usd": 0.50, "passed": False, "adjudicate": [], "claude_exit": 0}
+    usd_stats = arm_stats([usd_a, usd_b], n_infra=0)
+    assert usd_stats["median_cost_usd"] == 0.4, usd_stats["median_cost_usd"]  # median(0.30, 0.50)
+    assert usd_stats["cps_usd"] == 0.8, usd_stats["cps_usd"]  # (0.30+0.50) spend / 1 pass
+
+    # -- is_infra, broadened (Important 2): run.sh's own words are "anything else a crash" — ----
+    # -- a nonzero exit that still spent zero tokens is the same non-event as 124/137, whatever --
+    # -- the actual number is. A nonzero exit that DID spend tokens is a real, if failed, run. ---
+    assert is_infra({"claude_exit": 1, "total_tokens": 0})
+    assert is_infra({"claude_exit": 2, "total_tokens": 0})
+    assert not is_infra({"claude_exit": 1, "total_tokens": 500})  # spent something; not infra
+    assert not is_infra({"claude_exit": 0, "total_tokens": 0})  # a genuine (if odd) success
+
+    # -- grade.json shape (Important 7): a missing required field must refuse loudly, never ----
+    # -- default-falsy its way into a silent clean failure across an entire sweep. ---------------
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        base = pathlib.Path(d)
+        run_dir = base / "T" / "A1" / "0"
+        run_dir.mkdir(parents=True)
+        (run_dir / "usage.json").write_text(json.dumps({
+            "task": "T", "arm": "A1", "repetition": 0, "model": "claude-opus-5",
+            "input_tokens": 10, "output_tokens": 5, "cache_read_tokens": 0,
+            "cache_creation_tokens": 0, "claude_exit": 0, "claimed_done": False,
+        }))
+        (run_dir / "grade.json").write_text(json.dumps({"task": "T"}))  # missing everything else
+        try:
+            load(base)
+            assert False, "load() must refuse a grade.json missing required fields"
+        except SystemExit as e:
+            assert "missing required field" in str(e), e
+
+    # -- JSON safety (Critical 2): an infinite CPS must round-trip as valid JSON, never the -----
+    # -- bare `Infinity` token RFC 8259 forbids and a strict parser would choke on. --------------
+    unsafe = {"cps": float("inf"), "nested": {"cps_clean_only": float("inf")}, "fine": 42}
+    safe = _json_safe(unsafe)
+    dumped = json.dumps(safe, allow_nan=False)  # must not raise
+    reloaded = json.loads(dumped)
+    assert reloaded["cps"] is None and reloaded["nested"]["cps_clean_only"] is None and reloaded["fine"] == 42
 
     # -- model consistency: a tree that disagrees with meta.json must be refused, not averaged. -
     import tempfile
@@ -561,8 +740,124 @@ def self_test():
     # -- end-to-end: a synthetic run tree, exercised through report() itself. --------------------
     _self_test_synthetic_tree()
 
+    # -- Critical 1: the per-task token-delta pipeline, through report(), against a tree whose --
+    # -- deltas are computed by hand — not just the isolated paired_bootstrap/sign_test helpers. -
+    _self_test_per_task_deltas()
+
+    # -- Important 3: T4 must not declare victory off a single surviving task's point CI. --------
+    _self_test_t4_min_tasks()
+
     print("self-test ok")
     return 0
+
+
+def _self_test_per_task_deltas():
+    """Three tasks, hand-computed medians and deltas, run through report() itself.
+
+    This is what Critical 1 demanded: the earlier self-test proved paired_bootstrap/sign_test
+    are correct in isolation on a literal list, but nothing exercised token_deltas() itself —
+    the function that actually builds that list from per-run data in report()'s pipeline. Two
+    mutants slipped past the old self-test with `self-test ok, rc=0`: task_arm_tokens() using
+    mean instead of median, and token_deltas() pooling every (A1 run, baseline run) cross-product
+    within a task instead of one delta per task. Both are caught here by construction:
+
+      * Task P has 3 asymmetric A1 reps (100, 100, 400) — median 100, mean 200. A mean
+        substitution changes P's delta from -200 to -100, which the exact-value assertion below
+        catches directly.
+      * Tasks Q and R give A1 and the baseline *different* rep counts (2 vs 3, 4 vs 2). A
+        cross-product mutant would emit 3x3 + 2x3 + 4x2 = 9+6+8 = 23 "deltas" instead of 3 (one
+        per real task) — caught by the exact length/list assertion, not just a count that could
+        coincidentally match.
+
+    Hand computation (median() is statistics.median: the average of the middle two for an even
+    count):
+        P: A1 median(100,100,400)=100, baseline median(300,300,300)=300  -> delta -200
+        Q: A1 median(50,150)=100,       baseline median(500,500,500)=500 -> delta -400
+        R: A1 median(10,20,30,40)=25,   baseline median(100,200)=150     -> delta -125
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        base = pathlib.Path(d)
+        (base / "meta.json").write_text(json.dumps({"model": "claude-opus-5"}))
+
+        def put(task, arm, values):
+            for rep, total in enumerate(values):
+                _write_run(base, task, arm, rep, tokens=(total, 0, 0, 0), passed=True)
+
+        put("P", "A1", [100, 100, 400])
+        put("P", "A0", [300, 300, 300])
+        put("Q", "A1", [50, 150])
+        put("Q", "A0", [500, 500, 500])
+        put("R", "A1", [10, 20, 30, 40])
+        put("R", "A0", [100, 200])
+
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = report(base)
+        assert rc == 0, buf.getvalue()
+
+        summary = json.loads((base / "summary.json").read_text())
+        cmp = summary["comparisons"]["A1_vs_A0_tokens"]
+
+        expected_deltas = [-200.0, -400.0, -125.0]  # tasks sorted P, Q, R
+        assert cmp["deltas"] == expected_deltas, cmp["deltas"]
+        assert cmp["median_delta"] == -200.0, cmp["median_delta"]  # median of [-200,-400,-125]
+        assert cmp["sign_test"] == {"favourable": 3, "total": 3}, cmp["sign_test"]
+        # The bootstrap resamples *from these three values themselves* (paired_bootstrap's own
+        # contract), so any resampled median is necessarily one of the three original deltas —
+        # never a value in between and never outside [-400, -125]. A wrong axis (the
+        # cross-product mutant) would hand the bootstrap a completely different, much longer
+        # list, whose CI would not respect this bound.
+        lo, hi = cmp["ci"]
+        assert lo in expected_deltas and hi in expected_deltas and lo <= hi, (lo, hi)
+
+
+def _self_test_t4_min_tasks():
+    """One task where A1's real advantage is large (93% CPS reduction) and two tasks skipped
+    because one arm had zero clean passes there — exactly the tasks the arms differ most on,
+    which is why skipping them and then judging what's left is selection on outcome. With one
+    surviving delta, every bootstrap resample draws that same value, so the CI is a trivial
+    point that "excludes zero" no matter what. meets_t4 must be False anyway: T4 requires at
+    least MIN_T4_TASKS surviving tasks, not just a threshold-clearing number."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        base = pathlib.Path(d)
+        (base / "meta.json").write_text(json.dumps({"model": "claude-opus-5"}))
+
+        # S1: real signal on both arms. A0 3 reps @ 1000 tokens, 1 passes -> cps 3000/1=3000.
+        # A1 3 reps @ 200 tokens, all pass -> cps 600/3=200. Reduction (3000-200)/3000*100=93.3%.
+        for rep in range(3):
+            _write_run(base, "S1", "A0", rep, tokens=(1000, 0, 0, 0), passed=(rep == 0))
+            _write_run(base, "S1", "A1", rep, tokens=(200, 0, 0, 0), passed=True)
+        # S2: A0 has zero clean passes -> its CPS is infinite -> skipped (not zeroed).
+        _write_run(base, "S2", "A0", 0, tokens=(1000, 0, 0, 0), passed=False)
+        _write_run(base, "S2", "A1", 0, tokens=(500, 0, 0, 0), passed=True)
+        # S3: A1 has zero clean passes -> its CPS is infinite -> skipped.
+        _write_run(base, "S3", "A0", 0, tokens=(1000, 0, 0, 0), passed=True)
+        _write_run(base, "S3", "A1", 0, tokens=(800, 0, 0, 0), passed=False)
+
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = report(base)
+        assert rc == 0, buf.getvalue()
+
+        summary = json.loads((base / "summary.json").read_text())
+        t4 = summary["t4_threshold"]
+        assert t4["skipped_tasks"] == ["S2", "S3"], t4["skipped_tasks"]
+        assert t4["n_tasks"] == 1, t4  # only S1 survives
+        assert abs(t4["median_reduction_pct"] - 93.333333) < 1e-3, t4["median_reduction_pct"]
+        # A single-value bootstrap is a point at that same value — genuinely >=30 and >0, and
+        # that is exactly why n alone, not the CI shape, has to be the gate.
+        assert t4["ci_pct"][0] > 0 and t4["median_reduction_pct"] >= 30.0
+        assert t4["meets_t4"] is False, "one surviving task must never be enough to meet T4"
 
 
 def _write_run(base, task, arm, rep, *, tokens, passed, claude_exit=0, adjudicate=None, l1=None):
@@ -631,7 +926,11 @@ def _self_test_synthetic_tree():
         a0 = summary["arms_stats"]["A0"]
         assert a0["n_total"] == 5 and a0["n_infra"] == 0 and a0["n_flagged"] == 0
         assert a0["passes"] == 0  # A0 fails every rep by construction
-        assert math.isinf(a0["cps"]), "CPS must be infinite when an arm has zero clean passes"
+        # summary.json is parsed JSON here: an infinite CPS must have round-tripped as `null`
+        # (Critical 2), never as the raw Python float or the bare `Infinity` token that RFC 8259
+        # forbids and a strict parser would have choked on before this assertion even ran.
+        assert a0["cps"] is None, "CPS must serialise as JSON null when an arm has zero clean passes"
+        assert a0["cps_clean_only"] is None
 
 
 if __name__ == "__main__":
