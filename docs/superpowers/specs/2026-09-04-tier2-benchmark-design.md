@@ -110,7 +110,7 @@ It is undocumented, absent from `cli-spec.md`, and a test asserts it never appea
 
 ## 6. The runner
 
-One Docker container per run. 75 runs: 5 tasks × 3 arms × 5 repetitions.
+One Docker container per run. 95 runs: 5 tasks × 3 arms × 5 repetitions, plus `E1-untested-change` and `N1-null-task` at A1 and A5 only — 2 × 2 × 5.
 
 ```
 for task × arm × repetition:
@@ -215,7 +215,7 @@ alongside because it assumes nothing and can be checked by hand.
 | `crates/nexus-core` | `--rank lexical` |
 | `Makefile` | `make bench` — never part of `make check` |
 
-`make bench` is not `make check` and never will be: 75 containers and real money on the commit
+`make bench` is not `make check` and never will be: 95 containers and real money on the commit
 path gets disabled inside a fortnight, which is what `13-evaluation.md` §2 says about exactly
 this.
 

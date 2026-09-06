@@ -5,6 +5,8 @@
 #
 # So every case here has a known answer, and each asserts something the others cannot:
 #
+#   0. plan        not a grading at all: the sweep's own cell plan, which nothing else in this
+#                  repository executes. Free, and first for that reason.
 #   1. empty       an empty diff must fail — and must fail on L1 *only*. L0 and L2 true proves
 #                  the container, the mount and the build actually worked; a mechanical failure
 #                  would zero them too and be indistinguishable from a bad agent.
@@ -68,6 +70,26 @@ PY
 
 A1=A1-idempotency-key-length
 B1=B1-rename-crosses-the-seam
+
+# --- 0. the sweep's own cell plan ---------------------------------------------------------------
+
+# Free, so it runs first — ahead of every container, and ahead of anything that could spend.
+# Nothing else in this repository executes sweep.sh, and its per-task arm split is exactly the
+# mistake this file exists to catch before money moves: a typo in either arm of `arms_for`
+# silently hands an added task three arms, T4 quietly becomes a seven-task threshold instead of
+# a five-task one, and analyse.py — which derives each comparison's task set from the run tree —
+# reports an asymmetry that no longer exists. The error lands in the result, not in the harness.
+# DRY_RUN=1 prints the plan and exits before the guards, the gate and any docker call.
+PLAN="$(DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" | tail -n +2)"  # line 1 is the stamp line
+PLAN_CELLS="$(printf '%s\n' "$PLAN" | wc -l)"
+[ "$PLAN_CELLS" = 95 ] \
+  || { echo "FAIL [plan] the sweep plans $PLAN_CELLS cells, not 95 (5x3x5 + 2x2x5)" >&2; exit 1; }
+if printf '%s\n' "$PLAN" | grep -E '^(E1-untested-change|N1-null-task)/A0/'; then
+  echo "FAIL [plan] a ranking-only task is planned at A0 (printed above); T4's task set would" >&2
+  echo "silently become seven tasks instead of five and nothing in the output would say so." >&2
+  exit 1
+fi
+echo "ok   plan 95 cells, neither ranking-only task at A0"
 
 # --- 1. an empty diff must not pass ------------------------------------------------------------
 
@@ -234,12 +256,13 @@ assert_grade unrecognised \
 # E1 and N1 route exactly like case 1 — `mn.pay` in single-module spring-payments — so they add
 # no placement coverage, and while they were outside the sweep that made them not worth a case.
 # They are in the sweep now, at ten paid runs each, and what these two cases actually assert is
-# not routing but that each task's hidden test *compiles and fails red at its own start commit*
-# (c2, which no other case grades). Both files say in their own javadoc that they are written to
-# compile where the fix does not exist yet and fail on a named assertion instead — an untested
-# claim about brand-new files until it is graded once. Were it wrong, every one of that task's
-# twenty runs would come back `hidden-test-compile-error`: unscoreable, and discovered after
-# paying. `adjudicate == []` below is the assertion that costs nothing and buys that.
+# not routing but that each task's hidden test *compiles and fails red at its own start commit*.
+# Neither file had ever been compiled by the grader — they arrived with the tasks — and both say
+# in their own javadoc that they are written to compile where the fix does not exist yet and fail
+# on a named assertion instead, which is not a claim reading can check. Were it wrong, every one
+# of that task's ten runs would come back `hidden-test-compile-error`: unscoreable, and
+# discovered after paying. `adjudicate == []` below is the assertion that costs nothing and
+# buys that.
 for case in "A2-shared-type-change:libs/common/src/test/java/mn/acme/common/HiddenTest.java" \
             "B2-orphaned-field-diagnosis:api/src/test/java/mn/shop/api/HiddenTest.java" \
             "E1-untested-change:src/test/java/mn/pay/HiddenTest.java" \

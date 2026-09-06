@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # All 95 runs: 5 tasks x 3 arms x 5 reps, plus 2 ranking-only tasks x 2 arms x 5 reps. This is
-# what spends real money — hundreds of
-# paid `claude -p` invocations across `make bench` — so every decision below is aimed at not
-# spending it twice and not silently failing to spend it at all.
+# what spends real money — hundreds of paid `claude -p` invocations across `make bench` — so
+# every decision below is aimed at not spending it twice and not silently failing to spend it
+# at all.
 #
 # Resumable: a run with a non-empty grade.json is skipped. A run with .run-started, diff.patch
 # or usage.json but no complete grade.json already paid for the agent (see run.sh: .run-started
@@ -48,6 +48,30 @@ arms_for() {  # task id -> the arms it runs, space separated
     *) echo "A0 A1 A5" ;;
   esac
 }
+
+# The cell plan, built once and then *executed* below — the plan and the sweep cannot disagree
+# because they are the same list. That is what makes DRY_RUN worth having: a typo in either arm
+# of the case above silently hands an added task three arms, and this ticket's own trap would
+# then be living in the line meant to prevent it. Nothing else in the repo executes this file,
+# so test_grade.sh asserts the plan (95 cells, no A0 on the added tasks) before it grades
+# anything — free, and ahead of every container.
+#
+# The exit is here, before the credential warning, the guards and the gate: no docker, no built
+# binary, nothing on disk, and no recursion when the gate is the caller.
+CELLS=()
+for task in "${TASKS[@]}"; do
+  read -ra ARMS <<<"$(arms_for "$task")"
+  for arm in "${ARMS[@]}"; do
+    for rep in $(seq 0 $((REPS - 1))); do
+      CELLS+=("$task/$arm/$rep")
+    done
+  done
+done
+
+if [ "${DRY_RUN:-0}" = "1" ]; then
+  printf '%s\n' "${CELLS[@]}"
+  exit 0
+fi
 
 # A sweep with no ANTHROPIC_API_KEY runs the host's own ~/.claude credentials through 95 root
 # containers (see run.sh for why the mount is read-write and why read-only isn't a fix). A token
@@ -116,10 +140,14 @@ if [ -f "$META" ]; then
   # a regenerated corpus would still change what run.sh/grade.sh actually clone at run time.
   # Out of scope for what this task was asked to stamp (image + nexus version) — flagged here so
   # a future reader doesn't assume this guard is complete.
-  read -r PREV_IMAGE_ID PREV_MODEL < <(python3 -c "
+  {
+    read -r PREV_IMAGE_ID PREV_MODEL PREV_REPS
+    read -r PREV_TASKS
+  } < <(python3 -c "
 import json
 m = json.load(open('$META'))
-print(m['image_id'], m['model'])
+print(m['image_id'], m['model'], m['reps'])
+print(' '.join(m.get('tasks', [])))
 ")
   if [ "$PREV_IMAGE_ID" != "$IMAGE_ID" ]; then
     echo "sweep.sh: $BASE was stamped with image $PREV_IMAGE_ID," >&2
@@ -131,12 +159,39 @@ print(m['image_id'], m['model'])
     echo "$MODEL. Refusing to mix models within one sweep, even with ALLOW_MODEL_OVERRIDE set." >&2
     exit 1
   fi
+  # `reps` decides how many runs each median is taken over. Resume at a different one and some
+  # cells have five observations and some have three, with nothing in the tree saying which —
+  # the same class of silent corruption as a mixed model, and it was stamped but never compared.
+  if [ "$PREV_REPS" != "$REPS" ]; then
+    echo "sweep.sh: $BASE was stamped with reps=$PREV_REPS, but this invocation is using" >&2
+    echo "reps=$REPS. Resuming at a different rep count gives one sweep two sample sizes." >&2
+    exit 1
+  fi
+  # A subset, deliberately, not equality: `TASKS=` naming one task is the documented way to
+  # finish a sweep that died on it, and must keep working. What is refused is a task the stamp
+  # never had — that quietly enlarges the corpus, and since analyse.py derives each comparison's
+  # task set from the run tree, it moves what T4 and T7 rest on with nothing reporting it.
+  # (Empty means a tree stamped before `tasks` was recorded; nothing to compare against.)
+  if [ -n "$PREV_TASKS" ]; then
+    for task in "${TASKS[@]}"; do
+      case " $PREV_TASKS " in
+        *" $task "*) ;;
+        *)
+          echo "sweep.sh: $BASE was stamped for tasks: $PREV_TASKS" >&2
+          echo "$task is not one of them. Refusing to add a task to a sweep already in progress;" >&2
+          echo "run it under its own stamp. A subset of the stamped tasks resumes normally." >&2
+          exit 1
+          ;;
+      esac
+    done
+  fi
 else
-  python3 - "$META" "$STAMP" "$IMAGE" "$IMAGE_ID" "$NEXUS_VERSION" "$MODEL" "$REPS" <<'PY'
+  python3 - "$META" "$STAMP" "$IMAGE" "$IMAGE_ID" "$NEXUS_VERSION" "$MODEL" "$REPS" "${TASKS[@]}" <<'PY'
 import json
 import sys
 
 path, stamp, image, image_id, nexus_version, model, reps = sys.argv[1:8]
+tasks = sys.argv[8:]
 json.dump(
     {
         "stamp": stamp,
@@ -145,6 +200,7 @@ json.dump(
         "nexus_version": nexus_version,
         "model": model,
         "reps": int(reps),
+        "tasks": sorted(tasks),
     },
     open(path, "w"),
     indent=2,
@@ -155,52 +211,48 @@ fi
 
 # --- the sweep itself -----------------------------------------------------------------------
 
-for task in "${TASKS[@]}"; do
-  read -ra ARMS <<<"$(arms_for "$task")"
-  for arm in "${ARMS[@]}"; do
-    for rep in $(seq 0 $((REPS - 1))); do
-      out="$BASE/$task/$arm/$rep"
+for cell in "${CELLS[@]}"; do
+  IFS=/ read -r task arm rep <<<"$cell"
+  out="$BASE/$cell"
 
-      # -s, not -f: a grade.json that exists but is 0 bytes (a kill mid-write, before grade.sh's
-      # atomic rename was in place, or any other truncation) must not read as a completed grade —
-      # that silently drops the run from Task 9's medians instead of re-grading it for free.
-      if [ -s "$out/grade.json" ]; then
-        echo "skip       $task/$arm/$rep (already graded)"
-        continue
-      fi
+  # -s, not -f: a grade.json that exists but is 0 bytes (a kill mid-write, before grade.sh's
+  # atomic rename was in place, or any other truncation) must not read as a completed grade —
+  # that silently drops the run from Task 9's medians instead of re-grading it for free.
+  if [ -s "$out/grade.json" ]; then
+    echo "skip       $task/$arm/$rep (already graded)"
+    continue
+  fi
 
-      # Any of these three means the agent already ran and the money is already spent: usage.json
-      # and diff.patch are both written only after the docker call returns, and .run-started is
-      # written immediately before it — before diff.patch and usage.json exist at all, so it also
-      # catches a host crash *during* the container run, not just after it. Re-running run.sh here
-      # would spend the same cell a second time. If .run-started is the only one of the three
-      # present, grade.sh will refuse loudly for lack of a diff.patch — correct: that host crash
-      # happened mid-spend, and whether it was billed is not something this script can know from
-      # here, so it fails loudly rather than guessing either "yes, redo it" or "no, count it done".
-      if [ -f "$out/usage.json" ] || [ -f "$out/diff.patch" ] || [ -f "$out/.run-started" ]; then
-        echo "grade-only $task/$arm/$rep (already paid, no completed grade)"
-        # grade.sh's own refusal says only "no $OUT/diff.patch to grade", which names neither
-        # the marker nor the decision it forces. Said here, before the exit, because the operator
-        # who hits this at hour two reads it at hour nine.
-        if [ -f "$out/.run-started" ] && [ ! -f "$out/diff.patch" ]; then
-          echo "sweep.sh: $out has .run-started but no diff.patch — the host died mid-container." >&2
-          echo "Whether that cell was billed cannot be determined from this run tree. Check the" >&2
-          echo "account's billing, then delete .run-started to pay for it again, or leave the cell" >&2
-          echo "out of the sweep. Guessing double-charges or silently drops a run, so this halts." >&2
-        fi
-        "$GRADE" "$task" "$out" >/dev/null
-        continue
-      fi
+  # Any of these three means the agent already ran and the money is already spent: usage.json
+  # and diff.patch are both written only after the docker call returns, and .run-started is
+  # written immediately before it — before diff.patch and usage.json exist at all, so it also
+  # catches a host crash *during* the container run, not just after it. Re-running run.sh here
+  # would spend the same cell a second time. If .run-started is the only one of the three
+  # present, grade.sh will refuse loudly for lack of a diff.patch — correct: that host crash
+  # happened mid-spend, and whether it was billed is not something this script can know from
+  # here, so it fails loudly rather than guessing either "yes, redo it" or "no, count it done".
+  if [ -f "$out/usage.json" ] || [ -f "$out/diff.patch" ] || [ -f "$out/.run-started" ]; then
+    echo "grade-only $task/$arm/$rep (already paid, no completed grade)"
+    # grade.sh's own refusal says only "no $OUT/diff.patch to grade", which names neither
+    # the marker nor the decision it forces. Said here, before the exit, because the operator
+    # who hits this at hour two reads it at hour nine.
+    if [ -f "$out/.run-started" ] && [ ! -f "$out/diff.patch" ]; then
+      echo "sweep.sh: $out has .run-started but no diff.patch — the host died mid-container." >&2
+      echo "Whether that cell was billed cannot be determined from this run tree. Check the" >&2
+      echo "account's billing, then delete .run-started to pay for it again, or leave the cell" >&2
+      echo "out of the sweep. Guessing double-charges or silently drops a run, so this halts." >&2
+    fi
+    "$GRADE" "$task" "$out" >/dev/null
+    continue
+  fi
 
-      # None of the three: never started, or run.sh's refusal guard left an empty directory
-      # behind (it does `mkdir -p "$OUT"` before refusing). Either way a full run is owed, and if
-      # this is in fact a refused task, run.sh exits 1 here, `set -e` stops the sweep, and the
-      # refusal reaches whoever is watching instead of being swallowed as a skip.
-      echo "run        $task/$arm/$rep"
-      "$RUN" "$task" "$arm" "$rep" "$out" >/dev/null
-      "$GRADE" "$task" "$out" >/dev/null
-    done
-  done
+  # None of the three: never started, or run.sh's refusal guard left an empty directory
+  # behind (it does `mkdir -p "$OUT"` before refusing). Either way a full run is owed, and if
+  # this is in fact a refused task, run.sh exits 1 here, `set -e` stops the sweep, and the
+  # refusal reaches whoever is watching instead of being swallowed as a skip.
+  echo "run        $task/$arm/$rep"
+  "$RUN" "$task" "$arm" "$rep" "$out" >/dev/null
+  "$GRADE" "$task" "$out" >/dev/null
 done
 
 echo "sweep complete: $BASE"
