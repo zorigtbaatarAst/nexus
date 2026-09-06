@@ -19,10 +19,11 @@
 #   graded     start commit + the agent's diff + the hidden tests   -> L1
 #
 # `fixture-build` compiles and tests in one command, so the baseline run answers "does this
-# still build" and "do the project's own tests still pass" together. Which of the two failed is
-# attributed by looking for a compiler's own failure banner in the log — a heuristic, and
-# deliberately one that cannot change the verdict: `passed` is the AND of all three, so a
-# mis-attribution moves a `false` between two fields that are both required anyway.
+# still build" and "do the project's own tests still pass" together. A red run is attributed
+# between them by what the log actually says — a compiler's failure banner, or a test runner
+# reporting a failed test. Both need a *positive* signal: a failure that says neither is not a
+# grade at all, it is the grading run falling over, and it is flagged rather than dressed up as
+# one. Attribution never changes `passed`, which is the AND of all three.
 #
 # The graded tree is a *copy* of the baseline tree, so the hidden tests are the only difference
 # between them. That is what makes the exit-code delta attributable to the hidden tests, and it
@@ -33,6 +34,7 @@ TASK="${1:?task id}"
 OUT="${2:?run directory, containing diff.patch}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 IMAGE="${IMAGE:-nexus-bench:latest}"
+BUILD_TIMEOUT_S="${BUILD_TIMEOUT_S:-600}"
 LOOKUP="$ROOT/scripts/eval/task_lookup.py"
 
 [ -f "$OUT/diff.patch" ] || { echo "no $OUT/diff.patch to grade" >&2; exit 1; }
@@ -175,6 +177,11 @@ PY
 run_build() {  # tree, log -> BUILD_STATUS
   local tree="$1" log="$2"
   BUILD_STATUS=0
+  # Bounded, because nothing else bounds it: run.sh caps the agent, but a fix that leaves a test
+  # looping forever would stall the whole sweep here. A kill at the deadline exits 124, which
+  # carries no test-failure signal and so lands in the flagged bucket below rather than being
+  # scored as a broken test.
+  timeout "$BUILD_TIMEOUT_S" \
   docker run --rm --network=none \
     -v "$tree:/work:Z" -w /work \
     -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
@@ -220,19 +227,37 @@ COMPILER_FAILED = re.compile(
     r"COMPILATION ERROR|Compilation failed|compile\w*Java FAILED|error TS\d+", re.I
 )
 
+# A test runner saying, in its own words, that a test ran and failed. Every alternative is
+# copied from a real log in this corpus: surefire's summary line, Gradle's two, and vitest's
+# file tally. A non-zero build that matches none of these did not fail a test — it fell over,
+# and the grade has to say so instead of inventing an attribution.
+TEST_FAILED = re.compile(
+    r"Tests run:.*(?:Failures|Errors): [1-9]"   # maven surefire
+    r"|tests completed, [1-9]\d* failed"        # gradle
+    r"|There were failing tests"                # gradle
+    r"|Test Files\s+[1-9]\d* failed"            # vitest
+)
+
 baseline_log = (run / "grade-baseline.log").read_text(errors="replace")
 graded_log = (run / "grade-hidden.log").read_text(errors="replace")
 adjudicate = []
 
 # L0 — the project the agent left still compiles. L2 — and its own tests still pass. One
-# command answers both; the banner says which half went red when it did.
+# command answers both, so a red run has to be attributed, and both attributions need a
+# positive signal in the log. Concluding "a test failed" from the mere absence of a compiler
+# banner is what turns an unmounted /work, a killed container, a full disk or a failed
+# `npm ci --offline` into `L0_build: true, L2_collateral: false` — byte-identical to an agent
+# who broke a project test, and an affirmative claim that a build compiled when none ran.
 if baseline_exit == 0:
     l0, l2 = True, True
 elif COMPILER_FAILED.search(baseline_log):
     l0, l2 = False, False
     adjudicate.append("collateral-unknown-build-failed")
-else:
+elif TEST_FAILED.search(baseline_log):
     l0, l2 = True, False
+else:
+    l0, l2 = False, False
+    adjudicate.append("baseline-failure-unrecognised")
 
 # L1 — the primary gate. The graded tree is the baseline tree plus the hidden tests, so a green
 # graded run means the hidden tests passed. A red one means they did not *or* the baseline was
@@ -247,6 +272,11 @@ if baseline_exit != 0 and not l1:
 # the hidden tests, so a compile failure with them present is theirs.
 if baseline_exit == 0 and graded_exit != 0 and COMPILER_FAILED.search(graded_log):
     adjudicate.append("hidden-test-compile-error")
+
+# The same demand on the L1 side: a red graded run that neither compiler nor test runner
+# explains is not a hidden test finding a bug, it is the grading run falling over.
+if graded_exit != 0 and not COMPILER_FAILED.search(graded_log) and not TEST_FAILED.search(graded_log):
+    adjudicate.append("graded-failure-unrecognised")
 
 if not diff_applied:
     adjudicate.append("diff-did-not-apply")

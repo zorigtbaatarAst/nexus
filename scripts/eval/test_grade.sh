@@ -19,8 +19,13 @@
 #                  failed an assertion, and must say so in `adjudicate`.
 #   6. c1-fix      the one required site that names a directory, reached by a patch that only
 #                  adds a file. Neither shape appears in any other case.
+#   7-9.           the three distinguishable outcomes of a red baseline: a project test that
+#                  genuinely failed, main sources that would not compile, and a build that never
+#                  ran. The third must not wear the costume of the first.
+#   10-11.         A2 and B2 on an empty diff — the only Gradle toolchain and the only
+#                  reflection-based hidden test, neither reached by any case above.
 #
-# Runs six gradings, twelve containers, offline. Costs nothing but a couple of minutes.
+# Runs eleven gradings, twenty-two containers, offline. Costs nothing but a few minutes.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -171,5 +176,71 @@ assert_grade c1-fix \
   'g["L3_sites_found"] == ["src/main/resources/db/migration"]' \
   'g["L3_sites_missed"] == []' \
   'g["hidden_tests_placed"] == ["src/test/java/mn/payments/HiddenTest.java"]'
+
+# --- 7-9. three distinguishable outcomes for a red baseline -------------------------------------------
+#
+# `fixture-build` compiles and tests in one command, so a red baseline has to be attributed. The
+# dangerous attribution is the one made from an *absence*: concluding "a test failed" because no
+# compiler banner was found records a grading run that fell over as an honest grade, and claims
+# `L0_build: true` for a build that never ran. These three cases are the whole point of the
+# distinction, and until they existed nothing here had ever produced `L0_build: false`.
+
+# 7. A collateral test genuinely broken, with the task itself correctly fixed. This is the case
+#    that must NOT regress into a flag: the project compiled, a test ran, a test failed.
+synthesize "$A1" l2-red "
+  sed -i 's/idempotency_key VARCHAR(64)/idempotency_key VARCHAR(128)/' src/main/resources/db/migration/V1__init.sql
+  sed -i 's/setScale(2, RoundingMode.HALF_UP)/setScale(3, RoundingMode.HALF_UP)/' src/main/java/mn/pay/PaymentService.java
+"
+"$GRADE" "$A1" "$TMP/l2-red" >/dev/null
+assert_grade l2-red \
+  'g["L0_build"] is True' \
+  'g["L2_collateral"] is False' \
+  'g["passed"] is False' \
+  'g["adjudicate"] == ["l1-not-isolated"]'
+
+# 8. Main sources that do not compile: `check` renamed with its production caller left behind.
+synthesize "$A1" l0-red \
+  "sed -i 's/public void check(/public void validate(/' src/main/java/mn/pay/PaymentValidator.java"
+"$GRADE" "$A1" "$TMP/l0-red" >/dev/null
+assert_grade l0-red \
+  'g["L0_build"] is False' \
+  'g["L2_collateral"] is False' \
+  'g["passed"] is False' \
+  '"collateral-unknown-build-failed" in g["adjudicate"]' \
+  '"baseline-failure-unrecognised" not in g["adjudicate"]'
+
+# 9. A build that never ran at all — `fixture-build` finds no build file and exits 1 with no
+#    compiler banner and no test tally. Before the positive-signal rule this was recorded as
+#    `L0_build: true, L2_collateral: false`, byte-identical to case 7. The same branch now
+#    catches an unmounted /work, a container the OOM killer takes, and the 600s timeout.
+synthesize "$A1" unrecognised "rm pom.xml"
+"$GRADE" "$A1" "$TMP/unrecognised" >/dev/null
+assert_grade unrecognised \
+  'g["L0_build"] is False' \
+  'g["L2_collateral"] is False' \
+  'g["passed"] is False' \
+  '"baseline-failure-unrecognised" in g["adjudicate"]' \
+  '"graded-failure-unrecognised" in g["adjudicate"]'
+
+# --- 10-11. the two tasks the cases above never touch --------------------------------------------------
+
+# A2 is the only Gradle toolchain and the only multi-module placement; B2 is the only hidden test
+# that reads its subject by reflection. A placement or collection regression in either yields
+# `passed: true` on an empty diff — a false green on 30 of the 75 runs, and nothing would look
+# wrong. Both are empty-diff cases: red on L1 alone, hidden test in the right place.
+for case in "A2-shared-type-change:libs/common/src/test/java/mn/acme/common/HiddenTest.java" \
+            "B2-orphaned-field-diagnosis:api/src/test/java/mn/shop/api/HiddenTest.java"; do
+  task="${case%%:*}"
+  mkdir -p "$TMP/$task"
+  : > "$TMP/$task/diff.patch"
+  "$GRADE" "$task" "$TMP/$task" >/dev/null
+  assert_grade "$task" \
+    'g["passed"] is False' \
+    'g["L1_hidden"] is False' \
+    'g["L0_build"] is True' \
+    'g["L2_collateral"] is True' \
+    "g[\"hidden_tests_placed\"] == [\"${case#*:}\"]" \
+    'g["adjudicate"] == []'
+done
 
 echo "the grader fails an empty diff, passes a correct one, and says why in between"
