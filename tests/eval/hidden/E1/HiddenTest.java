@@ -23,22 +23,29 @@ import org.junit.jupiter.api.Test;
  *
  * <p>The observable behaviour is one sentence: <em>after calling it, the PENDING payment is
  * CANCELLED</em>. The test runs the service against a stand-in repository and then asks that
- * question of the data, so nothing here cares <em>how</em> the move was expressed. Three channels
- * count, because all three are how the move is written:
+ * question of the data, so nothing here cares <em>how</em> the move was expressed. Two channels
+ * count, because both are the move actually happening to an object this test holds:
  *
  * <ul>
  *   <li>the entity the repository served came back cancelled — JPA dirty checking, which saves
  *       nothing;
- *   <li>an entity carrying the cancelled status was handed to a {@code save…} call;
- *   <li>a repository method returning a row count was called with the payment's id — the
- *       {@code @Modifying @Query("update Payment …")} shape, which loads nothing and saves
- *       nothing.
+ *   <li>an entity carrying the cancelled status was handed to a {@code save…} call.
  * </ul>
  *
- * <p>Each channel is scoped to <em>this</em> payment: the saved entity must be the one served or
- * carry its id, and the row-count call must name the id. Saving some other cancelled payment, or
- * taking a count back from a call that was never told which payment to update, is not evidence
- * that the payment the caller asked about moved.
+ * <p>The second channel is scoped to <em>this</em> payment: the saved entity must be the one served
+ * or carry its id. Saving some other cancelled payment is not evidence that the payment the caller
+ * asked about moved.
+ *
+ * <p><b>The ceiling, and why it is where it is.</b> A fix that cancels with a
+ * {@code @Modifying @Query("update Payment …")} bulk update grades <em>red</em> here. Its effect
+ * lives in a database this test does not have: a reflection proxy cannot observe a JPQL update at
+ * all, only that some method was called. Anything that accepted it would be inferring intent from
+ * call shape — and call shape is either too loose (any row count coming back from a call that
+ * mentions the id, which a counter bump or an audit write satisfies without cancelling anything) or
+ * keyed on method names, which is conformity grading by another route. Both were tried and both let
+ * a non-fix through. So the limit stands, and it is the deliberate direction to err in: a false red
+ * costs one task's runs, while a false green inflates the pass rate and corrupts the number the
+ * whole benchmark exists to produce.
  *
  * <p>Everything else is left open on purpose. The return type is never read, so {@code void},
  * {@code Payment} and {@code PaymentDto} all pass. The repository is a proxy that answers every
@@ -77,9 +84,6 @@ class HiddenTest {
 
     /** Everything handed to a {@code save…} call, in order. */
     private final List<Payment> saved = new ArrayList<>();
-
-    /** Set when the repository is asked to update rows by id — the bulk-update channel. */
-    private boolean updatedById = false;
 
     /** The payment the stand-in repository serves: id set, status PENDING. */
     private static Payment pendingPayment() {
@@ -151,27 +155,13 @@ class HiddenTest {
         if (returns == boolean.class) {
             return Boolean.TRUE;
         }
-        // The bulk-update channel: `@Modifying @Query("update Payment …") int cancel(String id)`
-        // is an idiomatic Spring Data fix that never loads an entity and never saves one, so
-        // neither of the other two channels can see it. What is required of it is that it names
-        // the payment — a row count coming back from a call that was never told which payment to
-        // update is not evidence that this one moved. Deletes are excluded: removing the row is
-        // not moving it to CANCELLED.
-        if (returns == int.class || returns == long.class) {
-            boolean namesThePayment = false;
-            if (args != null) {
-                for (Object arg : args) {
-                    namesThePayment |= PAYMENT_ID.equals(arg);
-                }
-            }
-            if (namesThePayment && !name.startsWith("delete") && !name.startsWith("remove")) {
-                updatedById = true;
-            }
-            // Not a ternary: `cond ? 1 : 1L` promotes both arms to long and hands an int-returning
-            // method a Long, which the proxy rejects with a ClassCastException.
-            if (returns == int.class) {
-                return 1;
-            }
+        // A row count is answered, never counted as evidence — see the class javadoc. Not a
+        // ternary: `cond ? 1 : 1L` promotes both arms to long and hands an int-returning method a
+        // Long, which the proxy rejects with a ClassCastException.
+        if (returns == int.class) {
+            return 1;
+        }
+        if (returns == long.class) {
             return 1L;
         }
         return null;
@@ -242,14 +232,14 @@ class HiddenTest {
                         .anyMatch(p -> (p == payment || PAYMENT_ID.equals(p.getId())) && isCancelled(p));
 
         assertTrue(
-                isCancelled(payment) || savedThisOne || updatedById,
+                isCancelled(payment) || savedThisOne,
                 "after cancel(\""
                         + PAYMENT_ID
                         + "\") payment "
                         + PAYMENT_ID
                         + " is still "
                         + payment.getStatus()
-                        + ": it was not saved as CANCELLED and no update naming it was issued"
+                        + ": it was neither moved in place nor saved as CANCELLED"
                         + " (saved: "
                         + saved.stream().map(p -> p.getId() + "=" + p.getStatus()).toList()
                         + ")");

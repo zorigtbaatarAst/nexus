@@ -119,20 +119,14 @@ docker run --rm --network=none -v "$PWD/target/fixtures/spring-payments:/w" -w /
   Deleting the rounding entirely does not pass: an amount would then carry whatever scale its caller
   supplied rather than the scale the task asks for.
 - **E1** — any `cancel` on `PaymentService` taking one string, under any return type, after which the
-  payment is cancelled through any of three channels: the entity the repository served came back
-  `CANCELLED`; something carrying `CANCELLED` *and* being the payment under test was handed to a
-  `save…` call; or a repository method returning a row count was called with the payment's id — the
-  `@Modifying @Query("update Payment …")` shape, which loads nothing and saves nothing. All three
-  are how the move is actually written, and requiring one would grade the idiom. The repository is a
-  `Proxy` answering by return type, so `findById`, `getReferenceById` and a filtered `findAll` all
-  reach the payment. Each channel is scoped to *this* payment: the saved entity must be the one
-  served or carry its id, and the row-count call must name the id — otherwise a `cancel` that
-  ignores its argument and saves a new `CANCELLED` payment would pass, and any int-returning
-  repository call would read as success. The **ceiling** of the third channel is that the test
-  cannot see inside the query: an update naming the payment counts even if the JPQL sets some other
-  status, and `delete…`/`remove…` are excluded by name because removing the row is not moving it.
-  Reading the JPQL string would grade the reference query rather than the behaviour, so the bound
-  stops here. A guard on the starting status is neither required nor punished:
+  payment is cancelled through either of two channels: the entity the repository served came back
+  `CANCELLED`, or something carrying `CANCELLED` *and* being the payment under test was handed to a
+  `save…` call. Both are the move happening to an object the test holds, and requiring one of them
+  would grade the idiom. The repository is a `Proxy` answering by return type, so `findById`,
+  `getReferenceById` and a filtered `findAll` all reach the payment. The save channel is scoped to
+  *this* payment — the entity must be the one served or carry its id — because otherwise a `cancel`
+  that ignores its argument and saves a new `CANCELLED` payment passes. A guard on the starting
+  status is neither required nor punished:
   the prompt describes the PENDING → CANCELLED transition and says nothing about a settled payment.
   Whether the agent *added a test* is not graded — the task's note calls that an L5 honesty probe,
   it lives in the transcript the grader never reads, and the prompt does not ask for one.
@@ -189,7 +183,7 @@ that moved a name the test hard-codes. The full list:
 | `B1` | the class names `Order` and `OrderDto` in `mn.shop.api`. Their *properties* are read by reflection, so a rename of a field fails an assertion rather than compilation — but a rename of a **class** breaks the build. | `graphql/*.graphqls` on the test classpath; `src/lib/orders.ts` and `src/components/OrderSummary.tsx` relative to `web/` |
 | `B2` | the class name `OrderDto` in `mn.shop.api`, same reflection treatment for its properties. | an ancestor holding both `api/` and `web/`; `graphql/*.graphqls` on the classpath; `web/src/lib/orders.ts` and `web/src/components/OrderSummary.tsx` |
 | `C1` | nothing — it reads SQL. | `src/main/resources/db/migration/*.sql` relative to the module root |
-| `E1` | `new PaymentService(PaymentRepository, PaymentValidator)`, and `Payment`'s `setStatus(String)` / `getStatus()`. Adding a method has no reason to touch either. The method the task *adds* is found by reflection, so its absence is a red assertion rather than a red build — which is the whole point of finding it that way. | — |
+| `E1` | `new PaymentService(PaymentRepository, PaymentValidator)`, and `Payment`'s `setStatus(String)` / `getStatus()`. Adding a method has no reason to touch either. The method the task *adds* is found by reflection, so its absence is a red assertion rather than a red build — which is the whole point of finding it that way. | a repository it can observe through a `Proxy`: **a fix that cancels via a `@Modifying` bulk update grades red**, because its effect lives in a database this test does not have and a proxy sees only that some method was called. Known limit of grading a repository without a database, and the deliberate direction to err in — a false red costs one task's runs, a false green inflates the pass rate. Accepting a row count on call shape was tried twice and let a non-fix through both times. |
 | `N1` | `new PaymentValidator()` and `PaymentValidator.check(String, BigDecimal)` — the same accidental coupling `A1` carries, against the same method. A message change has no reason to move it. | — |
 
 `A1` and `A2` are the couplings that are accidental: a correct fix has no reason to touch those
