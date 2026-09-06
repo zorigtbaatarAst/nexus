@@ -60,7 +60,17 @@ WORK="$(mktemp -d)"
 # The container writes target/, build/ and node_modules/ as root and chowns them back before it
 # exits. If docker never started there is nothing to chown and rm fails — say so rather than
 # leaving a silent orphan under /tmp.
-cleanup() { rm -rf "$WORK" 2>/dev/null || echo "grade.sh: could not remove $WORK" >&2; }
+CONTAINER=""
+cleanup() {
+  if [ -n "$CONTAINER" ]; then docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; fi
+  rm -rf "$WORK" 2>/dev/null && return 0
+  # A container killed at the deadline never reached its chown, so target/ and node_modules/
+  # are still root-owned and rm cannot touch them. Hand them back the same way the build does,
+  # or a sweep with a few timeouts in it fills /tmp with gigabytes nobody can delete.
+  docker run --rm -v "$WORK:/w:Z" "$IMAGE" \
+    chown -R "$(id -u):$(id -g)" /w >/dev/null 2>&1 || true
+  rm -rf "$WORK" 2>/dev/null || echo "grade.sh: could not remove $WORK" >&2
+}
 trap cleanup EXIT
 
 # --- the tree the agent left -----------------------------------------------------------------
@@ -178,16 +188,31 @@ run_build() {  # tree, log -> BUILD_STATUS
   local tree="$1" log="$2"
   BUILD_STATUS=0
   # Bounded, because nothing else bounds it: run.sh caps the agent, but a fix that leaves a test
-  # looping forever would stall the whole sweep here. A kill at the deadline exits 124, which
-  # carries no test-failure signal and so lands in the flagged bucket below rather than being
-  # scored as a broken test.
-  timeout "$BUILD_TIMEOUT_S" \
-  docker run --rm --network=none \
+  # looping forever would stall the whole sweep here. A kill at the deadline exits 124 (137 if
+  # the client had to be SIGKILLed), and neither carries a test-failure signal, so both land in
+  # the flagged bucket below rather than being scored as a broken test.
+  #
+  # It takes all three of the following, and each was verified against a container hanging on
+  # `sleep 300` — `timeout` alone bounds neither the container nor the wait:
+  #
+  #   timeout        signals the docker *client*, which proxies the TERM to PID 1 in the
+  #   -k             container. A shell there ignores a signal it has no handler for, so the
+  #                  client stays attached and grade.sh blocks past its own deadline. -k
+  #                  SIGKILLs the client, which is what actually unblocks the decision.
+  #   --name         the container outlives the client either way — still `Up` and executing,
+  #   docker rm -f   or stranded in `Created`, which `--rm` never reaps because the client died
+  #                  before the container's lifecycle completed. Removing it by name afterwards,
+  #                  unconditionally, is what actually bounds the container.
+  CONTAINER="nexus-grade-$$-$RANDOM"
+  timeout -k 10 "$BUILD_TIMEOUT_S" \
+  docker run --rm --name "$CONTAINER" --network=none \
     -v "$tree:/work:Z" -w /work \
     -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
     "$IMAGE" \
     bash -lc 'fixture-build .; status=$?; chown -R "$HOST_UID:$HOST_GID" /work 2>/dev/null || true; exit $status' \
     >"$log" 2>&1 </dev/null || BUILD_STATUS=$?
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  CONTAINER=""
   # 125 is docker failing, 126/127 the container failing to run the command. None of them is a
   # verdict about the agent's diff, and recording one as a failed gate would zero a run for a
   # reason nothing in the results distinguishes from a bad fix.
