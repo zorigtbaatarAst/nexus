@@ -1,0 +1,14 @@
+diff --git a/src/main/resources/db/migration/V4__restore_payment_unique_index.sql b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+new file mode 100644
+index 0000000..70c933f
+--- /dev/null
++++ b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+@@ -0,0 +1,8 @@
++-- Restores the unique index V3 dropped. It is the enforcement half of the idempotency
++-- guarantee, not a lookup path, so it will keep showing zero reads in pg_stat_user_indexes:
++-- do not drop it on that evidence again. ix_payment_status_created stays dropped -- that one
++-- really was an unused lookup index.
++--
++-- If duplicate idempotency keys were written while the index was missing, this migration
++-- fails until they are reconciled; that is deliberate, the rows need a human decision.
++CREATE UNIQUE INDEX ux_payment_idempotency_key ON payment (idempotency_key);

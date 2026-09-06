@@ -1,0 +1,18 @@
+diff --git a/api/src/main/java/mn/shop/api/OrderDto.java b/api/src/main/java/mn/shop/api/OrderDto.java
+index 900cf16..8684e31 100644
+--- a/api/src/main/java/mn/shop/api/OrderDto.java
++++ b/api/src/main/java/mn/shop/api/OrderDto.java
+@@ -2,7 +2,12 @@ package mn.shop.api;
+ 
+ import java.math.BigDecimal;
+ 
+-public record OrderDto(String id, String reference, BigDecimal grossAmount, String status) {
++/**
++ * The GraphQL-facing shape of an order. Component names are bound by name to the fields of
++ * `type Order` in order.graphqls, so renaming one here without renaming it there leaves the
++ * schema field unresolvable.
++ */
++public record OrderDto(String id, String reference, BigDecimal totalAmount, String status) {
+ 
+     public static OrderDto of(Order o) {
+         return new OrderDto(o.getId(), o.getReference(), o.getTotalAmount(), o.getStatus());

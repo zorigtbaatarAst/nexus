@@ -1,0 +1,15 @@
+{
+  "task": "A1-idempotency-key-length",
+  "arm": "A1",
+  "repetition": 2,
+  "model": "claude-opus-5",
+  "input_tokens": 22,
+  "output_tokens": 5242,
+  "cache_read_tokens": 275363,
+  "cache_creation_tokens": 14966,
+  "total_cost_usd": 0.4185015,
+  "num_turns": 11,
+  "duration_api_ms": 75267,
+  "claude_exit": 0,
+  "claimed_done": true
+}

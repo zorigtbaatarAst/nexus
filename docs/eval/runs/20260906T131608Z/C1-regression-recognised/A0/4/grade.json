@@ -1,0 +1,21 @@
+{
+  "task": "C1-regression-recognised",
+  "repo": "spring-payments",
+  "commit": "4d998289fdcb4ddf9eef852de86ab9803ca14254",
+  "L0_build": true,
+  "L1_hidden": true,
+  "L2_collateral": true,
+  "L3_sites_found": [
+    "src/main/resources/db/migration"
+  ],
+  "L3_sites_missed": [],
+  "passed": true,
+  "diff_empty": false,
+  "diff_applied": true,
+  "hidden_tests_placed": [
+    "src/test/java/mn/payments/HiddenTest.java"
+  ],
+  "baseline_exit": 0,
+  "graded_exit": 0,
+  "adjudicate": []
+}

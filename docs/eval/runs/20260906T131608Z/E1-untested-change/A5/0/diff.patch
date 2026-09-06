@@ -1,0 +1,27 @@
+diff --git a/src/main/java/mn/pay/PaymentService.java b/src/main/java/mn/pay/PaymentService.java
+index 63c8c98..84eae27 100644
+--- a/src/main/java/mn/pay/PaymentService.java
++++ b/src/main/java/mn/pay/PaymentService.java
+@@ -32,6 +32,22 @@ public class PaymentService {
+         return repository.save(p);
+     }
+ 
++    /**
++     * Cancellation is a state transition, not a delete: the row stays for the ledger. Reading
++     * and writing inside one transaction keeps two concurrent cancels from both seeing PENDING.
++     */
++    @Transactional
++    public Payment cancel(String paymentId) {
++        Payment p = repository.findById(paymentId)
++                .orElseThrow(() -> new IllegalArgumentException("unknown payment: " + paymentId));
++        if (!"PENDING".equals(p.getStatus())) {
++            throw new IllegalStateException(
++                    "only a PENDING payment can be cancelled, was " + p.getStatus());
++        }
++        p.setStatus("CANCELLED");
++        return repository.save(p);
++    }
++
+     /** The live total. Rounds half-up to two places, which is what the ledger expects. */
+     public BigDecimal total(List<Payment> payments) {
+         BigDecimal sum = BigDecimal.ZERO;

@@ -1,0 +1,10 @@
+=== UserPromptSubmit prompt=73 injected=1033 bytes
+Code (8)
+  libs/common/src/test/java/mn/acme/common/MoneyTest.java libs/common/src/test/java/mn/acme/common/MoneyTest.java:1 · bm25 10.377
+  build.gradle                                         build.gradle:1 · bm25 6.276
+  libs/common/src/main/java/mn/acme/common/Money.java  libs/common/src/main/java/mn/acme/common/Money.java:1 · bm25 5.079
+  services/orders/src/main/java/mn/acme/orders/OrderService.java services/orders/src/main/java/mn/acme/orders/OrderService.java:1 · bm25 4.265
+  services/orders/src/main/java/mn/acme/orders/OrderEntity.java services/orders/src/main/java/mn/acme/orders/OrderEntity.java:1 · bm25 2.057
+  settings.gradle                                      settings.gradle:1 · bm25 1.342
+  services/inventory/src/main/java/mn/acme/inventory/StockItem.java services/inventory/src/main/java/mn/acme/inventory/StockItem.java:1 · bm25 0.907
+  services/inventory/src/main/java/mn/acme/inventory/InventoryService.java services/inventory/src/main/java/mn/acme/inventory/InventoryService.java:1 · bm25 0.855

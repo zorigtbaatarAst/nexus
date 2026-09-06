@@ -1,0 +1,15 @@
+{
+  "task": "B2-orphaned-field-diagnosis",
+  "arm": "A5",
+  "repetition": 3,
+  "model": "claude-opus-5",
+  "input_tokens": 28,
+  "output_tokens": 6542,
+  "cache_read_tokens": 400146,
+  "cache_creation_tokens": 19062,
+  "total_cost_usd": 0.555357,
+  "num_turns": 14,
+  "duration_api_ms": 90902,
+  "claude_exit": 0,
+  "claimed_done": false
+}

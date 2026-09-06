@@ -1,0 +1,36 @@
+diff --git a/src/main/java/mn/payments/PaymentService.java b/src/main/java/mn/payments/PaymentService.java
+index 0fe2ef3..0dfbb6f 100644
+--- a/src/main/java/mn/payments/PaymentService.java
++++ b/src/main/java/mn/payments/PaymentService.java
+@@ -18,10 +18,12 @@ public class PaymentService {
+     }
+ 
+     /**
+-     * The check is back inside the transaction, and V2__payment_unique_index.sql makes the
++     * The check is back inside the transaction, and ux_payment_idempotency_key makes the
+      * database the final arbiter: the application check is now an optimisation, not the
+      * guarantee. Both halves are needed — the index alone turns a duplicate into an
+-     * exception, and the transaction alone still races on a cluster.
++     * exception, and the transaction alone still races on a cluster. The index was added by
++     * V2__payment_unique_index.sql, dropped in error by V3, and restored by
++     * V4__restore_payment_idempotency_index.sql.
+      */
+     @Transactional
+     public Payment create(String idempotencyKey, BigDecimal amount) {
+diff --git a/src/main/resources/db/migration/V4__restore_payment_idempotency_index.sql b/src/main/resources/db/migration/V4__restore_payment_idempotency_index.sql
+new file mode 100644
+index 0000000..eeeef00
+--- /dev/null
++++ b/src/main/resources/db/migration/V4__restore_payment_idempotency_index.sql
+@@ -0,0 +1,11 @@
++-- Restores ux_payment_idempotency_key, dropped by V3__drop_unused_indexes.sql.
++--
++-- The Q3 storage review read "no reads in pg_stat_user_indexes" as "unused". A unique index
++-- backing a constraint records no reads by design: it is enforced on write, not scanned on
++-- read. Dropping it removed the only cross-transaction guarantee behind idempotency and
++-- reopened the duplicate-payment race that V2__payment_unique_index.sql closed. The
++-- application check in PaymentService#create is an optimisation; on more than one node, two
++-- concurrent calls carrying the same key can both miss it and both insert.
++--
++-- Not "unused" — do not drop again on read statistics alone.
++CREATE UNIQUE INDEX ux_payment_idempotency_key ON payment (idempotency_key);

@@ -1,0 +1,61 @@
+diff --git a/src/main/java/mn/payments/Payment.java b/src/main/java/mn/payments/Payment.java
+index c54da81..5402781 100644
+--- a/src/main/java/mn/payments/Payment.java
++++ b/src/main/java/mn/payments/Payment.java
+@@ -13,11 +13,16 @@ public class Payment {
+     private String id;
+ 
+     // Optimistic locking: two concurrent settlements of the same payment can no longer
+-    // both win. Added with V2__payment_unique_index.sql, which closes the other half.
++    // both win. The other half is the unique index on idempotency_key, added by
++    // V2__payment_unique_index.sql and restored by V4__restore_payment_unique_index.sql
++    // after V3 dropped it.
+     @Version
+     private Long version;
+ 
+-    @Column(nullable = false)
++    // unique = true records the invariant here as well as in the migration: one payment per
++    // idempotency key. The index is a correctness constraint, not a lookup path, so it will
++    // always show zero reads in pg_stat_user_indexes. Do not drop it on that evidence.
++    @Column(nullable = false, unique = true)
+     private String idempotencyKey;
+ 
+     @Column(nullable = false)
+diff --git a/src/main/java/mn/payments/PaymentService.java b/src/main/java/mn/payments/PaymentService.java
+index 0fe2ef3..c700c18 100644
+--- a/src/main/java/mn/payments/PaymentService.java
++++ b/src/main/java/mn/payments/PaymentService.java
+@@ -18,8 +18,9 @@ public class PaymentService {
+     }
+ 
+     /**
+-     * The check is back inside the transaction, and V2__payment_unique_index.sql makes the
+-     * database the final arbiter: the application check is now an optimisation, not the
++     * The check is back inside the transaction, and the unique index on idempotency_key
++     * (V2__payment_unique_index.sql, restored by V4__restore_payment_unique_index.sql) makes
++     * the database the final arbiter: the application check is now an optimisation, not the
+      * guarantee. Both halves are needed — the index alone turns a duplicate into an
+      * exception, and the transaction alone still races on a cluster.
+      */
+diff --git a/src/main/resources/db/migration/V4__restore_payment_unique_index.sql b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+new file mode 100644
+index 0000000..891953a
+--- /dev/null
++++ b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+@@ -0,0 +1,16 @@
++-- Restores ux_payment_idempotency_key, which V3__drop_unused_indexes.sql dropped.
++--
++-- The Q3 storage review read pg_stat_user_indexes and saw zero index scans on this index,
++-- which is exactly what a uniqueness constraint looks like: nothing plans a lookup through
++-- it, the executor only consults it to reject a conflicting insert. Dropping it reopened the
++-- duplicate-payment race that V2 closed, and duplicates have been reaching production since.
++--
++-- Do NOT drop this index on read-count evidence. It is a correctness constraint, not a
++-- lookup path.
++--
++-- If this migration fails with "could not create unique index", duplicate rows landed while
++-- the index was missing. Do not delete payment rows to make it pass -- reconcile them first:
++--
++--   SELECT idempotency_key, count(*), array_agg(id ORDER BY id)
++--     FROM payment GROUP BY idempotency_key HAVING count(*) > 1;
++CREATE UNIQUE INDEX ux_payment_idempotency_key ON payment (idempotency_key);

@@ -1,0 +1,16 @@
+=== SessionStart injected=272 bytes
+Project: work
+  languages    java (7)
+  frameworks   spring-boot 3.3.5 build.gradle:18
+  build        gradle · gradle
+
+Open findings (1)
+  ARC-1  UNVERIFIED  build  no CI is configured for this gradle project
+
+considered 1 · included 1 · excluded 0 · 232 of 800 tokens
+=== UserPromptSubmit prompt=73 injected=645 bytes
+Code (4)
+  mn.acme.common.Money  name match                     libs/common/src/main/java/mn/acme/common/Money.java:10 · seed: 'Money' in the request
+  mn.acme.common.Money#Money(BigDecimal,String)  name match libs/common/src/main/java/mn/acme/common/Money.java:15 · seed: 'Money' in the request
+  mn.acme.common.Money#amount  name match              libs/common/src/main/java/mn/acme/common/Money.java:12 · seed: 'Money' in the request (member of mn.acme.common.Money)
+  mn.acme.orders.OrderService#total(List)  depth 1     services/orders/src/main/java/mn/acme/orders/OrderService.java:10 · both: via calls mn.acme.common.Money#plus(Money)

@@ -1,0 +1,24 @@
+{
+  "task": "A2-shared-type-change",
+  "repo": "acme-monorepo",
+  "commit": "3faebf1a20a77920d44a606e8dbfb500c0ebd40a",
+  "L0_build": true,
+  "L1_hidden": true,
+  "L2_collateral": true,
+  "L3_sites_found": [
+    "libs/common/src/main/java/mn/acme/common/Money.java"
+  ],
+  "L3_sites_missed": [
+    "services/orders/src/main/java/mn/acme/orders/OrderService.java",
+    "services/inventory/src/main/java/mn/acme/inventory/InventoryService.java"
+  ],
+  "passed": true,
+  "diff_empty": false,
+  "diff_applied": true,
+  "hidden_tests_placed": [
+    "libs/common/src/test/java/mn/acme/common/HiddenTest.java"
+  ],
+  "baseline_exit": 0,
+  "graded_exit": 0,
+  "adjudicate": []
+}

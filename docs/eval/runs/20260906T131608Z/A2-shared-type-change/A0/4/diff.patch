@@ -1,0 +1,23 @@
+diff --git a/libs/common/src/main/java/mn/acme/common/Money.java b/libs/common/src/main/java/mn/acme/common/Money.java
+index b3dfadb..a68b83d 100644
+--- a/libs/common/src/main/java/mn/acme/common/Money.java
++++ b/libs/common/src/main/java/mn/acme/common/Money.java
+@@ -9,11 +9,17 @@ import java.math.RoundingMode;
+  */
+ public final class Money {
+ 
++    /**
++     * Amounts are held to four decimal places so FX-denominated orders keep the sub-cent
++     * precision their rates carry; rounding to the currency's own scale is a display concern.
++     */
++    private static final int SCALE = 4;
++
+     private final BigDecimal amount;
+     private final String currency;
+ 
+     public Money(BigDecimal amount, String currency) {
+-        this.amount = amount.setScale(2, RoundingMode.HALF_UP);
++        this.amount = amount.setScale(SCALE, RoundingMode.HALF_UP);
+         this.currency = currency;
+     }
+ 

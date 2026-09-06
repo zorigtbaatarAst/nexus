@@ -1,0 +1,15 @@
+=== SessionStart injected=116 bytes
+Project: work
+  languages    java (5), typescript (4)
+
+considered 0 · included 0 · excluded 0 · 165 of 800 tokens
+=== UserPromptSubmit prompt=68 injected=1168 bytes
+Code (8)
+  web/src/lib/orders#Order  name match                 web/src/lib/orders.ts:22 · seed: 'Order' in the request
+  mn.shop.api.Order  name match                        api/src/main/java/mn/shop/api/Order.java:7 · seed: 'Order' in the request
+  graphql:api:Query.order  name match                  api/src/main/resources/graphql/order.graphqls:10 · seed: 'Order' in the request
+  mn.shop.api.OrderController#order(String)  name match api/src/main/java/mn/shop/api/OrderController.java:22 · seed: 'Order' in the request
+  mn.shop.api.Order#getId()  name match                api/src/main/java/mn/shop/api/Order.java:19 · seed: 'Order' in the request (member of mn.shop.api.Order)
+  mn.shop.api.Order#status  name match                 api/src/main/java/mn/shop/api/Order.java:17 · seed: 'Order' in the request (member of mn.shop.api.Order)
+  web/src/components/OrderSummary#OrderSummary  text match web/src/components/OrderSummary.tsx:3 · seed: "Order summary" appears in web/src/components/OrderSummary.tsx
+  mn.shop.api.OrderDto#of(Order)  depth 1              api/src/main/java/mn/shop/api/OrderDto.java:7 · reverse: via calls mn.shop.api.Order#getId()

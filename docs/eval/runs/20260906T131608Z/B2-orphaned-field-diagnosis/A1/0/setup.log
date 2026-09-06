@@ -1,0 +1,22 @@
+Nexus
+────────────────────────────────────────
+
+Project: work
+  languages    java (5), typescript (4)
+
+Initialized /work/.nexus
+  next: nexus scan
+Nexus
+────────────────────────────────────────
+
+Scan
+  scan-001 · full
+  commit       97eb3df
+  files        15
+  symbols      30
+  call sites   24 (78% coverage of 18 in-project, 6 external)
+  skipped      5 (no analyzer for this language)
+  took         4 ms
+
+  4 edges point inside the project but matched no symbol (overloads, inherited methods)
+setup exit=0

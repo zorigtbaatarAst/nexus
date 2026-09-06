@@ -1,0 +1,93 @@
+diff --git a/src/main/resources/db/migration/V4__restore_payment_unique_index.sql b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+new file mode 100644
+index 0000000..5f0249e
+--- /dev/null
++++ b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+@@ -0,0 +1,12 @@
++-- Restores the unique index that V2 added and V3 dropped.
++--
++-- V3 removed it because pg_stat_user_indexes reported no reads. That statistic cannot see
++-- what this index does: it is a uniqueness constraint enforced on write, not a lookup path,
++-- so a zero read count is its normal state and not evidence that it is unused. Without it
++-- the application-level existence check in PaymentService#create is the only barrier, and
++-- under READ COMMITTED two concurrent transactions with the same idempotency key both see
++-- no row and both insert -- the duplicate charge this index exists to prevent.
++--
++-- Do not drop this index. If a future storage review flags it as unread again, that is the
++-- expected reading, not a finding.
++CREATE UNIQUE INDEX IF NOT EXISTS ux_payment_idempotency_key ON payment (idempotency_key);
+diff --git a/src/test/java/mn/payments/PaymentIdempotencyIndexTest.java b/src/test/java/mn/payments/PaymentIdempotencyIndexTest.java
+new file mode 100644
+index 0000000..d64fe4a
+--- /dev/null
++++ b/src/test/java/mn/payments/PaymentIdempotencyIndexTest.java
+@@ -0,0 +1,69 @@
++package mn.payments;
++
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++import java.io.IOException;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.util.Comparator;
++import java.util.List;
++import java.util.Locale;
++import org.junit.jupiter.api.Test;
++
++/**
++  * The unique index on payment.idempotency_key is what actually prevents duplicate charges;
++  * the check in PaymentService#create races without it. It has been dropped once already, by
++  * a storage review reading its zero read count as "unused" (V3). This replays the migrations
++  * in version order and fails if the index is not live at the end, so the next such drop is
++  * caught here instead of in production.
++  */
++class PaymentIdempotencyIndexTest {
++
++        private static final String INDEX = "ux_payment_idempotency_key";
++
++        @Test
++        void idempotency_key_index_survives_all_migrations() throws IOException {
++                boolean present = false;
++                for (Path migration : migrationsInVersionOrder()) {
++                        for (String statement : Files.readString(migration).split(";")) {
++                                String sql = stripComments(statement);
++                                if (!sql.contains(INDEX)) {
++                                        continue;
++                                }
++                                if (sql.contains("create") && sql.contains("unique index")) {
++                                        present = true;
++                                } else if (sql.contains("drop index")) {
++                                        present = false;
++                                }
++                        }
++                }
++                assertTrue(
++                                present,
++                                INDEX
++                                                + " is not present after the last migration. Without it, two concurrent"
++                                                + " create() calls with the same idempotency key both insert and the"
++                                                + " customer is charged twice. Do not drop it: it is a write-side"
++                                                + " constraint, so it reports zero reads even when it is doing its job.");
++        }
++
++        private static List<Path> migrationsInVersionOrder() throws IOException {
++                try (var files = Files.list(Path.of("src/main/resources/db/migration"))) {
++                        return files.filter(p -> p.toString().endsWith(".sql"))
++                                        .sorted(Comparator.comparingInt(PaymentIdempotencyIndexTest::version))
++                                        .toList();
++                }
++        }
++
++        /** Flyway orders by the numeric version in the "V<n>__" prefix, not by filename. */
++        private static int version(Path migration) {
++                String name = migration.getFileName().toString();
++                return Integer.parseInt(name.substring(1, name.indexOf("__")));
++        }
++
++        private static String stripComments(String statement) {
++                return statement.lines()
++                                .map(line -> line.replaceAll("--.*", ""))
++                                .reduce("", (a, b) -> a + " " + b)
++                                .toLowerCase(Locale.ROOT);
++        }
++}

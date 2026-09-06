@@ -1,0 +1,18 @@
+=== SessionStart injected=258 bytes
+Project: work
+  languages    java (8)
+  frameworks   spring-boot pom.xml:11
+  build        maven · maven
+
+Open findings (1)
+  ARC-1  UNVERIFIED  build  no CI is configured for this maven project
+
+considered 1 · included 1 · excluded 0 · 228 of 800 tokens
+=== UserPromptSubmit prompt=100 injected=1001 bytes
+Code (6)
+  mn.pay.PaymentService  name match                    src/main/java/mn/pay/PaymentService.java:9 · seed: 'PaymentService' in the request
+  mn.pay.PaymentService#repository  name match         src/main/java/mn/pay/PaymentService.java:12 · seed: 'PaymentService' in the request (member of mn.pay.PaymentService)
+  mn.pay.PaymentService#total(List)  name match        src/main/java/mn/pay/PaymentService.java:36 · seed: 'PaymentService' in the request (member of mn.pay.PaymentService)
+  mn.pay.PaymentController  depth 1                    src/main/java/mn/pay/PaymentController.java:10 · reverse: via injects mn.pay.PaymentService
+  mn.pay.PaymentController#createPayment(String,BigDecimal)  depth 1 src/main/java/mn/pay/PaymentController.java:26 · reverse: via calls mn.pay.PaymentService#create(String,BigDecimal)
+  graphql:Mutation.createPayment  depth 2              src/main/resources/graphql/payment.graphqls:12 · reverse: via calls mn.pay.PaymentService#create(String,BigDecimal)

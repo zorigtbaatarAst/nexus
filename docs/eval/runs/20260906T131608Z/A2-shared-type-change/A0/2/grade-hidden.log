@@ -1,0 +1,66 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.10.2/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+> Task :libs:compileJava NO-SOURCE
+> Task :libs:processResources NO-SOURCE
+> Task :libs:classes UP-TO-DATE
+> Task :libs:compileTestJava NO-SOURCE
+> Task :libs:processTestResources NO-SOURCE
+> Task :libs:testClasses UP-TO-DATE
+> Task :libs:test NO-SOURCE
+> Task :services:compileJava NO-SOURCE
+> Task :services:processResources NO-SOURCE
+> Task :services:classes UP-TO-DATE
+> Task :services:compileTestJava NO-SOURCE
+> Task :services:processTestResources NO-SOURCE
+> Task :services:testClasses UP-TO-DATE
+> Task :services:test NO-SOURCE
+> Task :libs:common:compileJava
+> Task :libs:common:processResources NO-SOURCE
+> Task :libs:common:classes
+> Task :libs:common:jar
+> Task :libs:common:compileTestJava
+> Task :libs:common:processTestResources NO-SOURCE
+> Task :libs:common:testClasses
+
+> Task :libs:common:test
+
+HiddenTest > noServiceRoundsThePrecisionStraightBackOff() PASSED
+
+HiddenTest > anFxAmountKeepsItsFourthDecimalPlace() PASSED
+
+HiddenTest > anAmountWithFewerPlacesIsCarriedAtTheNewScale() PASSED
+
+MoneyTest > refuses_to_add_across_currencies() PASSED
+
+MoneyTest > adds_amounts_in_the_same_currency() PASSED
+
+> Task :services:inventory:compileJava
+> Task :services:inventory:processResources NO-SOURCE
+> Task :services:inventory:classes
+> Task :services:inventory:compileTestJava NO-SOURCE
+> Task :services:inventory:processTestResources NO-SOURCE
+> Task :services:inventory:testClasses UP-TO-DATE
+> Task :services:inventory:test NO-SOURCE
+> Task :services:orders:compileJava
+> Task :services:orders:processResources NO-SOURCE
+> Task :services:orders:classes
+> Task :services:orders:compileTestJava NO-SOURCE
+> Task :services:orders:processTestResources NO-SOURCE
+> Task :services:orders:testClasses UP-TO-DATE
+> Task :services:orders:test NO-SOURCE
+> Task :services:shipping:compileJava NO-SOURCE
+> Task :services:shipping:processResources NO-SOURCE
+> Task :services:shipping:classes UP-TO-DATE
+> Task :services:shipping:compileTestJava NO-SOURCE
+> Task :services:shipping:processTestResources NO-SOURCE
+> Task :services:shipping:testClasses UP-TO-DATE
+> Task :services:shipping:test NO-SOURCE
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/8.10.2/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 2s
+6 actionable tasks: 6 executed

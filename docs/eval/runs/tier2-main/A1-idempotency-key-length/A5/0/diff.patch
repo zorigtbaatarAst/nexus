@@ -1,0 +1,21 @@
+diff --git a/src/main/java/mn/pay/Payment.java b/src/main/java/mn/pay/Payment.java
+index 0a85229..516ef2d 100644
+--- a/src/main/java/mn/pay/Payment.java
++++ b/src/main/java/mn/pay/Payment.java
+@@ -11,7 +11,7 @@ public class Payment {
+     @Id
+     private String id;
+ 
+-    @Column(nullable = false)
++    @Column(nullable = false, length = 128)
+     private String idempotencyKey;
+ 
+     @Column(nullable = false)
+diff --git a/src/main/resources/db/migration/V2__widen_idempotency_key.sql b/src/main/resources/db/migration/V2__widen_idempotency_key.sql
+new file mode 100644
+index 0000000..3f15912
+--- /dev/null
++++ b/src/main/resources/db/migration/V2__widen_idempotency_key.sql
+@@ -0,0 +1,2 @@
++-- The new upstream provider issues idempotency keys longer than the original 64 characters.
++ALTER TABLE payment ALTER COLUMN idempotency_key SET DATA TYPE VARCHAR(128);

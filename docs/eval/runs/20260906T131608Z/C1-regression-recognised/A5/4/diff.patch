@@ -1,0 +1,90 @@
+diff --git a/src/main/java/mn/payments/Payment.java b/src/main/java/mn/payments/Payment.java
+index c54da81..cdf2e03 100644
+--- a/src/main/java/mn/payments/Payment.java
++++ b/src/main/java/mn/payments/Payment.java
+@@ -13,7 +13,7 @@ public class Payment {
+     private String id;
+ 
+     // Optimistic locking: two concurrent settlements of the same payment can no longer
+-    // both win. Added with V2__payment_unique_index.sql, which closes the other half.
++    // both win. Paired with ux_payment_idempotency_key, which closes the other half.
+     @Version
+     private Long version;
+ 
+@@ -26,6 +26,17 @@ public class Payment {
+     @Column(nullable = false)
+     private String status;
+ 
++    protected Payment() {
++        // for JPA
++    }
++
++    public Payment(String id, String idempotencyKey, BigDecimal amount, String status) {
++        this.id = id;
++        this.idempotencyKey = idempotencyKey;
++        this.amount = amount;
++        this.status = status;
++    }
++
+     public String getId() {
+         return id;
+     }
+diff --git a/src/main/java/mn/payments/PaymentService.java b/src/main/java/mn/payments/PaymentService.java
+index 0fe2ef3..aa4054d 100644
+--- a/src/main/java/mn/payments/PaymentService.java
++++ b/src/main/java/mn/payments/PaymentService.java
+@@ -3,6 +3,7 @@ package mn.payments;
+ import java.math.BigDecimal;
+ import java.math.RoundingMode;
+ import java.util.List;
++import java.util.UUID;
+ import org.springframework.stereotype.Service;
+ import org.springframework.transaction.annotation.Transactional;
+ 
+@@ -18,10 +19,14 @@ public class PaymentService {
+     }
+ 
+     /**
+-     * The check is back inside the transaction, and V2__payment_unique_index.sql makes the
++     * The check is back inside the transaction, and ux_payment_idempotency_key makes the
+      * database the final arbiter: the application check is now an optimisation, not the
+      * guarantee. Both halves are needed — the index alone turns a duplicate into an
+      * exception, and the transaction alone still races on a cluster.
++     *
++     * <p>The index guards idempotency_key, so the insert must actually carry the caller's
++     * key. A row written with a null key is not covered by the index at all, since a
++     * unique index treats nulls as distinct.
+      */
+     @Transactional
+     public Payment create(String idempotencyKey, BigDecimal amount) {
+@@ -29,8 +34,8 @@ public class PaymentService {
+         if (repository.existsByIdempotencyKey(idempotencyKey)) {
+             return repository.findByIdempotencyKey(idempotencyKey).orElseThrow();
+         }
+-        Payment p = new Payment();
+-        p.setStatus("PENDING");
++        Payment p =
++                new Payment(UUID.randomUUID().toString(), idempotencyKey, amount, "PENDING");
+         return repository.save(p);
+     }
+ 
+diff --git a/src/main/resources/db/migration/V4__restore_payment_unique_index.sql b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+new file mode 100644
+index 0000000..ad18ba6
+--- /dev/null
++++ b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+@@ -0,0 +1,14 @@
++-- Restores the uniqueness guarantee that V3__drop_unused_indexes.sql removed.
++--
++-- V3 dropped ux_payment_idempotency_key because pg_stat_user_indexes recorded no reads
++-- against it. That statistic does not mean what the storage review took it to mean: the
++-- index is a write-side constraint, not a lookup path, so it is never "read" by a query
++-- plan and its scan count stays at zero no matter how much work it is doing. Dropping it
++-- reopened the duplicate-payment race that V2 closed.
++--
++-- Do not drop this index on read-count evidence again.
++--
++-- NOTE FOR DEPLOY: this will fail if the payment table already contains rows sharing an
++-- idempotency_key -- which is exactly what the double charges in production are. The
++-- duplicates have to be reconciled before this migration can apply. See the deploy notes.
++CREATE UNIQUE INDEX ux_payment_idempotency_key ON payment (idempotency_key);

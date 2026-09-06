@@ -1,0 +1,13 @@
+diff --git a/src/main/java/mn/pay/PaymentValidator.java b/src/main/java/mn/pay/PaymentValidator.java
+index 5558bf9..057e244 100644
+--- a/src/main/java/mn/pay/PaymentValidator.java
++++ b/src/main/java/mn/pay/PaymentValidator.java
+@@ -11,7 +11,7 @@ public class PaymentValidator {
+             throw new IllegalArgumentException("idempotency key is required");
+         }
+         if (amount == null || amount.signum() <= 0) {
+-            throw new IllegalArgumentException("amount must be positive");
++            throw new IllegalArgumentException("amount must be greater than zero");
+         }
+     }
+ }

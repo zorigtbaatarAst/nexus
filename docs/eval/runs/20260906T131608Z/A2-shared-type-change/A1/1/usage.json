@@ -1,0 +1,15 @@
+{
+  "task": "A2-shared-type-change",
+  "arm": "A1",
+  "repetition": 1,
+  "model": "claude-opus-5",
+  "input_tokens": 18,
+  "output_tokens": 2550,
+  "cache_read_tokens": 229132,
+  "cache_creation_tokens": 14330,
+  "total_cost_usd": 0.321706,
+  "num_turns": 11,
+  "duration_api_ms": 41915,
+  "claude_exit": 0,
+  "claimed_done": true
+}

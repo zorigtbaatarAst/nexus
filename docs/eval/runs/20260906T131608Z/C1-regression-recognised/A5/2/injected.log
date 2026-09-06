@@ -1,0 +1,14 @@
+=== UserPromptSubmit prompt=81 injected=1444 bytes
+Code (12)
+  src/main/java/mn/payments/legacy/LegacyPaymentCalculator.java src/main/java/mn/payments/legacy/LegacyPaymentCalculator.java:1 · bm25 12.842
+  src/main/resources/db/migration/V3__drop_unused_indexes.sql src/main/resources/db/migration/V3__drop_unused_indexes.sql:1 · bm25 5.621
+  src/main/java/mn/payments/PaymentService.java        src/main/java/mn/payments/PaymentService.java:1 · bm25 4.660
+  pom.xml                                              pom.xml:1 · bm25 3.828
+  src/main/resources/db/migration/V2__payment_unique_index.sql src/main/resources/db/migration/V2__payment_unique_index.sql:1 · bm25 3.674
+  src/main/java/mn/payments/Payment.java               src/main/java/mn/payments/Payment.java:1 · bm25 1.250
+  src/main/resources/graphql/payment.graphqls          src/main/resources/graphql/payment.graphqls:1 · bm25 0.501
+  src/main/java/mn/payments/PaymentRepository.java     src/main/java/mn/payments/PaymentRepository.java:1 · bm25 0.461
+  src/main/java/mn/payments/PaymentDto.java            src/main/java/mn/payments/PaymentDto.java:1 · bm25 0.458
+  src/main/java/mn/payments/PaymentController.java     src/main/java/mn/payments/PaymentController.java:1 · bm25 0.441
+  src/main/java/mn/payments/PaymentValidator.java      src/main/java/mn/payments/PaymentValidator.java:1 · bm25 0.404
+  src/test/java/mn/payments/PaymentServiceTest.java    src/test/java/mn/payments/PaymentServiceTest.java:1 · bm25 0.396
