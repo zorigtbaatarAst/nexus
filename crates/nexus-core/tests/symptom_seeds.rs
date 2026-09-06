@@ -146,11 +146,22 @@ fn a_pasted_prompt_is_answered_rather_than_refused() {
 
 #[test]
 fn a_short_word_seeds_nothing() {
+    // Still an empty package, and for two reasons now rather than one. These words seed
+    // nothing, as ever — and they do not reach the lexical fallback either, because a
+    // three-letter word is below the length floor the seeder itself applies, so the prompt
+    // corroborates nothing to fall back on. `get` and `put` are in the body of `cache.rs`,
+    // so a gate that looked only at whether BM25 matched would send it.
     let (_root, engine) = scanned("short");
-    let files = files_in(&engine, "get put now");
+    let pkg = package(&engine, "get put now");
     assert!(
-        files.is_empty(),
-        "three-letter words are not evidence, however many symbols they match: {files:?}"
+        pkg.items.is_empty(),
+        "three-letter words are not evidence, however many symbols they match: {:?}",
+        pkg.items.iter().map(|i| &i.anchor.file).collect::<Vec<_>>()
+    );
+    assert!(
+        pkg.notes.iter().any(|n| n.contains("no seed")),
+        "and the package still has to say nothing anchored: {:?}",
+        pkg.notes
     );
 }
 
@@ -184,5 +195,104 @@ fn a_case_variant_elsewhere_does_not_hide_a_real_unique_match() {
         files.iter().any(|f| f.contains("src/lib.rs")),
         "`resolved` uniquely names the function even though `Resolved` also matches it \
          case-insensitively: {files:?}"
+    );
+}
+
+/// A fixture with prose in it, because the fallback ranks file *contents*.
+///
+/// `scanned` above is all one-line bodies (`pub fn put() {}`), which is right for testing
+/// what seeds and wrong for testing what happens when nothing does: BM25 reads bodies, not
+/// paths, so a no-seed prompt against that fixture finds nothing and a test built on it would
+/// pass for the wrong reason. This one carries the shape the benchmark actually met — a
+/// symptom whose words appear in a comment, naming no symbol at all.
+fn scanned_prose(name: &str) -> (PathBuf, Engine) {
+    let root = std::env::temp_dir().join(format!("nexus-prose-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    for (path, body) in [
+        ("src/lib.rs", "pub mod pay;\npub mod cache;\n"),
+        (
+            "src/pay.rs",
+            "/// Widen the idempotency key column to 128 characters everywhere it is\n\
+             /// constrained. The upstream provider sends longer keys now.\n\
+             pub fn charge() {}\n",
+        ),
+        (
+            "src/cache.rs",
+            "/// Unrelated: eviction, timers, and a ring buffer.\npub fn evict() {}\n",
+        ),
+    ] {
+        let p = root.join(path);
+        fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+        fs::write(p, body).expect("write");
+    }
+    git(&root, &["init", "-q", "-b", "main"]);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "x"]);
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
+    engine.scan().expect("scan");
+    (root, engine)
+}
+
+fn package(engine: &Engine, text: &str) -> nexus_core::context::ContextPackage {
+    let mut r = TaskRequest::session(TASK_BUDGET_TOKENS);
+    r.text = text.into();
+    r.purpose = Purpose::Task;
+    engine.context(&r).expect("context")
+}
+
+#[test]
+fn a_prompt_that_anchors_nothing_ranks_file_contents_instead() {
+    // The measured case: a symptom written in prose, naming no symbol. "idempotency" and
+    // "column" are ordinary lowercase words that name nothing in the index, so seeding
+    // anchors nothing — and returning an empty package here is what sent an agent into a
+    // task with no context at all on two of five real benchmark prompts.
+    let (_root, engine) = scanned_prose("fires");
+    let pkg = package(
+        &engine,
+        "the idempotency key column is too short for the upstream provider",
+    );
+
+    assert!(
+        !pkg.items.is_empty(),
+        "nothing anchored, so the fallback should have ranked file contents: {pkg:?}"
+    );
+    assert!(
+        pkg.items.iter().any(|i| i.anchor.file.contains("pay.rs")),
+        "the file whose text the symptom describes: {:?}",
+        pkg.items.iter().map(|i| &i.anchor.file).collect::<Vec<_>>()
+    );
+    assert!(
+        pkg.items.iter().all(|i| i.why.starts_with("bm25")),
+        "every item must say it is a lexical guess, not a graph answer: {:?}",
+        pkg.items.iter().map(|i| &i.why).collect::<Vec<_>>()
+    );
+    assert!(
+        pkg.notes.iter().any(|n| n.contains("no seed")),
+        "the agent still has to learn nothing anchored: {:?}",
+        pkg.notes
+    );
+}
+
+#[test]
+fn a_prompt_that_does_anchor_is_untouched_by_the_fallback() {
+    // The trigger is "seeding anchored nothing" and nothing wider. If it ever fires for a
+    // prompt that did anchor, every package the product produces changes and no regression
+    // is attributable to anything.
+    let (_root, engine) = scanned_prose("narrow");
+    let pkg = package(&engine, "charge is called twice");
+
+    assert!(
+        !pkg.items.is_empty(),
+        "`charge` names exactly one symbol, so this must anchor: {pkg:?}"
+    );
+    assert!(
+        pkg.items.iter().all(|i| !i.why.starts_with("bm25")),
+        "a prompt that anchored must not be answered lexically: {:?}",
+        pkg.items.iter().map(|i| &i.why).collect::<Vec<_>>()
+    );
+    assert!(
+        !pkg.notes.iter().any(|n| n.contains("no seed")),
+        "and must not claim nothing anchored: {:?}",
+        pkg.notes
     );
 }

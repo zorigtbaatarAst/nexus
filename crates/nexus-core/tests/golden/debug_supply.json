@@ -37,9 +37,11 @@
     "wanted": [
       "src/main/resources/db/migration/V3__drop_unused_indexes.sql"
     ],
-    "found": {},
-    "items_included": 0,
-    "tokens_estimated": 251,
+    "found": {
+      "src/main/resources/db/migration/V3__drop_unused_indexes.sql": 1
+    },
+    "items_included": 6,
+    "tokens_estimated": 617,
     "intent": "debug"
   }
 ]
