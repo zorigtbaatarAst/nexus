@@ -213,11 +213,26 @@ pub(crate) fn last_segment(fqn: &str) -> &str {
 
 /// How many candidates the index is asked for about one word.
 ///
-/// Above `TOKEN_FAMILY_CAP`, so that a word over the cap is *seen* to be over it rather than
-/// truncated back under it by the `LIMIT` and seeded as though it were a small family.
-const WORD_HIT_LIMIT: usize = 25;
+/// Wide enough that `token_family` is deciding about the *family* and not about a sample of
+/// it. The query it bounds over-matches on purpose — `LIKE '%order%'` also returns `orders`
+/// and `reorder`, which are not the word — so a narrow window fills with near-misses and the
+/// real members fall off the end. A family diluted that way arrives *under* the cap and seeds,
+/// which turns a refusal into a coin toss on row order. At 200 the window holds every family
+/// this rule is meant to admit; a word that fills it is refused outright by `token_family`
+/// rather than judged on what happened to fit.
+///
+/// The cost of the larger window is rows materialized, not rows scanned: `LIKE '%x%'` is
+/// unindexed and reads the table whatever the `LIMIT` says.
+const WORD_HIT_LIMIT: usize = 200;
 
-/// How many symbols a word may name as one *token* of their names before it names nothing.
+/// How many **names** a word may be a token of before it names nothing.
+///
+/// Names, not symbols, and the difference is not pedantry: a family member that is a container
+/// fans out to its own members at the end of `resolve` exactly as any other seed does, so the
+/// symbol-level ceiling for one word is this number times the `members_of` limit. That is
+/// bounded but it is not six. The rule this constant states is about how many distinct
+/// identifiers a word is allowed to be *part of*; what a seed then reaches is the container
+/// rule's business and is the same for a word that names one class exactly.
 ///
 /// A word that is the whole of a name is adjudicated by `exactly_named` and must be unique:
 /// two symbols actually called `handler` are two different things, and picking either is a
@@ -231,7 +246,7 @@ const WORD_HIT_LIMIT: usize = 25;
 /// widest real family is `idempotency` at 4, while `payment` — the word that would drag the
 /// whole repository in — is a token of 13 of them. Six sits between the two and is deliberately
 /// nearer the family.
-const TOKEN_FAMILY_CAP: usize = 6;
+const TOKEN_FAMILY_NAME_CAP: usize = 6;
 
 /// The symbols a word names outright: their own last segment *is* the word.
 ///
@@ -285,7 +300,17 @@ fn name_tokens(name: &str) -> Vec<String> {
 ///
 /// Case-insensitive, because the hump that starts a token inside an identifier is exactly the
 /// capital a person writing prose does not type.
+///
+/// A filled window is a refusal, not a sample to judge. `hits` is what SQL returned under
+/// `WORD_HIT_LIMIT`, and if it came back full the family below is a lower bound rather than
+/// the family — some members are outside the window and the count cannot be compared with a
+/// cap. A word the index has more than `WORD_HIT_LIMIT` matches for is a theme by any reading,
+/// so it is refused on the fact of truncation instead of on an arithmetic that cannot be
+/// trusted.
 fn token_family<'a>(hits: &'a [SymbolRef], word: &str) -> Vec<&'a SymbolRef> {
+    if hits.len() >= WORD_HIT_LIMIT {
+        return Vec::new();
+    }
     let family: Vec<&SymbolRef> = hits
         .iter()
         .filter(|s| {
@@ -294,7 +319,7 @@ fn token_family<'a>(hits: &'a [SymbolRef], word: &str) -> Vec<&'a SymbolRef> {
                 .any(|t| t.eq_ignore_ascii_case(word))
         })
         .collect();
-    if family.len() > TOKEN_FAMILY_CAP {
+    if family.len() > TOKEN_FAMILY_NAME_CAP {
         return Vec::new();
     }
     family

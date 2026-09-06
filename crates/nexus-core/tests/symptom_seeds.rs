@@ -450,3 +450,91 @@ fn a_word_that_names_half_the_repository_seeds_nothing() {
         pkg.notes
     );
 }
+
+/// A fixture where one word has a crowd of near-misses around it.
+///
+/// The index is asked about a word with a single SQL query, and that query over-matches on
+/// purpose: `LIKE '%unit%'` also returns `unit_1`, and `LIKE '%order%'` also returns `reorder`.
+/// Both halves of that bill come due only at scale, so the crowd here is a real one:
+///
+///   * 210 symbols named `unit_N`, all with shorter FQNs than the one symbol actually called
+///     `unit`, which sits three modules down. They are past `WORD_HIT_LIMIT`, so ordering by
+///     length alone would return 200 near-misses and evict the answer.
+///   * 8 symbols whose names carry `order` as a token, sitting behind 20 named `reorder_N`
+///     that merely contain it. A window too small to hold both returns a *diluted* family that
+///     is under the cap, and the refusal becomes a function of row order.
+fn scanned_crowded(name: &str) -> (PathBuf, Engine) {
+    let root = std::env::temp_dir().join(format!("nexus-crowd-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let mut lib = String::from("pub mod deep;\npub mod wide;\n");
+    for i in 0..210 {
+        lib.push_str(&format!("pub fn unit_{i}() {{}}\n"));
+    }
+    for i in 0..20 {
+        lib.push_str(&format!("pub fn reorder_{i}() {{}}\n"));
+    }
+    let mut members = String::new();
+    for i in 0..8 {
+        members.push_str(&format!("pub fn order_b{i}() {{}}\n"));
+    }
+    for (path, body) in [
+        ("src/lib.rs", lib.as_str()),
+        ("src/deep/mod.rs", "pub mod inner;\n"),
+        ("src/deep/inner.rs", "pub fn unit() {}\n"),
+        ("src/wide/mod.rs", "pub mod members;\n"),
+        ("src/wide/members.rs", members.as_str()),
+    ] {
+        let p = root.join(path);
+        fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+        fs::write(p, body).expect("write");
+    }
+    git(&root, &["init", "-q", "-b", "main"]);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "x"]);
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
+    engine.scan().expect("scan");
+    (root, engine)
+}
+
+/// Widening the query must not lose an answer the narrow one gave.
+///
+/// `find_symbols_by_word` admits every symbol whose name merely *contains* the word, and there
+/// are 210 of those here against one symbol actually called `unit`. Ordered by FQN length the
+/// near-misses fill the window and the real match never comes back — a word that anchored
+/// before the widening would anchor no longer, which is a regression dressed as a feature.
+/// The query sorts every row the narrow match would have returned to the front for this reason.
+#[test]
+fn a_crowd_of_near_misses_cannot_evict_the_symbol_a_word_actually_names() {
+    let (_root, engine) = scanned_crowded("evict");
+    let files = files_in(&engine, "the unit is reported twice");
+    assert!(
+        files.iter().any(|f| f.contains("deep/inner.rs")),
+        "`unit` is the name of exactly one symbol, however many others merely contain it: \
+         {files:?}"
+    );
+}
+
+/// The cap has to see the family, not a sample of it.
+///
+/// `order` is a token of eight names here, which is over the cap and must seed nothing. Twenty
+/// symbols named `reorder_N` merely contain the word and sort ahead of all eight. Judge the cap
+/// against a window that holds only some of them and the family arrives under the cap and
+/// seeds — the refusal would be decided by row order rather than by how wide the word is.
+#[test]
+fn a_wide_family_is_refused_even_when_near_misses_crowd_the_window() {
+    let (_root, engine) = scanned_crowded("dilute");
+    let pkg = package(&engine, "the order fails to save");
+    assert!(
+        pkg.items.iter().all(|i| i.why.starts_with("bm25")),
+        "`order` is a token of eight names, which is a theme: nothing may anchor on it: {:?}",
+        pkg.items
+            .iter()
+            .map(|i| (&i.anchor.file, &i.why))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        pkg.notes.iter().any(|n| n.contains("no seed")),
+        "and the package has to say nothing anchored: {:?}",
+        pkg.notes
+    );
+}

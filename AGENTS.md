@@ -145,9 +145,11 @@ that is hard to attribute.
   prompts anchored nothing for that reason alone. `seeds::token_family` splits an identifier
   on camelCase and `snake_case` humps and seeds every symbol the word is a token of — but
   only when *no* symbol is called that outright (two symbols named `handler` are two things,
-  and picking one is a coin flip), and only up to `TOKEN_FAMILY_CAP`, because past a handful
-  a shared token is a theme rather than a name. `payment` is a token of 13 of
-  `spring-payments`' 39 symbols and must keep seeding nothing.
+  and picking one is a coin flip), and only up to `TOKEN_FAMILY_NAME_CAP`, because past a
+  handful a shared token is a theme rather than a name. `payment` is a token of 13 of
+  `spring-payments`' 39 symbols and must keep seeding nothing. The cap counts **names**: a
+  family member that is a container still fans out through `members_of` like any other seed,
+  so the symbol-level ceiling for one word is the cap times that limit.
 
 ## Traps
 

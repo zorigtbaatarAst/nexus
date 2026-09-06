@@ -1684,6 +1684,13 @@ impl Store {
     /// begins. That is why this is a separate query rather than a wider `find_symbols`:
     /// `get-symbol`, `impact` and `verify` resolve a name someone typed and must not start
     /// answering with every symbol that merely contains it.
+    ///
+    /// The ordering is load-bearing, not cosmetic. Every row `find_symbols` would have matched
+    /// sorts ahead of the rows only the new clause admits, so a word with a crowd of merely
+    /// *containing* matches cannot push its own exact match out of the `LIMIT` window. Without
+    /// that, widening the query would quietly *lose* answers the narrow one gave: 210 symbols
+    /// named `unit_1..unit_210` evict the one symbol actually called `unit`, and a caller that
+    /// anchored before returns nothing.
     pub fn find_symbols_by_word(
         &self,
         project_id: ProjectId,
@@ -1696,7 +1703,9 @@ impl Store {
              WHERE s.project_id = ?1
                AND (s.fqn = ?2 OR s.fqn LIKE '%' || ?2 OR s.fqn LIKE '%' || ?2 || '(%'
                     OR s.name = ?2 OR s.name LIKE '%' || ?2 || '%')
-             ORDER BY LENGTH(s.fqn) LIMIT ?3",
+             ORDER BY (s.fqn = ?2 OR s.fqn LIKE '%' || ?2 OR s.fqn LIKE '%' || ?2 || '(%'
+                       OR s.name = ?2) DESC,
+                      LENGTH(s.fqn) LIMIT ?3",
         )?;
         let rows = stmt
             .query_map(params![project_id, word, limit as i64], |r| {
