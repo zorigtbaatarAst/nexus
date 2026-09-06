@@ -27,6 +27,36 @@ The cost of that answer was then measured, and it was higher than the argument a
   angle.** Across three bugs planted and described by symptom, the package reached **none** of
   the files a fix had to touch.
 
+Neither number needs a sweep, and neither has to be taken on trust. Both are reproducible
+offline for free. For each task, resolve its repository and start commit, scan a copy, and ask
+for the package the per-prompt hook would have asked for:
+
+```sh
+read -r REPO COMMIT PROMPT < <(scripts/eval/task_lookup.py A1-idempotency-key-length)
+cp -r "target/fixtures/$REPO" /tmp/t && git -C /tmp/t checkout "$COMMIT" && rm -rf /tmp/t/.nexus
+nexus --project /tmp/t scan
+nexus --project /tmp/t context --task "$PROMPT" --budget 4000 --brief                 # A1
+nexus --project /tmp/t context --task "$PROMPT" --budget 4000 --brief --rank lexical   # A5
+```
+
+Bytes returned by the product arm, at each task's own start commit:
+
+| task | before | after | lexical arm |
+|---|---|---|---|
+| `A1-idempotency-key-length` | **0** | 893 | 893 |
+| `A2-shared-type-change` | 646 | 646 | — |
+| `B1-rename-crosses-the-seam` | 1,169 | 1,169 | — |
+| `B2-orphaned-field-diagnosis` | **0** | 942 | 942 |
+| `C1-regression-recognised` | 287 | 287 | — |
+
+The three that already anchored are byte-identical, which is the trigger being narrow rather
+than a claim about it. On the two that did not, the product arm and the lexical arm now agree
+exactly, because on those prompts the product *is* the lexical ranker — a tie by construction,
+which is what §"Costs" below means about the benchmark's ranking comparison.
+[`docs/eval/tier2.md`](../../eval/tier2.md) §"Pre-sweep measurement" records the same table with
+the arms' full hook arguments. `debug_supply` reproduces with
+`cargo test -p nexus-core --test debug_supply`.
+
 The argument for silence was never wrong. It was made without a third option on the table:
 there was no cheap way to supply *something* relevant when the graph could not anchor. The
 lexical ranker built for the benchmark's control arm is that option, and it already exists.

@@ -34,7 +34,7 @@ and no ranking weight has been tuned, because tuning without ledger evidence is 
 `docs/architecture/11-risks.md` R8 names. `docs/architecture/10-roadmap.md` records what each
 phase delivered and what it left undone.
 
-A Rust workspace of eighteen crates producing one binary image under two names — `nexus` is
+A Rust workspace of nineteen crates producing one binary image under two names — `nexus` is
 the platform, `bughunter` the capability's own CLI — which is both the CLI and the MCP server.
 Which name is running is decided by `argv[0]`, so there is a single dispatch path.
 
