@@ -149,8 +149,24 @@ that the agent looked at all three modules.
 
 ## The coupling that is left
 
-`A1` calls `PaymentValidator.check(String, BigDecimal)` — the only executable gate on key length, so
-the only way to observe the behaviour rather than read it. An agent that deletes or renames that
-method would break the test's compilation rather than its assertion. The task is a width change and
-has no reason to touch that signature, but it is the one place these tests are coupled to the
-fixture's API, and it is where to look first if a run fails L0 with a compile error in `HiddenTest`.
+Every hidden test names something in the fixture, so every one of them can fail to **compile**
+rather than to **assert** if an agent renames or removes what it names. That is the first thing to
+check when a run fails L0 with a compile error in a hidden test — the diff may be a correct fix
+that moved a name the test hard-codes. The full list:
+
+| task | compiles against | also assumes on disk |
+|---|---|---|
+| `A1` | `PaymentValidator.check(String, BigDecimal)` — the only executable gate on key length, so the only way to observe the behaviour rather than read it. The task is a width change and has no reason to touch that signature. | — |
+| `A2` | `new Money(BigDecimal, String)` and `Money.amount()`. The task widens `Money`'s precision, so the constructor and the accessor are exactly what a fix is standing next to. | an ancestor holding `settings.gradle`, and `services/**/src/main/java` for the third test |
+| `B1` | the class names `Order` and `OrderDto` in `mn.shop.api`. Their *properties* are read by reflection, so a rename of a field fails an assertion rather than compilation — but a rename of a **class** breaks the build. | `graphql/*.graphqls` on the test classpath; `src/lib/orders.ts` and `src/components/OrderSummary.tsx` relative to `web/` |
+| `B2` | the class name `OrderDto` in `mn.shop.api`, same reflection treatment for its properties. | an ancestor holding both `api/` and `web/`; `graphql/*.graphqls` on the classpath; `web/src/lib/orders.ts` and `web/src/components/OrderSummary.tsx` |
+| `C1` | nothing — it reads SQL. | `src/main/resources/db/migration/*.sql` relative to the module root |
+
+`A1` and `A2` are the couplings that are accidental: a correct fix has no reason to touch those
+signatures, so a compile error there is a signal about the agent's diff, not about the test. `B1`
+and `B2` hard-code class names the task also has no reason to rename, but their *field* names — the
+ones the task does change — go through reflection on purpose, which is why those degrade into a red
+assertion rather than a red build.
+
+The "also assumes on disk" column is the other half of the same question: a fix that moves the
+schema file, the migration directory or a frontend source is graded as though it deleted it.

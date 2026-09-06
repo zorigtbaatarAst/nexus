@@ -36,8 +36,13 @@ fi
 # per test, and this is what reads it.
 if [ -f settings.gradle ]; then
   FOUND=1
-  gradle_out="$(gradle --offline --no-daemon --console=plain test)"
+  # 2>&1 and the explicit rc, both load-bearing: under `set -e` a failing gradle would exit at
+  # the assignment, before the printf, and the grade log for a red A2 build would carry only
+  # stderr — the compiler errors that say *why* would be the part that got dropped.
+  rc=0
+  gradle_out="$(gradle --offline --no-daemon --console=plain test 2>&1)" || rc=$?
   printf '%s\n' "$gradle_out"
+  [ "$rc" -eq 0 ] || exit "$rc"
   if ! printf '%s\n' "$gradle_out" | grep -q 'PASSED'; then
     echo "fixture-build: gradle build succeeded but no test reported PASSED" >&2
     exit 1

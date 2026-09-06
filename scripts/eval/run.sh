@@ -38,7 +38,11 @@ read -r REPO COMMIT PROMPT < <(python3 "$ROOT/scripts/eval/task_lookup.py" "$TAS
 if [ -n "${BENCH_PROMPT:-}" ]; then
   # A stderr line is easy to lose in a multi-hour sweep and nothing reads the marker, so a run
   # tree is refused outright rather than merely annotated.
-  case "$OUT" in
+  # Resolved to an absolute path first: the pattern needs a literal leading `/`, so a relative
+  # `$OUT` (`docs/eval/runs/foo`, from a hand invocation in the repo root) would slip past the
+  # refusal and silently measure a different task than the run tree claims. `mkdir -p "$OUT"`
+  # above guarantees the directory exists, so the `cd` cannot fail here.
+  case "$(cd "$OUT" && pwd)" in
     */docs/eval/runs/*)
       echo "run.sh: BENCH_PROMPT is set and $OUT is a sweep run tree. An override prompt there" >&2
       echo "would silently measure a different task than the tree claims. Refusing." >&2
@@ -72,6 +76,15 @@ printf '%s' "$PROMPT" > "$WORK/bench/prompt"
 # Credentials are copied into a throwaway per-run directory rather than mounting the real
 # ~/.claude: a bind mount of it would have to be SELinux-relabelled, and relabelling the
 # user's own Claude Code state to run a benchmark is not a trade worth making.
+#
+# The mount below is read-write, and stays that way. Measured 2026-09-06 with an invalid token
+# (no spend): `-v …:/root/.claude:ro` makes the agent report "Not logged in · Please run /login"
+# rather than authenticate at all, while the read-write control gets as far as "OAuth session
+# expired and could not be refreshed" — Claude Code writes projects/, sessions/ and backups/ into
+# that directory on every run. A read-only mount would not fix the real exposure anyway: this is
+# a *copy*, and what leaks is that a token refresh inside a root container rotates the token
+# server-side, which no mount flag prevents. Export ANTHROPIC_API_KEY for a sweep if that
+# matters — it is passed through below, is not rotated by use, and can be revoked on its own.
 mkdir -p "$WORK/home"
 if [ -f "$HOME/.claude/.credentials.json" ]; then
   install -m 600 "$HOME/.claude/.credentials.json" "$WORK/home/.credentials.json"
@@ -152,7 +165,7 @@ cp "$WORK/bench/injected.log" "$OUT/injected.log" 2>/dev/null || true
 CLAUDE_EXIT="$(cat "$WORK/bench/status" 2>/dev/null || echo -1)"
 
 python3 - "$OUT" "$TASK" "$ARM" "$REP" "$MODEL" "$CLAUDE_EXIT" <<'PY'
-import json, sys, pathlib
+import json, re, sys, pathlib
 out, task, arm, rep, model, claude_exit = sys.argv[1:7]
 d = pathlib.Path(out)
 try:
@@ -174,7 +187,11 @@ u = r.get("usage", {}) or {}
     # 0 is a run that finished, 124 one the timeout killed, anything else a crash. Without it
     # every one of those is the same all-zero row.
     "claude_exit": int(claude_exit),
-    "claimed_done": "done" in (r.get("result") or "").lower(),
+    # A whole word, not a substring: "abandoned", "undone" and "nothing to be done" all contain
+    # "done" and none of them is a claim of success. This still over-counts — "not done", "done
+    # nothing" — so `false_done` is a tripwire that owes a hand-audit against the transcripts
+    # before it is published as a number. See docs/eval/tier2.md.
+    "claimed_done": bool(re.search(r"(?<![a-z])done(?![a-z])", r.get("result") or "", re.I)),
 }, indent=2) + "\n")
 PY
 

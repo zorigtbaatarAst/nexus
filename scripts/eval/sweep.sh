@@ -143,6 +143,15 @@ for task in "${TASKS[@]}"; do
       # here, so it fails loudly rather than guessing either "yes, redo it" or "no, count it done".
       if [ -f "$out/usage.json" ] || [ -f "$out/diff.patch" ] || [ -f "$out/.run-started" ]; then
         echo "grade-only $task/$arm/$rep (already paid, no completed grade)"
+        # grade.sh's own refusal says only "no $OUT/diff.patch to grade", which names neither
+        # the marker nor the decision it forces. Said here, before the exit, because the operator
+        # who hits this at hour two reads it at hour nine.
+        if [ -f "$out/.run-started" ] && [ ! -f "$out/diff.patch" ]; then
+          echo "sweep.sh: $out has .run-started but no diff.patch — the host died mid-container." >&2
+          echo "Whether that cell was billed cannot be determined from this run tree. Check the" >&2
+          echo "account's billing, then delete .run-started to pay for it again, or leave the cell" >&2
+          echo "out of the sweep. Guessing double-charges or silently drops a run, so this halts." >&2
+        fi
         "$GRADE" "$task" "$out" >/dev/null
         continue
       fi

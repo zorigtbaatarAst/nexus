@@ -45,8 +45,20 @@ import json
 import math
 import pathlib
 import random
+import re
 import statistics
 import sys
+
+# One record per hook firing in `injected.log`, written by scripts/eval/nexus-hook.sh:
+#
+#     === SessionStart injected=259 bytes
+#     === UserPromptSubmit prompt=93 injected=0 bytes
+#
+# The package itself follows on the next lines, so the label must be anchored at the start of
+# the line. Everything that is not SessionStart is a per-prompt package: an arm's task package
+# is the thing A1-vs-A5 is a contrast between, and a hook renamed one day must keep being
+# counted rather than silently reading as "injected nothing".
+INJECTED_RE = re.compile(r"^=== (\S+)[^\n]*?\binjected=(\d+) bytes\s*$")
 
 # 124 = SIGTERM-then-timeout, 137 = SIGKILL (OOM), -1 = run.sh never wrote a status file at all
 # (the container did not even get that far). All three come with all-zero usage.json fields.
@@ -133,6 +145,20 @@ def sign_test(deltas, favourable=lambda d: d < 0):
     return better, len(deltas)
 
 
+def sign_test_p(better, total):
+    """Exact one-sided binomial p for a sign test: P(X >= better), X ~ Binomial(total, 0.5).
+
+    `total` must already exclude ties — a zero delta favours neither arm, and dropping it is
+    what a sign test does with it. One-sided because T7 is a directional claim ("A1 CPS < A5
+    CPS"), not "the two differ"; a two-sided p would be twice this and is the wrong test for
+    the pre-registered wording. No data (total == 0) is p = 1.0: no evidence, not proof.
+    """
+    if total <= 0:
+        return 1.0
+    better = max(0, min(better, total))
+    return sum(math.comb(total, k) for k in range(better, total + 1)) / 2 ** total
+
+
 # ---------------------------------------------------------------------------
 # Run classification.
 # ---------------------------------------------------------------------------
@@ -158,6 +184,26 @@ def is_infra(run):
     if run.get("claude_exit") in INFRA_EXIT_CODES:
         return True
     return run.get("claude_exit", 0) != 0 and run.get("total_tokens", 0) == 0
+
+
+def injected_prompt_bytes(run_dir):
+    """Bytes the arm's hook injected at the prompt, summed over that run's `injected.log`.
+
+    Returns None when there is no log at all — A0 has no hooks by design, and "no hooks" must
+    never read as "the hooks selected nothing", which is a finding about the ranker. SessionStart
+    records are excluded: they are a fixed project summary that does not depend on the prompt,
+    and folding them in would mask exactly the case this field exists to expose (A1's per-prompt
+    package is empty on the tasks whose prompt names no identifier — see docs/eval/tier2.md).
+    """
+    log = run_dir / "injected.log"
+    if not log.is_file():
+        return None
+    total = 0
+    for line in log.read_text(errors="replace").splitlines():
+        m = INJECTED_RE.match(line)
+        if m and m.group(1) != "SessionStart":
+            total += int(m.group(2))
+    return total
 
 
 def is_flagged(run):
@@ -201,6 +247,7 @@ def load(base):
         run = {**u, **g}
         run["total_tokens"] = run_total_tokens(u)
         run["cost_usd"] = u.get("total_cost_usd", 0.0)
+        run["injected_prompt_bytes"] = injected_prompt_bytes(usage_path.parent)
         run["path"] = str(usage_path.parent.relative_to(base))
         runs.append(run)
     return runs, ungraded
@@ -267,6 +314,11 @@ def arm_stats(rs, n_infra):
     cache = [r.get("cache_read_tokens", 0) for r in rs]
     costs = [r.get("cost_usd", 0.0) for r in rs]
     lo, hi = iqr(toks)
+    # What the arm's hooks actually put into the turn. Without this, "A1 was no better than A5"
+    # has two readings — the ranking was no better, or the ranker selected nothing at all — and
+    # only the second is a fact about the product. Runs with no injected.log (A0) are not in the
+    # denominator at all; a run whose log records a zero-byte package is.
+    injected = [r["injected_prompt_bytes"] for r in rs if r.get("injected_prompt_bytes") is not None]
     passes = sum(1 for r in clean if r.get("passed"))
     l1 = sum(1 for r in clean if r.get("L1_hidden"))
     false_done = sum(1 for r in clean if r.get("claimed_done") and not r.get("passed"))
@@ -281,6 +333,9 @@ def arm_stats(rs, n_infra):
         "max_run_tokens": max(toks) if toks else 0,
         "median_cache_read_tokens": median(cache),
         "median_cost_usd": median(costs),
+        "median_injected_bytes": median(injected) if injected else None,
+        "n_zero_injection": sum(1 for b in injected if b == 0),
+        "n_with_injection_log": len(injected),
         "passes": passes,
         "pass_rate": passes / len(clean) if clean else 0.0,
         # The mirror image of excluding flagged runs from the denominator: what the pass rate
@@ -403,16 +458,31 @@ def report(base):
                 flag_counts[flag] = flag_counts.get(flag, 0) + 1
 
     lines.append(
-        "| arm | n (total/clean/flagged/infra) | median tokens | IQR | median cache-read | "
-        "pass rate (clean) | pass rate (flagged=fail) | L1-only rate | false-done |"
+        "_`injected` is what the arm's hooks put into the turn at the prompt, from "
+        "`injected.log`: the median package size and how many runs got a **zero-byte** package. "
+        "A0 has no hooks and no log, so it reads `—` rather than 0 — \"no hooks\" and \"the "
+        "ranker selected nothing\" are different facts. A zero-injection count above zero means "
+        "the arm was untreated on those runs, and no comparison involving it is a contrast "
+        "between two rankings._\n"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|")
+    lines.append(
+        "| arm | n (total/clean/flagged/infra) | median tokens | IQR | median cache-read | "
+        "median injected | zero-injection | pass rate (clean) | pass rate (flagged=fail) | "
+        "L1-only rate | false-done |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for arm in arms:
         s = arm_data[arm]
         lo, hi = s["iqr_tokens"]
+        if s["n_with_injection_log"]:
+            inj = f"{s['median_injected_bytes']:,.0f} B"
+            zero = f"{s['n_zero_injection']}/{s['n_with_injection_log']}"
+        else:
+            inj = zero = "— (no hooks)"
         lines.append(
             f"| {arm} | {s['n_total']}/{s['n_clean']}/{s['n_flagged']}/{s['n_infra']} | "
             f"{s['median_tokens']:,.0f} | {lo:,.0f}–{hi:,.0f} | {s['median_cache_read_tokens']:,.0f} | "
+            f"{inj} | {zero} | "
             f"{s['passes']}/{s['n_clean']} | {s['passes']}/{s['n_clean']+s['n_flagged']} | "
             f"{s['l1_only_rate']*100:,.0f}% (n={s['n_clean']}) | {s['false_done']}/{s['n_clean']} |"
         )
@@ -465,15 +535,32 @@ def report(base):
         lo, hi = paired_bootstrap(deltas)
         better, total = sign_test(deltas)
         note = f" ({len(skipped)} task(s) skipped for missing data: {skipped})" if skipped else ""
+        # Carried on the line itself, not left to the arm table: a comparison where one arm was
+        # handed a zero-byte package on some runs is not a contrast between two rankings there,
+        # and a reader quoting this delta has to see that in the same sentence.
+        inj_note = "".join(
+            f" {a}: {arm_data[a]['n_zero_injection']}/{arm_data[a]['n_with_injection_log']} run(s) "
+            f"with a zero-byte injected package."
+            for a in ("A1", baseline)
+            if arm_data.get(a, {}).get("n_with_injection_log")
+        )
         lines.append(
             f"\n**A1 vs {baseline}, token cost** — median per-task delta {median(deltas):,.0f}, "
             f"95% CI [{lo:,.0f}, {hi:,.0f}], favourable (A1 cheaper) on {better}/{total} tasks"
-            f"{note}."
+            f"{note}.{inj_note}"
         )
         comparisons[f"A1_vs_{baseline}_tokens"] = {
             "deltas": deltas, "skipped_tasks": skipped,
             "median_delta": median(deltas), "ci": [lo, hi],
             "sign_test": {"favourable": better, "total": total},
+            "zero_injection": {
+                a: {
+                    "n_zero_injection": arm_data[a]["n_zero_injection"],
+                    "n_with_injection_log": arm_data[a]["n_with_injection_log"],
+                }
+                for a in ("A1", baseline)
+                if a in arm_data
+            },
         }
 
     threshold = {}
@@ -513,6 +600,59 @@ def report(base):
             "meets_t4": meets,
         }
 
+    # T7 — the comparison this whole branch exists to make, and the one with a pre-registered
+    # consequence: if A1 does not beat A5, the Context Engine has not earned its complexity and
+    # BM25 ships instead. Computed here rather than left to a reader with a calculator, and
+    # computed BEFORE any data exists, so the rule is fixed in code rather than chosen once the
+    # numbers are on the table. Same MIN_T4_TASKS guard as T4, for the same reason: a CPS-defined
+    # subset of one or two tasks is selection on outcome whatever it says.
+    t7 = {}
+    if "A5" in arms and "A1" in arms:
+        deltas, skipped = cps_reduction_deltas(runs, tasks, "A5")
+        lo, hi = paired_bootstrap(deltas)
+        better, total = sign_test(deltas, favourable=lambda d: d > 0)
+        # Ties are dropped from the sign test, not counted against either side.
+        n_effective = sum(1 for d in deltas if d != 0)
+        p = sign_test_p(better, n_effective)
+        med = median(deltas)
+        # Both extra terms are currently subsumed by the p-value and are kept anyway: an exact
+        # one-sided binomial cannot reach 0.10 with fewer than 4 non-tied tasks (3 of 3 is 0.125),
+        # and clearing it needs a strong enough majority favourable that the median is positive
+        # too. They are here so that loosening the threshold later cannot quietly re-enable a
+        # two-task verdict or a "significant" result pointing the wrong way. A mutant that drops
+        # them therefore survives the self-test, which is a fact about the arithmetic, not a hole.
+        enough_tasks = len(deltas) >= MIN_T4_TASKS
+        meets = enough_tasks and med > 0.0 and p < 0.10
+        note = f" ({len(skipped)} task(s) skipped, CPS undefined: {skipped})" if skipped else ""
+        gate_note = "" if enough_tasks else f" (fewer than {MIN_T4_TASKS} surviving tasks — not evaluated)"
+        a1_zero = arm_data.get("A1", {}).get("n_zero_injection", 0)
+        a5_zero = arm_data.get("A5", {}).get("n_zero_injection", 0)
+        inj_note = (
+            f" **Injection:** A1 got a zero-byte package on {a1_zero} run(s), A5 on {a5_zero}. "
+            "A task where one arm was handed nothing is not a contrast between two rankings."
+            if (a1_zero or a5_zero) else ""
+        )
+        lines.append(
+            f"\n**T7 (pre-registered): A1 CPS < A5 CPS, sign test p < 0.10 across tasks.** "
+            f"Observed: {med:,.1f}% median CPS reduction vs A5, 95% CI [{lo:,.1f}%, {hi:,.1f}%], "
+            f"favourable on {better}/{total} tasks (p = {p:.4f}, one-sided exact binomial over "
+            f"{n_effective} non-tied task(s)){note}. "
+            f"**{'MEETS' if meets else 'does not meet'} T7**{gate_note} at n={total} tasks "
+            f"(minimum {MIN_T4_TASKS} required).{inj_note} "
+            f"Reported against the threshold, not gated on it — but this is the comparison whose "
+            f"pre-registered consequence is shipping BM25 and deleting the Context Engine."
+        )
+        t7 = {
+            "deltas_pct": deltas, "skipped_tasks": skipped,
+            "median_reduction_pct": med, "ci_pct": [lo, hi],
+            "sign_test": {"favourable": better, "total": total},
+            "n_tasks": total,
+            "n_non_tied": n_effective,
+            "p_value": p,
+            "min_tasks_required": MIN_T4_TASKS,
+            "meets_t7": meets,
+        }
+
     lines.append(
         f"\n_Correctness at {len(tasks)} tasks is a tripwire, not a measurement: it detects a "
         f"collapse, not a regression. Every number above carries its own n; quoting a "
@@ -534,6 +674,7 @@ def report(base):
         "arms_stats": arm_data,
         "comparisons": comparisons,
         "t4_threshold": threshold,
+        "t7_threshold": t7,
     }
     # An infinite CPS (no clean pass in an arm) is the *designed* representation of "nothing
     # passed", and Python's json module happily emits the bare token `Infinity` for it by
@@ -580,6 +721,17 @@ def self_test():
     # -- sign test, hand-counted. ----------------------------------------------------------------
     assert sign_test([-1, -2, 3]) == (2, 3)
     assert sign_test([0, -1, 2]) == (1, 3)  # a zero delta favours no one
+
+    # -- sign-test p-value, hand-computed from 2^-n (I-3). ---------------------------------------
+    # 5 of 5: only one of the 32 outcomes is this extreme -> 1/32. 4 of 5: that outcome plus the
+    # five with exactly 4 -> 6/32. 3 of 3: 1/8. A two-sided p (twice each of these) is the
+    # mutant this discriminates against — T7's wording is directional.
+    assert sign_test_p(5, 5) == 1 / 32, sign_test_p(5, 5)
+    assert sign_test_p(4, 5) == 6 / 32, sign_test_p(4, 5)
+    assert sign_test_p(3, 3) == 1 / 8, sign_test_p(3, 3)
+    assert sign_test_p(0, 5) == 1.0  # every outcome is at least this extreme
+    assert sign_test_p(0, 0) == 1.0  # no data is no evidence, not proof
+    assert sign_test_p(4, 4) == 1 / 16 and sign_test_p(4, 4) < 0.10 <= 2 * sign_test_p(4, 4)
 
     # -- cps: numerator is total spend, denominator is passes, inf when there are none. ----------
     assert arm_cps([{"total_tokens": 100, "passed": True, "adjudicate": []},
@@ -747,6 +899,13 @@ def self_test():
     # -- Important 3: T4 must not declare victory off a single surviving task's point CI. --------
     _self_test_t4_min_tasks()
 
+    # -- C-1: what the hooks actually injected, including the zero-byte package and the arm ------
+    # -- that has no log at all. -----------------------------------------------------------------
+    _self_test_injection()
+
+    # -- I-3: T7, the A1-vs-A5 threshold the ship-or-delete decision is read from. ---------------
+    _self_test_t7()
+
     print("self-test ok")
     return 0
 
@@ -860,9 +1019,141 @@ def _self_test_t4_min_tasks():
         assert t4["meets_t4"] is False, "one surviving task must never be enough to meet T4"
 
 
-def _write_run(base, task, arm, rep, *, tokens, passed, claude_exit=0, adjudicate=None, l1=None):
+def _self_test_injection():
+    """What each arm's hooks put into the turn, through report() itself.
+
+    The finding this exists to make unmissable (C-1): the engine seeds from identifiers, so a
+    prompt naming none produces a zero-byte package while the arm looks, from every other column,
+    like a treated arm. Three shapes are built by hand:
+
+      * A1 rep 0: SessionStart 50 B + prompt package 100 B  -> 100
+      * A1 rep 1: SessionStart 50 B + prompt package   0 B  ->   0   <- the finding
+      * A1 rep 2: SessionStart 50 B + prompt package 200 B  -> 200
+
+    median(100, 0, 200) = 100, one zero-injection run of three. Two mutants are caught by exact
+    value: counting SessionStart records too gives 150/50/250 -> median 150 and NO zero-injection
+    run at all (the finding erased); ignoring the log gives None.
+
+      * A0: no injected.log at all. Must not crash, must not read as a zero-injection run, and
+        must not enter the median as a 0 — "no hooks" and "the ranker selected nothing" are
+        different facts and the second is the one about the product.
+    """
+    import io
+    import tempfile
+    from contextlib import redirect_stdout
+
+    def log(prompt_bytes):
+        return (
+            "=== SessionStart injected=50 bytes\n"
+            "Project: repo\n"
+            f"=== UserPromptSubmit prompt=93 injected={prompt_bytes} bytes\n"
+            "Code (0)\n"
+        )
+
+    with tempfile.TemporaryDirectory() as d:
+        base = pathlib.Path(d)
+        (base / "meta.json").write_text(json.dumps({"model": "claude-opus-5"}))
+        for rep, prompt_bytes in enumerate((100, 0, 200)):
+            _write_run(base, "T", "A1", rep, tokens=(1000, 0, 0, 0), passed=True,
+                       injected_log=log(prompt_bytes))
+        for rep in range(3):
+            _write_run(base, "T", "A0", rep, tokens=(2000, 0, 0, 0), passed=False)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = report(base)
+        assert rc == 0, buf.getvalue()
+
+        summary = json.loads((base / "summary.json").read_text())
+        a1 = summary["arms_stats"]["A1"]
+        assert a1["median_injected_bytes"] == 100, a1["median_injected_bytes"]
+        assert a1["n_zero_injection"] == 1, a1["n_zero_injection"]
+        assert a1["n_with_injection_log"] == 3, a1["n_with_injection_log"]
+
+        a0 = summary["arms_stats"]["A0"]
+        assert a0["median_injected_bytes"] is None, a0["median_injected_bytes"]
+        assert a0["n_zero_injection"] == 0, "an arm with no hooks has no zero-injection runs"
+        assert a0["n_with_injection_log"] == 0, a0["n_with_injection_log"]
+
+        # The number has to reach the page, not just summary.json: an operator reads the table.
+        stdout = buf.getvalue()
+        assert "1/3" in stdout, stdout
+        assert "zero-byte injected package" in stdout, stdout
+        # And the A0 column must say "no hooks", never a bare 0 that reads as a ranker failure.
+        assert "— (no hooks)" in stdout, stdout
+
+
+def _self_test_t7():
+    """T7 end to end: four tasks, A1 cheaper per success on all four.
+
+    Hand computation. Every cell is one rep, one clean pass, so a cell's CPS is its token count:
+
+        task | A5 CPS | A1 CPS | reduction (A5-A1)/A5
+        W    |  1000  |   500  | 50%
+        X    |  1000  |   400  | 60%
+        Y    |  1000  |   600  | 40%
+        Z    |  1000  |   200  | 80%
+
+    median(50, 60, 40, 80) = (50+60)/2 = 55. Favourable on 4 of 4, no ties, so the one-sided
+    exact binomial p is 1/16 = 0.0625 — under 0.10, so T7 is met.
+
+    n=4 is chosen deliberately: a two-sided p over the same counts is 0.125, which does NOT clear
+    0.10. So the mutant that computes a two-sided p flips meets_t7 to False here and is caught by
+    an exact assertion, not by inspection. The baseline mutant (A0 instead of A5) is caught too —
+    this tree has no A0 arm, so a T7 computed against A0 produces no deltas at all.
+    """
+    import io
+    import tempfile
+    from contextlib import redirect_stdout
+
+    with tempfile.TemporaryDirectory() as d:
+        base = pathlib.Path(d)
+        (base / "meta.json").write_text(json.dumps({"model": "claude-opus-5"}))
+        for task, a1_tokens in (("W", 500), ("X", 400), ("Y", 600), ("Z", 200)):
+            _write_run(base, task, "A5", 0, tokens=(1000, 0, 0, 0), passed=True)
+            _write_run(base, task, "A1", 0, tokens=(a1_tokens, 0, 0, 0), passed=True)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = report(base)
+        assert rc == 0, buf.getvalue()
+
+        summary = json.loads((base / "summary.json").read_text())
+        t7 = summary["t7_threshold"]
+        assert t7["deltas_pct"] == [50.0, 60.0, 40.0, 80.0], t7["deltas_pct"]  # tasks sorted W,X,Y,Z
+        assert t7["median_reduction_pct"] == 55.0, t7["median_reduction_pct"]
+        assert t7["sign_test"] == {"favourable": 4, "total": 4}, t7["sign_test"]
+        assert t7["n_non_tied"] == 4, t7["n_non_tied"]
+        assert t7["p_value"] == 1 / 16, t7["p_value"]
+        assert t7["meets_t7"] is True, t7
+        assert "MEETS T7" in buf.getvalue(), buf.getvalue()
+
+    # And the other direction: A1 worse on every task must not meet T7, however small n is.
+    with tempfile.TemporaryDirectory() as d:
+        base = pathlib.Path(d)
+        (base / "meta.json").write_text(json.dumps({"model": "claude-opus-5"}))
+        for task in ("W", "X", "Y", "Z"):
+            _write_run(base, task, "A5", 0, tokens=(500, 0, 0, 0), passed=True)
+            _write_run(base, task, "A1", 0, tokens=(1000, 0, 0, 0), passed=True)
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            assert report(base) == 0
+        t7 = json.loads((base / "summary.json").read_text())["t7_threshold"]
+        assert t7["deltas_pct"] == [-100.0] * 4, t7["deltas_pct"]
+        assert t7["sign_test"] == {"favourable": 0, "total": 4}, t7["sign_test"]
+        assert t7["p_value"] == 1.0, t7["p_value"]
+        assert t7["meets_t7"] is False, t7
+        assert "does not meet T7" in buf.getvalue()
+
+
+def _write_run(base, task, arm, rep, *, tokens, passed, claude_exit=0, adjudicate=None, l1=None,
+               injected_log=None):
     d = base / task / arm / str(rep)
     d.mkdir(parents=True)
+    # None means no injected.log at all — what an arm with no hooks (A0) leaves behind.
+    if injected_log is not None:
+        (d / "injected.log").write_text(injected_log)
     input_t, output_t, cache_read, cache_creation = tokens
     (d / "usage.json").write_text(json.dumps({
         "task": task, "arm": arm, "repetition": rep, "model": "claude-opus-5",

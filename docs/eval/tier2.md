@@ -47,6 +47,51 @@ own review nor its own test.
 
 ---
 
+## Pre-sweep measurement: A1 receives less context than A5 on all five tasks
+
+**Measured 2026-09-06, before any money was spent. Not a sweep result.** Each task's own prompt,
+run through both rankers at that task's real start commit, with `target/release/nexus` and the
+arms' own hook arguments (`--budget 4000 --brief`, plus `--rank lexical` for A5; SessionStart is
+`--session --budget 800`, and A5 has no SessionStart hook):
+
+| task | A1 (engine) | A5 (BM25) | A1's SessionStart |
+|---|---|---|---|
+| `A1-idempotency-key-length` | **0 B** | 893 B | 259 B |
+| `A2-shared-type-change` | 646 B | 1,034 B | 273 B |
+| `B1-rename-crosses-the-seam` | 1,169 B | 1,193 B | 117 B |
+| `B2-orphaned-field-diagnosis` | **0 B** | 942 B | 117 B |
+| `C1-regression-recognised` | 287 B | 1,445 B | 259 B |
+
+**On two of the five tasks the product arm's per-prompt hook injects nothing at all.** For
+`A1-idempotency-key-length`, `nexus context --task "<the prompt>" --budget 4000` reports
+`considered 0 · included 0 · excluded 0`: the Context Engine seeds from identifiers, that prompt
+names none ("The idempotency key column is too short for the new upstream provider. Widen it to
+128 characters everywhere it is constrained."), so nothing anchors and the package is empty. BM25
+has no such dependency: it returns all eight files, `V1__init.sql` — the exact file this task's
+hidden test grades — ranked 5th of 8.
+
+Two consequences for how the result must be read:
+
+- **A1 vs A5 is not a same-volume contrast.** The design's premise (§5) is "same budget, same
+  injection point, only the ranking function differs". At fixture scale the 4,000-token budget
+  binds neither arm — the largest package here is about 400 tokens — so the shared budget
+  constrains nothing, and the arms differ in how much text they inject as well as in how it was
+  chosen. On the two zero-byte tasks A1 is not a ranking treatment at all; it is A0 with a
+  SessionStart summary.
+- **This is a fact about the product, not a harness defect.** Seeding from identifiers is how the
+  Context Engine works. The corpus, the seeding and the hidden tests were deliberately left
+  unchanged: tuning any of them until the product arm had something to say would be tuning the
+  instrument to the answer.
+
+`analyse.py` carries this into every sweep rather than leaving it to this page. Each run
+directory keeps the `injected.log` its hooks wrote; the arm table reports **median injected
+bytes** and a **zero-injection count**, the A1-vs-A5 comparison line and the T7 line both repeat
+the zero-injection counts, and `summary.json` carries them as `median_injected_bytes`,
+`n_zero_injection` and `n_with_injection_log`. An arm with no hooks (A0) has no log and reads
+`— (no hooks)`, never `0` — "no hooks" and "the ranker selected nothing" are different facts.
+
+---
+
 ## The run
 
 Filled in from `meta.json` and `summary.json` when a sweep completes.
@@ -71,6 +116,53 @@ nothing finer. `13-evaluation.md` §9 puts the minimum detectable difference in 
 document.
 
 ---
+
+## What the arms actually are
+
+The design (§4) defines A1 as `nexus init --hooks --verify` with the MCP server available. The
+built arm is narrower, and the gap changes what some of the reported numbers are evidence about.
+
+**A1 is context injection only.** `scripts/eval/arms/A1.json` installs `SessionStart`,
+`UserPromptSubmit` and a `PostToolUse` rescan. It has no `mcpServers` block, so **no Nexus MCP
+tool is reachable** to the agent, and no `Stop` hook, so **`nexus verify` never runs**. The
+verification gate was left out deliberately rather than by omission: it runs a full build with a
+600 s timeout on every turn, inside a container the sweep already caps at `TIMEOUT_S=900`, so
+installing it would turn a cost benchmark into a measurement of how often the build fits in the
+remaining budget. If the gate is ever wanted here, it needs its own timeout budget and its own
+review; it is not a line to add to the arm file.
+
+**Consequence for `false_done`.** The design (§7) attributes a reduction in false completion
+claims to the verification gate. No gate is installed, so **`false_done` in this sweep is not
+evidence about `nexus verify`** — it is what the injected context alone did to the agent's
+willingness to claim success. `analyse.py` prints `false_done` per arm regardless, because it is
+still a useful tripwire; quoting it as a verification result would be wrong.
+
+`false_done` also owes a hand-audit before it is published. It is derived from `claimed_done`,
+which is a whole-word `done` match against `result` (`run.sh`) — narrow enough to reject
+"abandoned", "undone" and "nothing to be done", and still wide enough to accept "not done" and
+"done nothing". Read the transcripts of the runs it flags before quoting the number.
+
+**A1 fires its per-prompt hook exactly once.** `claude -p` submits a single user prompt, so
+`UserPromptSubmit` runs once per run. A1's entire treatment is one SessionStart package plus one
+task package — the multi-turn accumulation the design imagines is not what is being measured. The
+`PostToolUse` rescan runs on every edit, but nothing consumes its output in a single-prompt run.
+
+**A1 vs A5 differs in three things, not one.** Beyond the ranking function, A1 has a
+`SessionStart` package that A5 does not, and a `PostToolUse` rescan that A5 does not. All three
+differences point the same way — **towards A1**:
+
+- A **negative** result (A1 no better than A5) is therefore safe to act on, and the
+  pre-registered consequence stands: it would mean ranked context did not beat BM25 *even with
+  two extra advantages*.
+- A **positive** result is **not attributable to ranking alone**. It would have to be
+  disentangled by a follow-up that varies one thing at a time.
+
+The obvious configuration fix does not work, and it fails silently. Giving A5 a matching
+`--session --rank lexical` hook would produce an **engine-ranked** package, not a lexical one:
+`Engine::context` dispatches on purpose first (`crates/nexus-core/src/engine/query.rs:128-131`),
+and only `task_package` honours `--rank`, so `Purpose::Session` never reaches the lexical path.
+The control would be contaminated by the thing it is controlling for, with nothing in the output
+to say so. The difference is documented here instead.
 
 ## How the arms are counted
 
@@ -157,13 +249,24 @@ lives**: it reports independently, from the diff, whether every `required_site` 
 is reported, never gated. An L3 pass beside an L1 failure, or the reverse, is the tell the
 design asks for — and any claim about multi-site reach must be read off L3, not off L1.
 
+**C1 grades one solution family, and the prompt does not say which.** `C1-regression-recognised`
+asks about "payments are being double-charged"; its hidden test grades a **schema-level** fix —
+the unique constraint restored in the migration. An agent that instead fixes the same symptom at
+the application level (a transaction plus a lock, an idempotency check in the service) has
+answered the prompt and is graded **red**. That constrains the solution family across 15 paid
+runs, and it constrains it identically in every arm, so it does not bias the A1-vs-A5 contrast —
+but a low pass rate at C1 must not be read as "no arm could fix double-charging".
+
 ---
 
 ## Result
 
-*(paste `analyse.py`'s table here — arm statistics, cost detail, flagged runs, infra failures,
-the A1-vs-A0 and A1-vs-A5 comparisons, and the T4 line. `summary.json` in the same run
-directory holds the same numbers machine-readably.)*
+*(paste `analyse.py`'s table here — arm statistics **including the injected-bytes and
+zero-injection columns**, cost detail, flagged runs, infra failures, the A1-vs-A0 and A1-vs-A5
+comparisons, and the **T4 and T7** lines. `summary.json` in the same run directory holds the same
+numbers machine-readably. Read the zero-injection counts against the pre-sweep table above before
+reading anything else: a task where A1 was handed a zero-byte package is not a contrast between
+two rankings.)*
 
 ## A1 vs A5 — did ranking earn its complexity
 
@@ -175,7 +278,15 @@ Pre-registered, unchanged since the design, and reported against rather than gat
 | **T7 — ranking** | A1 CPS **< A5 CPS**, sign test p < 0.10 across tasks |
 
 Five tasks cannot carry a release gate, so `analyse.py` prints `MEETS T4` / `does not meet T4`
-as a reported fact and refuses to evaluate it at all below three surviving tasks.
+and `MEETS T7` / `does not meet T7` as reported facts, and refuses to evaluate either below three
+surviving tasks. T7's p-value is a **one-sided** exact binomial over the non-tied per-task CPS
+deltas — one-sided because the threshold is directional ("A1 CPS *<* A5 CPS"), not "the two
+differ". Both rules were written into `analyse.py` before any sweep ran, so neither was chosen
+after seeing the numbers.
+
+Read T7 next to the zero-injection count on the same line. A task where A1's per-prompt package
+was empty contributes a delta that measures A0-plus-a-session-summary against BM25 — see the
+[pre-sweep measurement](#pre-sweep-measurement-a1-receives-less-context-than-a5-on-all-five-tasks).
 
 **The falsifier stands.** `13-evaluation.md` §5: if A1 does not beat A5 — if ranked context is
 no better than BM25 over file contents at the same budget and the same injection point — then
@@ -223,6 +334,18 @@ make bench-image          # release binary + fixtures + the pinned run image
 make bench                # 75 paid runs on claude-opus-5. Hours. Real money.
 python3 scripts/eval/analyse.py docs/eval/runs/<stamp>
 ```
+
+**Credentials — prefer `ANTHROPIC_API_KEY` for a sweep.** `run.sh` copies
+`~/.claude/.credentials.json` into a throwaway per-run directory and mounts it read-write at
+`/root/.claude`, because Claude Code needs a writable state directory. A read-only mount was
+tested (2026-09-06, invalid token, no spend) and **breaks authentication outright**: the agent
+reports `Not logged in · Please run /login` instead of even attempting the token, and the
+read-write control reaches `OAuth session expired and could not be refreshed`. So `:ro` is not
+available as a mitigation. It would not be the right one either — the container's copy is a copy,
+and the exposure is that a **refresh inside any of 75 root containers rotates the token
+server-side**, which a read-only mount does not prevent. If that matters for your account, export
+`ANTHROPIC_API_KEY` before the sweep: `run.sh` passes it into the container, an API key is not
+rotated by use, and it can be revoked on its own.
 
 **Pre-flight.** `sweep.sh` runs `scripts/eval/test_grade.sh` before it spends anything and
 refuses to start if it fails. A grader stuck at `passed: false` reads as a devastating result
