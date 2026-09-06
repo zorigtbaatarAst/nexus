@@ -77,5 +77,14 @@ by removing the information that makes them locally solvable. Hidden tests are n
 
 ### Task 4 — validate the corpus against A0 only
 
-Run the A0 arm, 5 reps, over the revised tasks. Accept a task only if A0 fails it ≥2/5.
-This is the pre-registration for the re-run, and it is the only paid work in this plan.
+**First, a harness change.** `sweep.sh` cannot run one arm: `arms_for()` (sweep.sh:45)
+hardcodes the arm list per task, and `test_grade.sh:85` hard-asserts the plan is exactly 95
+cells, so a single-arm run is refused by the pre-flight gate — verified this session, where a
+`TASKS=` override was refused with "the sweep plans 19 cells, not 95". Add an `ARMS` override
+and make the gate validate the plan against the *requested* configuration rather than a
+constant, with a test. Routine `SKIP_GATE=1` is not the answer: that gate is what stands
+between a typo and 95 wasted paid runs.
+
+Then run the A0 arm, 5 reps, over the revised tasks. Accept a task only if A0 fails it at
+least twice in five. This is the pre-registration for any re-run, and the only paid work in
+this plan (~25 runs, ~$10).
