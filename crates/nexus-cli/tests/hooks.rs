@@ -408,3 +408,163 @@ fn doctor_refuses_to_guess_at_unreadable_settings() {
     assert_eq!(level, "error", "{detail}");
     assert!(detail.contains("not valid JSON"), "{detail}");
 }
+
+/// A project with something to find, and a baseline to find it in.
+///
+/// `fixture` alone is an empty directory: `nexus context` there has no baseline and exits 5
+/// before it can demonstrate anything about the prompt. The shape is the one `brief.rs` uses —
+/// one struct with one method, so a package that anchors is obvious in the output.
+fn scanned(name: &str) -> PathBuf {
+    let root = fixture(name);
+    std::fs::create_dir_all(root.join("src")).expect("mkdir");
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write");
+    std::fs::write(
+        root.join("src/lib.rs"),
+        "pub struct Alpha;\nimpl Alpha { pub fn save(&self) {} }\n",
+    )
+    .expect("write");
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec!["add", "-A"],
+        vec!["commit", "-qm", "x"],
+    ] {
+        Command::new("git")
+            .args(&args)
+            .current_dir(&root)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .expect("git");
+    }
+    run(&root, &["scan"]);
+    root
+}
+
+fn prompt_hooks(v: &Value) -> &Vec<Value> {
+    v["hooks"]["UserPromptSubmit"]
+        .as_array()
+        .expect("a UserPromptSubmit array")
+}
+
+/// Run a hook's own command string with `nexus` reachable and a payload on stdin.
+fn run_hook(root: &Path, cmd: &str, stdin: &str) -> std::process::Output {
+    use std::io::Write;
+    let bin_dir = nexus().parent().expect("bin dir").to_path_buf();
+    let mut child = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(cmd)
+        .env("PATH", &bin_dir)
+        .current_dir(root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("sh");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(stdin.as_bytes())
+        .expect("write payload");
+    child.wait_with_output().expect("wait")
+}
+
+#[test]
+fn the_prompt_hook_reads_the_prompt_the_harness_actually_sends() {
+    // The prompt arrives as JSON on stdin. A hook that reads it from the environment instead
+    // runs, exits 0, and injects nothing on every single turn — and from the outside that is
+    // indistinguishable from a healthy hook whose ranker found nothing. This is the test that
+    // tells those two apart, so it runs the installed command rather than reading it.
+    let root = scanned("stdinprompt");
+    run(&root, &["init", "--hooks"]);
+    let v = settings(&root).expect("written");
+    let cmd = prompt_hooks(&v)[0]["hooks"][0]["command"]
+        .as_str()
+        .expect("command")
+        .to_string();
+
+    let payload = r#"{"hook_event_name":"UserPromptSubmit","prompt":"the save method on Alpha"}"#;
+    let out = run_hook(&root, &cmd, payload);
+
+    assert!(out.status.success(), "the hook must exit 0: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("Alpha"),
+        "the hook injected nothing for a prompt that names an indexed symbol — \
+         it never read the payload. stdout: {stdout:?}"
+    );
+}
+
+#[test]
+fn the_prompt_hook_fails_open_on_a_payload_it_cannot_read() {
+    // `--task-stdin` promises that an unreadable or unshaped payload is an empty prompt
+    // rather than an error. That promise is on the developer's critical path: a hook that
+    // exits non-zero or prints a diagnostic costs them their turn, and one that costs a turn
+    // is uninstalled once and never reinstalled. Three shapes, all of which must be silent.
+    let root = scanned("badpayload");
+    run(&root, &["init", "--hooks"]);
+    let v = settings(&root).expect("written");
+    let cmd = prompt_hooks(&v)[0]["hooks"][0]["command"]
+        .as_str()
+        .expect("command")
+        .to_string();
+
+    for (name, payload) in [
+        ("not json at all", "Alpha save"),
+        (
+            "json without a prompt field",
+            r#"{"hook_event_name":"UserPromptSubmit"}"#,
+        ),
+        ("empty stdin", ""),
+    ] {
+        let out = run_hook(&root, &cmd, payload);
+        assert!(
+            out.status.success(),
+            "{name}: the hook must still exit 0: {out:?}"
+        );
+        assert!(
+            out.stdout.is_empty(),
+            "{name}: an unreadable payload must anchor nothing, not print something the \
+             agent would read as context: {:?}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+}
+
+#[test]
+fn the_repos_own_settings_match_what_the_installer_writes() {
+    // The command lives in two places: the constant the installer writes, and this repo's
+    // own checked-in settings, which is how working here exercises what a user gets. Nothing
+    // held them together, and they drifted — the checked-in copy kept a dead
+    // `$CLAUDE_USER_PROMPT` and never gained `--brief`. CLAUDE.md's rule is that a fact
+    // written in two places eventually disagrees with itself; this is the assertion that
+    // stops it, without the test needing to name the command text a third time.
+    let root = fixture("ownsettings");
+    run(&root, &["init", "--hooks"]);
+    let installed = settings(&root).expect("written");
+    let installed_cmd = prompt_hooks(&installed)[0]["hooks"][0]["command"]
+        .as_str()
+        .expect("command");
+
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root");
+    let raw = std::fs::read_to_string(repo_root.join(".claude/settings.json"))
+        .expect("this repo has its own settings");
+    let ours: Value = serde_json::from_str(&raw).expect("valid JSON");
+    let ours_cmd = ours["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+        .as_str()
+        .expect("this repo installs the prompt hook");
+
+    assert_eq!(
+        ours_cmd, installed_cmd,
+        "this repo's checked-in hook has drifted from the one `nexus init --hooks` writes"
+    );
+}

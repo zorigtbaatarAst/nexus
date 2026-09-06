@@ -21,9 +21,17 @@ where it can do real harm.
 | Hook | Command | Budget |
 |---|---|---|
 | `SessionStart` | `nexus context --session --budget 800` | 800 tok / 400 ms |
-| `UserPromptSubmit` | `nexus context --task "$PROMPT" --budget 4000` | 4000 tok / **150 ms** |
+| `UserPromptSubmit` | `nexus context --task-stdin --budget 4000` | 4000 tok / **150 ms** |
 | `PostToolUse` (Edit\|Write) | `nexus rescan --quiet` | 0 tok / 200 ms |
 | `Stop` | `nexus verify --changed` | ~300 tok / 5 s |
+
+The prompt reaches `UserPromptSubmit` as JSON on stdin; no environment variable carries it.
+This table first read `--task "$PROMPT"`, and the implementation took that placeholder for a
+variable name and shipped `$CLAUDE_USER_PROMPT` — never set, so it expanded to empty, asked for
+context about nothing, injected nothing and exited 0 on every prompt, indistinguishable from a
+healthy hook whose ranker found nothing. Parsing the payload in a shell pipeline would have
+fixed the mechanism and broken the second property below, so `--task-stdin` reads it in the
+binary instead.
 
 Non-negotiable properties:
 

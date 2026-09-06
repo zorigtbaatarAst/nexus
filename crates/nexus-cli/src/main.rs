@@ -197,6 +197,17 @@ enum Command {
         /// The package for one task, ranked and budgeted
         #[arg(long, value_name = "TEXT")]
         task: Option<String>,
+        /// Take the task from a `UserPromptSubmit` payload on stdin.
+        ///
+        /// The harness sends the prompt as JSON on stdin; no environment variable carries
+        /// it. Parsing it here rather than in the hook is what keeps ADR-024's rule that
+        /// each hook is `nexus <verb>` with a timeout and all intelligence is in the binary.
+        ///
+        /// Fail open: an unreadable or unshaped payload is an empty prompt, which anchors
+        /// nothing and exits 0. This runs on the developer's critical path, and a hook that
+        /// fails closed is uninstalled once and never reinstalled.
+        #[arg(long, conflicts_with_all = ["task", "session"])]
+        task_stdin: bool,
         /// Token ceiling. The package is selected to fit, never truncated to fit.
         #[arg(long, value_name = "TOKENS")]
         budget: Option<usize>,
@@ -896,6 +907,7 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
         Command::Context {
             session,
             task,
+            task_stdin,
             budget,
             file,
             symbol,
@@ -948,6 +960,15 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
                 });
                 return Ok(exit::OK);
             }
+            // `--task-stdin` resolves into the same `task` the exclusivity check below
+            // reads, so there is one shape rule rather than two that can disagree.
+            let from_stdin;
+            let task = if *task_stdin {
+                from_stdin = Some(prompt_from_stdin());
+                &from_stdin
+            } else {
+                task
+            };
             // Exactly one shape per invocation. Defaulting to one of them would make a bare
             // `nexus context` mean something different depending on which flags exist.
             let request = match (session, task) {
@@ -1104,6 +1125,23 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
 }
 
 /// Walks the source chain: the io::Error is wrapped by the time it reaches main.
+/// The prompt from a `UserPromptSubmit` payload on stdin.
+///
+/// Every failure is an empty prompt rather than an error. A hook on the prompt path that
+/// exits non-zero or prints a diagnostic costs the developer their turn; one that anchors
+/// nothing costs them nothing, and `nexus context` already reports having anchored nothing.
+fn prompt_from_stdin() -> String {
+    use std::io::Read;
+    let mut raw = String::new();
+    if std::io::stdin().read_to_string(&mut raw).is_err() {
+        return String::new();
+    }
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| v["prompt"].as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
 fn is_broken_pipe(e: &(dyn std::error::Error + 'static)) -> bool {
     let mut cur = Some(e);
     while let Some(err) = cur {

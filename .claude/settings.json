@@ -27,7 +27,7 @@
       {
         "hooks": [
           {
-            "command": "nexus context --task \"$CLAUDE_USER_PROMPT\" --budget 4000 2>/dev/null || true",
+            "command": "nexus context --task-stdin --budget 4000 --brief 2>/dev/null || true",
             "timeout": 5,
             "type": "command"
           }
