@@ -7,8 +7,9 @@
 #
 #   0. plan        not a grading at all: the sweep's own cell plan, which nothing else in this
 #                  repository executes. Free, and first for that reason.
-#   0c. image-binary  also not a grading: that the image's `nexus` is the tree's, by content.
-#                  One container, no build. A stale image cost 95 paid runs once.
+#   0c. image-artifacts  also not a grading: that every file the image bakes from the tree —
+#                  nexus, nexus-hook, fixture-build — is still the tree's, by content. A stale
+#                  image cost 95 paid runs once, and a stale fixture-build would cost grades.
 #   1. empty       an empty diff must fail — and must fail on L1 *only*. L0 and L2 true proves
 #                  the container, the mount and the build actually worked; a mechanical failure
 #                  would zero them too and be indistinguishable from a bad agent.
@@ -163,47 +164,85 @@ if ARMS="A0 A9" DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" >/dev/null 2>&1; then
 fi
 echo "ok   ARMS naming an arm arms_for() never returns is refused, not silently honoured"
 
-# --- 0c. the image's nexus must be this tree's nexus, by content --------------------------------
+# --- 0c. everything the image bakes from the tree must be the tree's copy, by content ----------
 
-# The $37.62 case. Both binaries answered `nexus 0.3.0`; one of them was a day old. So the two
-# fixtures here are the image's own binary and that same binary with one byte appended: they
+# The $37.62 case. Both binaries answered `nexus 0.3.0`; one of them was a day old. So the
+# fixtures here are the image's own artifacts, and copies of them differing by one byte: they
 # report an identical --version (asserted, because that is the point) and differ by content.
 # Any check that compares version strings, timestamps, image ids or paths passes both, and the
-# refusal case below fails. That is what makes this test unable to be satisfied by the weakened
+# refusal cases below fail. That is what makes this unable to be satisfied by the weakened
 # comparison it exists to forbid.
-CHECK_BIN="$ROOT/scripts/eval/check_image_binary.sh"
+#
+# `nexus` is not the only artifact and not the most dangerous one: `fixture-build` is the L0
+# build-and-grade path, so drift there changes grades rather than context. It gets its own
+# refusal case for that reason — and because the review that widened this check found the real
+# `build.sh` already drifted from the real image on the machine it ran on.
+CHECK_ARTIFACTS="$ROOT/scripts/eval/check_image_artifacts.sh"
 IMAGE="${IMAGE:-nexus-bench:latest}"
 
-docker run --rm --entrypoint cat "$IMAGE" /usr/local/bin/nexus > "$TMP/nexus-same"
-chmod +x "$TMP/nexus-same"
-cp "$TMP/nexus-same" "$TMP/nexus-one-byte-longer"
-printf '\0' >> "$TMP/nexus-one-byte-longer"   # still a valid ELF: trailing bytes are ignored
+# A tree root built out of the image itself, so "matches" is constructed rather than assumed —
+# the real tree may legitimately differ from the image at any moment, which is the whole point.
+mkdir -p "$TMP/tree/target/release" "$TMP/tree/scripts/eval"
+docker run --rm --entrypoint cat "$IMAGE" /usr/local/bin/nexus > "$TMP/tree/target/release/nexus"
+docker run --rm --entrypoint cat "$IMAGE" /usr/local/bin/nexus-hook > "$TMP/tree/scripts/eval/nexus-hook.sh"
+docker run --rm --entrypoint cat "$IMAGE" /usr/local/bin/fixture-build > "$TMP/tree/scripts/eval/build.sh"
+chmod +x "$TMP/tree/target/release/nexus"
 
-SAME_VERSION="$("$TMP/nexus-same" --version)"
-LONGER_VERSION="$("$TMP/nexus-one-byte-longer" --version)"
-[ "$SAME_VERSION" = "$LONGER_VERSION" ] \
-  || { echo "FAIL [image-binary] the two fixtures disagree on --version ('$SAME_VERSION' vs" >&2
-       echo "'$LONGER_VERSION'), so the mismatch case below no longer proves that a version" >&2
-       echo "string cannot detect it. Fix the fixtures, not the assertion." >&2
+cp -r "$TMP/tree" "$TMP/tree-bad-nexus"
+printf '\0' >> "$TMP/tree-bad-nexus/target/release/nexus"   # still a valid ELF: trailing bytes are ignored
+cp -r "$TMP/tree" "$TMP/tree-bad-build"
+echo "# a comment that changes nothing about what this script does" >> "$TMP/tree-bad-build/scripts/eval/build.sh"
+
+# Run both --version probes inside the image, not on the host: these are the image's own
+# Debian-linked binaries and the host is whatever the operator runs. Executing them here worked
+# but only by glibc luck, and a test that breaks on an unrelated host upgrade gets deleted.
+VERSIONS="$(docker run --rm -v "$TMP:/t:Z" --entrypoint sh "$IMAGE" -c \
+  '/t/tree/target/release/nexus --version && /t/tree-bad-nexus/target/release/nexus --version')"
+[ "$(printf '%s\n' "$VERSIONS" | sort -u | wc -l)" = 1 ] \
+  || { echo "FAIL [image-artifacts] the two nexus fixtures disagree on --version:" >&2
+       printf '%s\n' "$VERSIONS" >&2
+       echo "so the mismatch case below no longer proves a version string cannot detect it." >&2
+       echo "Fix the fixtures, not the assertion." >&2
        exit 1; }
 
-CHECK_SHA="$("$CHECK_BIN" "$IMAGE" "$TMP/nexus-same")" \
-  || { echo "FAIL [image-binary] the check refused a binary byte-identical to the image's" >&2; exit 1; }
-[ "$CHECK_SHA" = "$(sha256sum "$TMP/nexus-same" | cut -d' ' -f1)" ] \
-  || { echo "FAIL [image-binary] the check printed '$CHECK_SHA', not the binary's sha256 —" >&2
-       echo "that value is what meta.json stamps as the sweep's provenance." >&2
-       exit 1; }
+STAMPED="$("$CHECK_ARTIFACTS" "$IMAGE" "$TMP/tree")" \
+  || { echo "FAIL [image-artifacts] the check refused a tree byte-identical to the image's" >&2; exit 1; }
+# What it prints is what meta.json stamps as the sweep's provenance, so it is asserted, not
+# assumed: one line per artifact, each carrying that file's real sha256.
+[ "$(printf '%s\n' "$STAMPED" | wc -l)" = 3 ] \
+  || { echo "FAIL [image-artifacts] the check stamped $(printf '%s\n' "$STAMPED" | wc -l) artifacts, not 3:" >&2
+       printf '%s\n' "$STAMPED" >&2; exit 1; }
+while read -r image_path sha; do
+  case "$image_path" in
+    /usr/local/bin/nexus)         tree_file="$TMP/tree/target/release/nexus" ;;
+    /usr/local/bin/nexus-hook)    tree_file="$TMP/tree/scripts/eval/nexus-hook.sh" ;;
+    /usr/local/bin/fixture-build) tree_file="$TMP/tree/scripts/eval/build.sh" ;;
+    *) echo "FAIL [image-artifacts] unknown artifact stamped: $image_path" >&2; exit 1 ;;
+  esac
+  [ "$sha" = "$(sha256sum "$tree_file" | cut -d' ' -f1)" ] \
+    || { echo "FAIL [image-artifacts] stamped '$sha' for $image_path, which is not its sha256" >&2; exit 1; }
+done <<<"$STAMPED"
 
-if REFUSAL="$("$CHECK_BIN" "$IMAGE" "$TMP/nexus-one-byte-longer" 2>&1)"; then
-  echo "FAIL [image-binary] the check PASSED a binary that differs from the image's by one" >&2
-  echo "byte while reporting the same --version. This is the defect that cost 95 paid runs." >&2
-  exit 1
-fi
-# A refusal nobody can act on is how the operator ends up reaching for SKIP_GATE.
-grep -q 'make bench-image' <<<"$REFUSAL" \
-  || { echo "FAIL [image-binary] the refusal does not name the fix:" >&2; echo "$REFUSAL" >&2; exit 1; }
-echo "ok   image-binary passes an identical binary, refuses a one-byte-different one of the" \
-  "same --version, and names the rebuild"
+# Two refusals, because covering the binary and not the grader is the same failure with a
+# different file name — and the second one cannot be dismissed as "it is about the binary".
+for case in "tree-bad-nexus:target/release/nexus:one byte appended, identical --version" \
+            "tree-bad-build:scripts/eval/build.sh:one comment line appended"; do
+  bad_tree="$TMP/${case%%:*}"; rest="${case#*:}"; bad_file="${rest%%:*}"; how="${rest#*:}"
+  if REFUSAL="$("$CHECK_ARTIFACTS" "$IMAGE" "$bad_tree" 2>&1)"; then
+    echo "FAIL [image-artifacts] the check PASSED a tree whose $bad_file differs from the" >&2
+    echo "image's ($how). This is the defect that cost 95 paid runs." >&2
+    exit 1
+  fi
+  # Naming the file is the difference between a rebuild and a hunt.
+  grep -q "$bad_file" <<<"$REFUSAL" \
+    || { echo "FAIL [image-artifacts] the refusal for $bad_file does not name it:" >&2
+         echo "$REFUSAL" >&2; exit 1; }
+  # A refusal nobody can act on is how the operator ends up reaching for SKIP_GATE.
+  grep -q 'make bench-image' <<<"$REFUSAL" \
+    || { echo "FAIL [image-artifacts] the refusal does not name the fix:" >&2; echo "$REFUSAL" >&2; exit 1; }
+done
+echo "ok   image-artifacts stamps all three, and refuses both a one-byte-different nexus of the" \
+  "same --version and a one-line-different build.sh, naming the file and the rebuild"
 
 # --- 1. an empty diff must not pass ------------------------------------------------------------
 

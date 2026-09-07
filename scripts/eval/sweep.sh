@@ -13,7 +13,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RUN="$ROOT/scripts/eval/run.sh"
 GRADE="$ROOT/scripts/eval/grade.sh"
 GATE="$ROOT/scripts/eval/test_grade.sh"
-CHECK_BIN="$ROOT/scripts/eval/check_image_binary.sh"
+CHECK_ARTIFACTS="$ROOT/scripts/eval/check_image_artifacts.sh"
 
 STAMP="${STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
 BASE="$ROOT/docs/eval/runs/$STAMP"
@@ -234,27 +234,35 @@ print(' '.join(m.get('tasks', [])))
     done
   fi
 else
-  # A fresh sweep is reported against this tree, so the image must contain this tree's binary.
-  # Compared by content, and stamped by content: `nexus_version` below is the host binary's
-  # --version, which is what stamped `nexus 0.3.0` over an image built a day earlier. It stays
-  # for readability; nexus_image_sha256 is the field that can actually be checked, because it
-  # is taken from inside the image and changes with every code change whether or not anyone
-  # bumped a version. Anyone can rebuild a commit and compare it. See check_image_binary.sh.
-  IMAGE_NEXUS_SHA="$("$CHECK_BIN" "$IMAGE" "$NEXUS_BIN")"
+  # A fresh sweep is reported against this tree, so everything the image bakes from the tree
+  # must be this tree's copy — the tool under test, the hook that injects context, and the L0
+  # build-and-grade script. Compared by content, and stamped by content: `nexus_version` below
+  # is the host binary's --version, which is what stamped `nexus 0.3.0` over an image built a
+  # day earlier. It stays for readability; the sha256s are the fields that can actually be
+  # checked, because they are taken from inside the image and change with every edit whether or
+  # not anyone bumped a version. Anyone can rebuild a commit and compare them.
+  # See check_image_artifacts.sh, including what it does NOT cover and why.
+  IMAGE_ARTIFACTS="$("$CHECK_ARTIFACTS" "$IMAGE" "$ROOT")"
 
-  python3 - "$META" "$STAMP" "$IMAGE" "$IMAGE_ID" "$NEXUS_VERSION" "$IMAGE_NEXUS_SHA" "$MODEL" "$REPS" "${TASKS[@]}" <<'PY'
+  python3 - "$META" "$STAMP" "$IMAGE" "$IMAGE_ID" "$NEXUS_VERSION" "$IMAGE_ARTIFACTS" "$MODEL" "$REPS" "${TASKS[@]}" <<'PY'
 import json
 import sys
 
-path, stamp, image, image_id, nexus_version, nexus_image_sha256, model, reps = sys.argv[1:9]
+path, stamp, image, image_id, nexus_version, image_artifacts, model, reps = sys.argv[1:9]
 tasks = sys.argv[9:]
+artifacts = dict(line.split() for line in image_artifacts.splitlines() if line.strip())
 json.dump(
     {
         "stamp": stamp,
         "image": image,
         "image_id": image_id,
         "nexus_version": nexus_version,
-        "nexus_image_sha256": nexus_image_sha256,
+        # Every checked artifact, so a report cannot claim clean provenance for a set that was
+        # never compared. nexus_image_sha256 is the same value as the map's /usr/local/bin/nexus
+        # entry, kept because the docs and the incident write-up name it: one derivation, two
+        # names, and the duplicate is written here rather than being able to disagree.
+        "nexus_image_sha256": artifacts["/usr/local/bin/nexus"],
+        "image_artifact_sha256": artifacts,
         "model": model,
         "reps": int(reps),
         "tasks": sorted(tasks),
@@ -263,7 +271,8 @@ json.dump(
     indent=2,
 )
 PY
-  echo "sweep.sh: stamped $META (image $IMAGE_ID, $NEXUS_VERSION, nexus sha256 $IMAGE_NEXUS_SHA)"
+  echo "sweep.sh: stamped $META (image $IMAGE_ID, $NEXUS_VERSION," \
+    "$(printf '%s\n' "$IMAGE_ARTIFACTS" | wc -l) artifacts verified against the tree)"
 fi
 
 # --- the sweep itself -----------------------------------------------------------------------

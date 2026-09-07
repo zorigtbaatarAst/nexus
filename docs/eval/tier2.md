@@ -115,7 +115,7 @@ Filled in from `meta.json` and `summary.json` when a sweep completes.
 | Repetitions | 5 per (task × arm) — 95 paid runs (5×3×5 + 2×2×5) |
 | Stamp | *(from `meta.json`)* |
 | Nexus version | *(from `meta.json`)* — readability only; it cannot tell two builds of one version apart |
-| Nexus binary sha256 | *(from `meta.json`, read out of the image)* — the provenance that can be checked |
+| Baked artifact sha256s | *(from `meta.json`, read out of the image)* — `nexus`, `nexus-hook`, `fixture-build`; the provenance that can be checked |
 | Image id | *(from `meta.json`)* |
 | Wall clock / total cost | *(from the sweep)* |
 
@@ -405,14 +405,20 @@ delete `.run-started` to pay for the cell again or leave the cell out of the swe
 either way silently double-charges or silently drops a run, which is why it stops.
 
 `meta.json` pins the image id, the model, the nexus version and — since the stale-binary
-incident — the sha256 of the `nexus` **inside the image**. A resume that disagrees with the
-image or the model is refused rather than half-mixed in.
+incident — the sha256 of every file the image bakes from the tree, read **out of the image**:
+`nexus`, `nexus-hook` and `fixture-build`. A resume that disagrees with the image or the model
+is refused rather than half-mixed in.
 
 The version string is stamped and never compared, because it cannot carry this: the sweep that
 cost $37.62 ran an image built a day before the code it was reported against, and both binaries
-answered `nexus 0.3.0`. So before a fresh stamp, `scripts/eval/check_image_binary.sh` compares
-the image's `nexus` against `target/release/nexus` by content and refuses a mismatch, naming
-`make bench` / `make bench-image`. A resume does not repeat that comparison — the image id is a
+answered `nexus 0.3.0`. So before a fresh stamp, `scripts/eval/check_image_artifacts.sh`
+compares all three against the tree by content and refuses a mismatch, naming the offending
+file and `make bench` / `make bench-image`. `nexus` is not the one that matters most:
+`fixture-build` is the L0 build-and-grade path, so drift there changes *grades*, where drift in
+`nexus` only changes the context an arm is given. The corpus is not covered because the final
+image holds no copy of it — the Dockerfile deletes `/warm` and `/verify` in the same layers
+that use them, and a run clones from the host's `target/fixtures` — which the script says at
+length. A resume does not repeat that comparison — the image id is a
 content address, so a matching id already proves the binary is the stamped one, and re-checking
 against a tree that may have moved during the sweep would refuse every such resume with no way
 out that the id pin would then accept.
