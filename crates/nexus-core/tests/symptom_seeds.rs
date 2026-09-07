@@ -399,17 +399,25 @@ fn a_prompt_naming_a_camel_case_field_in_prose_anchors_on_it() {
     );
 }
 
-/// `B2-orphaned-field-diagnosis`, the prompt verbatim.
+/// `B2-orphaned-field-diagnosis`, the prompt verbatim — the live one, from
+/// `tests/fixtures/specs/next-storefront/fixture.toml`.
 ///
 /// `orders` is the whole name of two symbols and must keep seeding nothing. What rescues this
 /// prompt is `total`, an interior token of `getTotalAmount` — the field whose rename is the
 /// bug being reported.
+///
+/// The sentence moved when the task's start commit did (it read "The orders page shows NaN for
+/// every total" against c3). It is pinned to the live wording rather than the historical one on
+/// purpose: a regression test for "the prompts the benchmark actually sends still seed" that
+/// quotes a prompt nothing sends any more passes whether or not the thing works, which is the
+/// defect class this branch exists to remove.
 #[test]
 fn a_symptom_naming_an_interior_token_anchors_on_the_field_it_describes() {
     let (_root, engine) = scanned_camel("total");
     let pkg = package(
         &engine,
-        "The orders page shows NaN for every total. Find out why and fix it.",
+        "The orders page is broken — it throws instead of rendering the total for each order. \
+         Find out why and fix it.",
     );
     let files: Vec<&String> = pkg.items.iter().map(|i| &i.anchor.file).collect();
 

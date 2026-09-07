@@ -86,15 +86,20 @@ plants_bug.anchor = "api/src/main/resources/graphql/order.graphqls:4"
 
 [[commit]]
 id      = "c4"
-message = "Finish the tax rework: the schema publishes grossAmount"
+message = "Finish the tax rework: the accessor and the schema publish grossAmount"
 write = [
+  { path = "api/src/main/java/mn/shop/api/Order.java",      blob = "Order-gross.java" },
+  { path = "api/src/main/java/mn/shop/api/OrderDto.java",   blob = "OrderDto-gross.java" },
   { path = "api/src/main/resources/graphql/order.graphqls", blob = "order-renamed.graphqls" },
 ]
 plants_bug.id      = "storefront-queries-a-retired-field"
 plants_bug.kind    = "contract"
 plants_bug.summary = """
-`api/` is now internally consistent: entity, DTO and schema all say `grossAmount`, and nothing \
-inside that tree is wrong. The storefront was never told. `orders.ts` still selects \
+`api/` is now internally consistent: entity, accessor, DTO and schema all say `grossAmount`, \
+and nothing inside that tree is wrong. c3's half-rename — `getTotalAmount()` still standing \
+beside a `grossAmount` field, the leftover B1's hidden test grades red — is finished here too, \
+which is what makes the claim literal: no file under `api/` names `totalAmount` in any casing. \
+The storefront was never told. `orders.ts` still selects \
 `totalAmount`, `OrderSummary.tsx` still reads it, and the client-side `Order` interface still \
 declares it — so `tsc --noEmit` is green too. The orders query names a field the schema no \
 longer declares, and the page fails on the response it gets back. There is no file on either \
@@ -150,7 +155,7 @@ corpus is a question for the control-arm validation, not for a rewrite of this f
 id      = "B2-orphaned-field-diagnosis"
 family  = "B"
 commit  = "c4"
-prompt  = "The orders page is broken: the total no longer appears for any order. Find out why and fix it."
+prompt  = "The orders page is broken — it throws instead of rendering the total for each order. Find out why and fix it."
 required_sites = [
   "web/src/lib/orders.ts",
   "web/src/components/OrderSummary.tsx",
@@ -172,7 +177,14 @@ contract on the same side of the seam as the bug.
 From c4 there is nothing wrong inside `api/` to find. The disagreement cannot be observed, let \
 alone repaired, without reading a file on each side. The two `web/` sites are what a fix \
 touches; an alias (`totalAmount: grossAmount`) in the query is a fix that touches only the \
-first, which is why L3 reports rather than gates."""
+first, which is why L3 reports rather than gates.
+
+The prompt was reworded with the start state, not for difficulty. "Shows NaN" describes one \
+situation only — a query that is *valid* against the schema resolving to no value — and that \
+requires the schema to declare a field nothing serves, which is the `api/`-internal orphan \
+that made the task locally solvable in the first place. At c4 the query names a field the \
+schema does not declare, so it is rejected outright and `data.orders` throws. The wording \
+names no file, no field and no side of the seam, exactly as the old one did."""
 
 [[task]]
 id      = "N2-copy-tweak"
