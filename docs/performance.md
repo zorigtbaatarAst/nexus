@@ -40,7 +40,7 @@ The `rescan` rows were written as flat in repository size — cost proportional 
 changed*, not to how much code exists. **They are not, and the budgets above are what they
 are measured against, not a description of the curve.**
 [`eval/hook-latency.md`](eval/hook-latency.md) times a one-file edit across the corpus at
-8 / 17 / 53 / 741 ms for 132 / 339 / 868 / 11 519 files: identical work, a 74x spread. The
+10 / 17 / 53 / 741 ms for 132 / 339 / 868 / 11 519 files: identical work, a 74x spread. The
 `resolve_edges` scope guard removed the largest constant and the same measurement now reads
 **8 / 10 / 19 / 400 ms** — better by a factor of two at the top, still not flat.
 

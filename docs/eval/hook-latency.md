@@ -54,12 +54,14 @@ after a real one-file edit rather than on a no-op:
 | spring-boot | **741 ms** |
 
 Identical work — one file changed in each — and a 74× spread. This directly falsifies
-[`performance.md`](../performance.md) §1:
+[`performance.md`](../performance.md) §1, which at the time of this measurement read:
 
 > The `rescan` rows are flat in repository size on purpose: their cost is proportional to
 > *what changed*, not to how much code exists.
 
-They are not flat. Cost tracks repository size, not change size.
+They are not flat. Cost tracks repository size, not change size. That passage has since been
+corrected to say so and to cite these numbers, so the quote above is the superseded text, kept
+because a finding that erases the claim it falsified cannot be checked.
 
 ### Confirmed, and it was not the FQN map
 
