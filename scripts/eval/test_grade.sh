@@ -182,18 +182,22 @@ echo "ok   ARMS=A0 plans 25 cells over the five three-arm tasks, zero on the ran
 # than only through DEFAULT_TASKS above, because that variable follows CORPUS — so on its own it
 # would assert whatever the environment happened to say and agree with itself either way.
 #
-# `env -u TASKS` because an operator resuming a single task (`TASKS=…`, the documented resume)
-# would otherwise have their override answer a question about the whole corpus.
+# `env -u TASKS -u ARMS -u REPS` because an operator resuming a single task (`TASKS=…`, the
+# documented resume) or gating one arm (`ARMS=A0`, the corpus-validation run) would otherwise have
+# their override answer a question about the whole corpus. TASKS was unset here from the start;
+# ARMS and REPS arrived later and were not added, so `ARMS=A0 CORPUS=tokio make bench` failed its
+# own pre-flight — the check asked "does the generated corpus still plan 95?" while A0 was still
+# exported, measured 25, and refused a sweep that was correctly configured.
 for corpus in "generated:95" "tokio:75"; do
   want="${corpus#*:}"
-  got="$(env -u TASKS CORPUS="${corpus%%:*}" DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" \
+  got="$(env -u TASKS -u ARMS -u REPS CORPUS="${corpus%%:*}" DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" \
            | tail -n +2 | wc -l)"
   [ "$got" = "$want" ] \
     || { echo "FAIL [corpus] CORPUS=${corpus%%:*} plans $got cells, not $want" >&2; exit 1; }
 done
 # A corpus name nothing knows must be refused, not silently defaulted to the generated one —
 # a typo there would report tokio numbers taken from the corpus the verdict already condemned.
-if env -u TASKS CORPUS=nonesuch DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" >/dev/null 2>&1; then
+if env -u TASKS -u ARMS -u REPS CORPUS=nonesuch DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" >/dev/null 2>&1; then
   echo "FAIL [corpus] CORPUS=nonesuch was accepted rather than refused" >&2
   exit 1
 fi
