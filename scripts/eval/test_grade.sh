@@ -10,6 +10,9 @@
 #   0c. image-artifacts  also not a grading: that every file the image bakes from the tree —
 #                  nexus, nexus-hook, fixture-build — is still the tree's, by content. A stale
 #                  image cost 95 paid runs once, and a stale fixture-build would cost grades.
+#   0d. copy-table also not a grading: that the check's artifact table still covers every COPY
+#                  in the Dockerfile. 0c proves the check refuses what it compares; this proves
+#                  it compares everything.
 #   1. empty       an empty diff must fail — and must fail on L1 *only*. L0 and L2 true proves
 #                  the container, the mount and the build actually worked; a mechanical failure
 #                  would zero them too and be indistinguishable from a bad agent.
@@ -243,6 +246,52 @@ for case in "tree-bad-nexus:target/release/nexus:one byte appended, identical --
 done
 echo "ok   image-artifacts stamps all three, and refuses both a one-byte-different nexus of the" \
   "same --version and a one-line-different build.sh, naming the file and the rebuild"
+
+# --- 0d. the check's artifact table must cover every tree file the Dockerfile bakes in ----------
+
+# Free, no container. 0c proves the check refuses what it compares; this proves it compares
+# everything. The table in check_image_artifacts.sh is coupled to scripts/eval/Dockerfile by
+# hand, and a COPY added there but not here narrows the guard silently — which is this branch's
+# own defect, one level up: the first version of the check covered `nexus` alone and shipped
+# while `build.sh` was already drifted.
+DOCKERFILE="$ROOT/scripts/eval/Dockerfile"
+
+# The source is read as field 2, so any COPY form that puts something else there — `--from=` or
+# `--chown=` flags, the JSON-array form, a heredoc — would have this case compare a flag against
+# the table, find it missing, and fail; or worse, match nothing and pass. Refused up front so the
+# limitation is enforced rather than discovered. If the Dockerfile ever goes multi-stage, both
+# this case and the table in check_image_artifacts.sh need revisiting together.
+if grep -nE '^COPY[[:space:]]+(--|\[|<)' "$DOCKERFILE"; then
+  echo "FAIL [copy-table] the Dockerfile uses a COPY form this case cannot parse (printed" >&2
+  echo "above). Revisit this case and check_image_artifacts.sh's artifact table together." >&2
+  exit 1
+fi
+
+# The table rows are the only lines in that file starting with an image path, so this reads the
+# table itself rather than anywhere the path happens to be mentioned — a path named only in a
+# comment must not count as covered.
+COVERED="$(grep -E '^/usr/local/bin/' "$ROOT/scripts/eval/check_image_artifacts.sh" | awk '{print $2}')"
+UNTRACKED=""
+while read -r src; do
+  # target/fixtures is excluded deliberately, and must stay excluded: the Dockerfile COPYs the
+  # corpus to /warm and /verify and `rm -rf`s both inside the same RUN layers, so the final image
+  # contains no copy of it — verified, `ls /warm /verify` exits 2 — and a run clones each fixture
+  # from the host at run time instead. Adding it to the table would not be a stricter check, it
+  # would be a comparison against a file that does not exist. See check_image_artifacts.sh's
+  # header for the whole reason, including what image-side staleness that leaves uncovered.
+  if [ "$src" = "target/fixtures" ]; then
+    continue
+  fi
+  grep -qxF "$src" <<<"$COVERED" || UNTRACKED="$UNTRACKED $src"
+done < <(grep -E '^COPY[[:space:]]' "$DOCKERFILE" | awk '{print $2}')
+
+[ -z "$UNTRACKED" ] \
+  || { echo "FAIL [copy-table] the Dockerfile bakes in files that check_image_artifacts.sh does" >&2
+       echo "not compare:$UNTRACKED" >&2
+       echo "A sweep would stamp clean provenance for an artifact nothing checked. Add each to" >&2
+       echo "the ARTIFACTS table with the image path it is COPYed to." >&2
+       exit 1; }
+echo "ok   copy-table every tree file the Dockerfile bakes in is in the check's artifact table"
 
 # --- 1. an empty diff must not pass ------------------------------------------------------------
 
