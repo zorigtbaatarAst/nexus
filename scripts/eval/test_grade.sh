@@ -256,14 +256,16 @@ echo "ok   image-artifacts stamps all three, and refuses both a one-byte-differe
 # while `build.sh` was already drifted.
 DOCKERFILE="$ROOT/scripts/eval/Dockerfile"
 
-# The source is read as field 2, so any COPY form that puts something else there — `--from=` or
-# `--chown=` flags, the JSON-array form, a heredoc — would have this case compare a flag against
-# the table, find it missing, and fail; or worse, match nothing and pass. Refused up front so the
-# limitation is enforced rather than discovered. If the Dockerfile ever goes multi-stage, both
-# this case and the table in check_image_artifacts.sh need revisiting together.
-if grep -nE '^COPY[[:space:]]+(--|\[|<)' "$DOCKERFILE"; then
+# Sources are read as the whitespace-separated fields between `COPY` and the destination, so any
+# form that puts something else there must be refused rather than guessed at: `--from=`/`--chown=`
+# flags, the JSON-array form, a heredoc, and a quoted or spaced path — which whitespace-splitting
+# would tear into two garbled fields, failing for the wrong reason with an unreadable name.
+# Refused up front so the limitation is enforced rather than discovered. If the Dockerfile ever
+# goes multi-stage, this case and check_image_artifacts.sh's table need revisiting together.
+if grep -nE -e '^COPY[[:space:]]+(--|\[|<)' -e "^COPY[[:space:]].*[\"']" "$DOCKERFILE"; then
   echo "FAIL [copy-table] the Dockerfile uses a COPY form this case cannot parse (printed" >&2
-  echo "above). Revisit this case and check_image_artifacts.sh's artifact table together." >&2
+  echo "above): a flag, the JSON-array form, a heredoc, or a quoted path. Revisit this case" >&2
+  echo "and check_image_artifacts.sh's artifact table together." >&2
   exit 1
 fi
 
@@ -283,7 +285,11 @@ while read -r src; do
     continue
   fi
   grep -qxF "$src" <<<"$COVERED" || UNTRACKED="$UNTRACKED $src"
-done < <(grep -E '^COPY[[:space:]]' "$DOCKERFILE" | awk '{print $2}')
+  # EVERY source, not only field 2: `COPY a b /dest/` is legal and bakes in both. Reading the
+  # first alone would leave `b` uncompared with this case green — the silent narrowing this case
+  # exists to prevent, reproduced inside it. (A `COPY` with fewer than three fields is not a
+  # valid instruction and fails `docker build`, so the empty loop it produces here needs no case.)
+done < <(awk '/^COPY[[:space:]]/ { for (i = 2; i < NF; i++) print $i }' "$DOCKERFILE")
 
 [ -z "$UNTRACKED" ] \
   || { echo "FAIL [copy-table] the Dockerfile bakes in files that check_image_artifacts.sh does" >&2
