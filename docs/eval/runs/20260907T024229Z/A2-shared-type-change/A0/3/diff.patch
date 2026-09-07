@@ -1,0 +1,37 @@
+diff --git a/libs/common/src/main/java/mn/acme/common/Money.java b/libs/common/src/main/java/mn/acme/common/Money.java
+index b3dfadb..794d088 100644
+--- a/libs/common/src/main/java/mn/acme/common/Money.java
++++ b/libs/common/src/main/java/mn/acme/common/Money.java
+@@ -9,11 +9,14 @@ import java.math.RoundingMode;
+  */
+ public final class Money {
+ 
++    /** Amounts are held to four places so FX-denominated orders keep their sub-cent detail. */
++    private static final int SCALE = 4;
++
+     private final BigDecimal amount;
+     private final String currency;
+ 
+     public Money(BigDecimal amount, String currency) {
+-        this.amount = amount.setScale(2, RoundingMode.HALF_UP);
++        this.amount = amount.setScale(SCALE, RoundingMode.HALF_UP);
+         this.currency = currency;
+     }
+ 
+diff --git a/libs/common/src/test/java/mn/acme/common/MoneyTest.java b/libs/common/src/test/java/mn/acme/common/MoneyTest.java
+index 26a06c5..867701d 100644
+--- a/libs/common/src/test/java/mn/acme/common/MoneyTest.java
++++ b/libs/common/src/test/java/mn/acme/common/MoneyTest.java
+@@ -23,6 +23,12 @@ class MoneyTest {
+         assertEquals(0, a.plus(b).amount().compareTo(new BigDecimal("3.75")));
+     }
+ 
++    @Test
++    void keeps_four_decimal_places_for_fx_amounts() {
++        Money fx = new Money(new BigDecimal("1.23456"), "USD");
++        assertEquals(new BigDecimal("1.2346"), fx.amount());
++    }
++
+     @Test
+     void refuses_to_add_across_currencies() {
+         Money mnt = new Money(BigDecimal.ONE, "MNT");

@@ -1,0 +1,43 @@
+diff --git a/web/src/components/OrderSummary.tsx b/web/src/components/OrderSummary.tsx
+index 71eb645..cbff02f 100644
+--- a/web/src/components/OrderSummary.tsx
++++ b/web/src/components/OrderSummary.tsx
+@@ -1,7 +1,7 @@
+ import type { Order } from "../lib/orders";
+ 
+ export function OrderSummary({ orders }: { orders: Order[] }) {
+-  const total = orders.reduce((sum, o) => sum + o.totalAmount, 0);
++  const total = orders.reduce((sum, o) => sum + o.grossAmount, 0);
+   return (
+     <section aria-label="Order summary">
+       <h2>Orders</h2>
+@@ -9,7 +9,7 @@ export function OrderSummary({ orders }: { orders: Order[] }) {
+         {orders.map((o) => (
+           <li key={o.id}>
+             <span>{o.reference}</span>
+-            <span>{o.totalAmount.toFixed(2)}</span>
++            <span>{o.grossAmount.toFixed(2)}</span>
+             <span>{o.status}</span>
+           </li>
+         ))}
+diff --git a/web/src/lib/orders.ts b/web/src/lib/orders.ts
+index b10d649..983731f 100644
+--- a/web/src/lib/orders.ts
++++ b/web/src/lib/orders.ts
+@@ -3,7 +3,7 @@ export const ORDERS_QUERY = /* GraphQL */ `
+     orders {
+       id
+       reference
+-      totalAmount
++      grossAmount
+       status
+     }
+   }
+@@ -22,6 +22,6 @@ export async function fetchOrders(): Promise<Order[]> {
+ export interface Order {
+   id: string;
+   reference: string;
+-  totalAmount: number;
++  grossAmount: number;
+   status: string;
+ }

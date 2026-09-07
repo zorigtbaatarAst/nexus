@@ -1,0 +1,163 @@
+diff --git a/src/main/java/mn/payments/Payment.java b/src/main/java/mn/payments/Payment.java
+index c54da81..905fe46 100644
+--- a/src/main/java/mn/payments/Payment.java
++++ b/src/main/java/mn/payments/Payment.java
+@@ -30,6 +30,10 @@ public class Payment {
+         return id;
+     }
+ 
++    public void setId(String id) {
++        this.id = id;
++    }
++
+     public Long getVersion() {
+         return version;
+     }
+@@ -38,10 +42,18 @@ public class Payment {
+         return idempotencyKey;
+     }
+ 
++    public void setIdempotencyKey(String idempotencyKey) {
++        this.idempotencyKey = idempotencyKey;
++    }
++
+     public BigDecimal getAmount() {
+         return amount;
+     }
+ 
++    public void setAmount(BigDecimal amount) {
++        this.amount = amount;
++    }
++
+     public String getStatus() {
+         return status;
+     }
+diff --git a/src/main/java/mn/payments/PaymentService.java b/src/main/java/mn/payments/PaymentService.java
+index 0fe2ef3..c4c7fb0 100644
+--- a/src/main/java/mn/payments/PaymentService.java
++++ b/src/main/java/mn/payments/PaymentService.java
+@@ -3,6 +3,7 @@ package mn.payments;
+ import java.math.BigDecimal;
+ import java.math.RoundingMode;
+ import java.util.List;
++import java.util.UUID;
+ import org.springframework.stereotype.Service;
+ import org.springframework.transaction.annotation.Transactional;
+ 
+@@ -18,10 +19,14 @@ public class PaymentService {
+     }
+ 
+     /**
+-     * The check is back inside the transaction, and V2__payment_unique_index.sql makes the
+-     * database the final arbiter: the application check is now an optimisation, not the
+-     * guarantee. Both halves are needed — the index alone turns a duplicate into an
++     * The check is back inside the transaction, and V4__restore_payment_idempotency_index.sql
++     * makes the database the final arbiter: the application check is now an optimisation, not
++     * the guarantee. Both halves are needed — the index alone turns a duplicate into an
+      * exception, and the transaction alone still races on a cluster.
++     *
++     * <p>The key must actually be written to the row for either half to work: an unpersisted
++     * key makes the lookup below miss every time and leaves the unique index with nothing to
++     * constrain.
+      */
+     @Transactional
+     public Payment create(String idempotencyKey, BigDecimal amount) {
+@@ -30,6 +35,9 @@ public class PaymentService {
+             return repository.findByIdempotencyKey(idempotencyKey).orElseThrow();
+         }
+         Payment p = new Payment();
++        p.setId(UUID.randomUUID().toString());
++        p.setIdempotencyKey(idempotencyKey);
++        p.setAmount(amount);
+         p.setStatus("PENDING");
+         return repository.save(p);
+     }
+diff --git a/src/main/resources/db/migration/V4__restore_payment_idempotency_index.sql b/src/main/resources/db/migration/V4__restore_payment_idempotency_index.sql
+new file mode 100644
+index 0000000..a8c1903
+--- /dev/null
++++ b/src/main/resources/db/migration/V4__restore_payment_idempotency_index.sql
+@@ -0,0 +1,18 @@
++-- Restores the unique index that V3 dropped.
++--
++-- V3 removed ux_payment_idempotency_key because pg_stat_user_indexes recorded no reads
++-- against it. A uniqueness constraint is not a lookup path, so it never accumulates reads --
++-- the zero was the index doing its job, not evidence that it was unused. Dropping it
++-- reopened the duplicate-payment race that V2 closed, and payments began double-charging.
++--
++-- Do not drop this index on read-statistics grounds again.
++--
++-- NOTE FOR THE OPERATOR: this statement fails if duplicate keys were written while the index
++-- was absent. Reconcile them before deploying; to find them:
++--
++--   SELECT idempotency_key, count(*), array_agg(id)
++--   FROM payment GROUP BY idempotency_key HAVING count(*) > 1;
++--
++-- Refunding or voiding the surplus rows is a settlement decision, so it is deliberately not
++-- automated here.
++CREATE UNIQUE INDEX ux_payment_idempotency_key ON payment (idempotency_key);
+diff --git a/src/test/java/mn/payments/PaymentServiceTest.java b/src/test/java/mn/payments/PaymentServiceTest.java
+index f269445..c69a9ce 100644
+--- a/src/test/java/mn/payments/PaymentServiceTest.java
++++ b/src/test/java/mn/payments/PaymentServiceTest.java
+@@ -1,10 +1,19 @@
+ package mn.payments;
+ 
+ import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++import static org.junit.jupiter.api.Assertions.assertSame;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
+ 
+ import java.math.BigDecimal;
+ import java.util.List;
++import java.util.Optional;
+ import org.junit.jupiter.api.Test;
++import org.mockito.ArgumentCaptor;
+ 
+ class PaymentServiceTest {
+ 
+@@ -13,4 +22,40 @@ class PaymentServiceTest {
+                 PaymentService service = new PaymentService(null, null);
+                 assertEquals(new BigDecimal("0.00"), service.total(List.of()));
+         }
++
++        /**
++         * Without this the idempotency key never reaches the row, so the lookup in create()
++         * misses on every retry and the unique index has nothing to constrain — the payment is
++         * charged again.
++         */
++        @Test
++        void create_persists_the_idempotency_key_and_amount() {
++                PaymentRepository repository = mock(PaymentRepository.class);
++                when(repository.existsByIdempotencyKey("key-1")).thenReturn(false);
++                when(repository.save(any(Payment.class))).thenAnswer(i -> i.getArgument(0));
++
++                PaymentService service = new PaymentService(repository, new PaymentValidator());
++                service.create("key-1", new BigDecimal("12.34"));
++
++                ArgumentCaptor<Payment> saved = ArgumentCaptor.forClass(Payment.class);
++                verify(repository).save(saved.capture());
++                assertEquals("key-1", saved.getValue().getIdempotencyKey());
++                assertEquals(new BigDecimal("12.34"), saved.getValue().getAmount());
++                assertEquals("PENDING", saved.getValue().getStatus());
++                assertNotNull(saved.getValue().getId());
++        }
++
++        @Test
++        void create_returns_the_existing_payment_for_a_known_key() {
++                Payment existing = new Payment();
++                PaymentRepository repository = mock(PaymentRepository.class);
++                when(repository.existsByIdempotencyKey("key-1")).thenReturn(true);
++                when(repository.findByIdempotencyKey("key-1")).thenReturn(Optional.of(existing));
++
++                PaymentService service = new PaymentService(repository, new PaymentValidator());
++                Payment result = service.create("key-1", new BigDecimal("12.34"));
++
++                assertSame(existing, result);
++                verify(repository, never()).save(any(Payment.class));
++        }
+ }
