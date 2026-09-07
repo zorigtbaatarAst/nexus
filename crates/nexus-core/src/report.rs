@@ -107,6 +107,11 @@ pub struct RescanReport {
     pub facts_validated: usize,
     pub items: Vec<ChangeItem>,
     pub files_failed: usize,
+    /// Unresolved edges this rescan re-walked. Small when the rescan could scope resolution
+    /// to its own changed files, the whole backlog when something moved a whole-project
+    /// input (a symbol, or a supertype clause). A correct skip leaves no other trace: it is
+    /// only ever the work not done.
+    pub edges_walked: usize,
     pub health: Health,
     pub warnings: Vec<String>,
     pub duration_ms: u128,

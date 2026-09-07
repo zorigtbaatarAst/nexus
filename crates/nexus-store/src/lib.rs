@@ -1002,6 +1002,32 @@ impl Store {
         Ok(written)
     }
 
+    /// The `extends`/`implements` hints one file currently contributes, as
+    /// `(subtype FQN, supertype hint)` pairs — the same shape `resolve_edges` folds into its
+    /// supertype map.
+    ///
+    /// Exists so a rescan can tell whether re-parsing a file moved that map. Adding an
+    /// `extends` clause to an existing class moves no symbol, so the symbol-table guard
+    /// cannot see it, and the inherited-member tier it feeds resolves edges in files that
+    /// did not change.
+    pub fn supertype_hints_for_file(
+        tx: &Transaction<'_>,
+        file_id: FileId,
+    ) -> Result<std::collections::BTreeSet<(String, String)>> {
+        let mut stmt = tx.prepare(
+            "SELECT s.fqn, e.dst_fqn_hint FROM symbol_edges e
+             JOIN symbols s ON s.id = e.src_symbol_id
+             WHERE e.file_id = ?1 AND e.edge_type IN ('extends','implements')
+               AND e.dst_fqn_hint IS NOT NULL",
+        )?;
+        let rows = stmt
+            .query_map(params![file_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<std::collections::BTreeSet<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Live files that supplied edges for symbols another file owns.
     ///
     /// Normally a symbol's edges come from the file that defines it, and this returns

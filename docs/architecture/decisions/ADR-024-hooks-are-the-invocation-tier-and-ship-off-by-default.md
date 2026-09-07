@@ -1,6 +1,6 @@
 # ADR-024 — Hooks are the deterministic invocation tier, and they ship off by default
 
-**Status:** Accepted (2026-09-02)
+**Status:** Accepted (2026-09-02), amended (2026-09-07) — see *Amendment* below.
 
 ## Why it is needed
 
@@ -80,3 +80,45 @@ probability term by persuasion, which does not compound and cannot be measured.
    hook.
 3. **`doctor` reports hooks silently failing in the field.** Fail-open was the wrong default for
    that hook, and it needs a visible degraded mode instead.
+
+## Amendment (2026-09-07) — signal 1 was tested and did not fire
+
+The measurement signal 1 asks for now exists:
+[`docs/eval/hook-latency.md`](../../eval/hook-latency.md), p95 over four repositories
+spanning two orders of magnitude, from spring-petclinic (132 files) to spring-boot
+(11 519 files, 81 612 symbols).
+
+**It did not clear the bar.** Three of the four budgets breach on spring-boot, and nothing
+breaches below it:
+
+| hook | budget | spring-boot p95 |
+|---|---:|---:|
+| `SessionStart` | 400 ms | 276 ms |
+| `PostToolUse` (no-op) | 200 ms | **251 ms** ✗ |
+| `PostToolUse` (1 file edited) | 200 ms | 741 ms → **400 ms** ✗ |
+| `UserPromptSubmit` (seeded) | 150 ms | **302 ms** ✗ |
+| `UserPromptSubmit` (lexical fallback) | 150 ms | **694 ms** ✗ |
+
+So **hooks stay off by default**, and the decision above stands on evidence rather than on
+caution.
+
+Two things this establishes beyond the verdict:
+
+- The `PostToolUse` row was mostly waste. `resolve_edges` re-walked the whole unresolved set
+  on every rescan and resolved nothing — 325 ms of 741 ms on spring-boot, three consecutive
+  rescans returning the same 80 699 unresolved. Scoping that walk to what actually moved cut
+  the row to 400 ms. It still breaches.
+- **What remains is per *process*, not per change.** The symbol lookup map, the supertype map
+  and the unresolved select cannot be scoped: a changed file's edge may point anywhere in the
+  repository, so the table has to be complete. A hook pays that setup on every invocation and
+  a warm process pays it once.
+
+That last point is signal 2's territory — "p95 cannot be brought under 150 ms by caching" —
+and it is now half-fired, honestly: nothing here proves caching *cannot* close the gap,
+because no caching was attempted. What is established is that the residual cost scales with
+index size on a path that is supposed to scale with change size, which is the shape a warm
+process fixes and a bigger timeout does not. `docs/performance.md` §10 names the same trigger
+from the other side. Both point at ADR-006's daemon.
+
+Still outstanding from the same document, and not addressed by this amendment: "p95 is
+asserted in CI, not hoped for" — no CI assertion exists for any of these numbers.

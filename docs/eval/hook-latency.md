@@ -38,6 +38,9 @@ These are the numbers as measured, before the `resolve_edges` fix below. That fi
 rescan rows and leaves the two `UserPromptSubmit` rows alone; the post-fix rescan figures
 are in the "Fixed" table.
 
+The `UserPromptSubmit` column is **stale for a different reason**: it was measured before
+`context/seeds.rs` was rewritten. See §"The prompt path" at the end.
+
 ## The rescan number above is the flattering one
 
 `PostToolUse` fires on `Edit|Write`, so the repository has always just changed. Timed
@@ -87,17 +90,29 @@ all of them.
 
 The justification for the walk is real but narrower than the code: `rescan.rs` says "an
 added or renamed symbol can resolve edges elsewhere without those files changing". True —
-and it means the walk is needed *only when the symbol table moved*. The lookup maps are
-built from `live_symbols`; if no symbol appeared, vanished or was renamed, an edge that
-failed against that table before fails identically now. A body-only edit — the change a
-`PostToolUse` hook sees after an agent edits a function body — moves nothing and paid the
-full 325 ms anyway.
+and it means the walk is needed *only when a whole-project input to `resolve_edges` moved*.
+There are exactly two: the name maps built from `live_symbols`, and the supertype map built
+from `extends`/`implements` edges. Everything else it reads is already scoped — the
+unresolved rows themselves, and the source path each row carries. A body-only edit — the
+change a `PostToolUse` hook sees after an agent edits a function body — moves neither and
+paid the full 325 ms anyway.
 
 ### Fixed
 
-`ResolveScope` splits the two cases. A rescan that added, removed or renamed no symbol
-resolves only the edges it wrote (`replace_edges_for_file` stamps them with the scan id, so
-the scope is exact); anything else still walks everything.
+`ResolveScope` splits the two cases. A rescan that moved neither input resolves only the
+edges it wrote (`replace_edges_for_file` stamps them with the scan id, so the scope is
+exact); anything else still walks everything.
+
+The first version of this guard watched only the symbol table, and that was wrong: adding an
+`extends` clause to an existing class moves no symbol, yet it is exactly what lets the
+inherited-member tier resolve a call in a file that did not change. A three-file fixture
+caught it — rescan `edges=[("exact",2),("unresolved",1)]` against a cold scan's
+`[("exact",2),("heuristic",1)]`. The guard now also compares each changed file's
+`extends`/`implements` hints against what it contributed before. That costs one indexed
+query per changed file and nothing measurable: on spring-boot, one-file-edit rescan p95 is
+**421 ms before the widening and 420 ms after** (5 runs each, same protocol, same session),
+and `edges_walked` stays at 324 rather than jumping to the full 80 699 — the shortcut is
+still taken.
 
 | repo | before | after |
 |---|---:|---:|
@@ -114,9 +129,19 @@ separated from the waste that was removable.
 
 `docs/testing-strategy.md` §4 names `full_scan ≡ scan-then-rescan` "the central invariant …
 worth more than the rest of the property suite combined". **It did not exist.** It does
-now, in `crates/nexus-core/tests/incremental_equals_full.rs`, as the two halves this change
+now, in `crates/nexus-core/tests/incremental_equals_full.rs`, as the halves this change
 turns on: the work a rescan may skip, and the work it may not. Forcing the scoped path
-unconditionally fails the second test with `edges=[("unresolved", 2)]`, so the guard bites.
+unconditionally fails `a_symbol_added_elsewhere_…` with `edges=[("unresolved", 2)]` and
+`an_extends_clause_added_by_a_rescan_…` with `[("exact",2),("unresolved",1)]`, so the guard
+bites in both directions.
+
+The skip needs its own test, because equivalence cannot see it: a *correct* skip writes no
+rows, so every equivalence test above still passes with the scope forced back to `All`, and
+the optimisation could be deleted in a refactor without a single failure.
+`a_body_only_rescan_does_not_re_walk_the_unresolved_backlog` asserts the skip directly,
+through `RescanReport::edges_walked` — the count `resolve_edges` returns. It expects 0 on a
+body-only edit to a file with no edges, in an index that still holds an unresolved backlog;
+forcing `All` makes it 2 and the test fails.
 
 ## Nexus meets its own budgets — it fails only the hook budgets
 
@@ -185,6 +210,34 @@ not clear the bar.
 
 The `resolve_edges` fix removes the part of the gap that was waste — 46 % of a spring-boot
 rescan, resolving nothing — and rescan is now within an order of magnitude of flat again.
-It does not clear the hook budget: 400 ms against 200 ms, and the prompt path is untouched.
-What is left is per-process setup that a warm process removes and a bigger timeout does
-not, which is the signal ADR-024 already named.
+It does not clear the hook budget: 400 ms against 200 ms. What is left is per-process setup
+that a warm process removes and a bigger timeout does not, which is the signal ADR-024
+already named.
+
+The prompt path moved too, and the `UserPromptSubmit` column above was measured before it —
+see the next section.
+
+## The prompt path
+
+The `UserPromptSubmit` figures in the result table were taken before this branch rewrote
+`crates/nexus-core/src/context/seeds.rs`, so they are the cost of the *old* seeding. What
+changed: the per-word lookup went from `find_symbols(word, 8)` — suffix match, eight rows —
+to `find_symbols_by_word(word, WORD_HIT_LIMIT)` at 200, so `token_family` judges a family
+instead of a window of one.
+
+Measured on a synthetic index built to spring-boot's size — 81 612 symbols:
+
+| lookup | per word |
+|---|---:|
+| `find_symbols(8)` | 47.9 ms |
+| `find_symbols_by_word(200)` | 51.0 ms |
+
+**+6.5 %.** `LIKE '%x%'` is unindexed and reads the table whatever the `LIMIT` says, so the
+wider window costs rows materialized and nothing else, and the measurement agrees.
+
+That is not the whole change, and the rest is **not measured end to end.** `token_family`
+now emits up to `TOKEN_FAMILY_NAME_CAP` seeds for a word that previously emitted zero, and
+every seed feeds expansion (`max_depth: 5`, no node cap). The per-word query cost is +6.5 %;
+the downstream cost of seeds that did not exist before has not been timed on a real
+repository. Re-run `scripts/eval/measure.sh` against spring-boot before quoting the
+`UserPromptSubmit` column again.

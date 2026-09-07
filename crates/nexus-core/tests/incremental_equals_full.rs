@@ -5,9 +5,14 @@
 //! full_scan(repo)  ≡  scan(commit_1) then rescan through to commit_N
 //! ```
 //!
-//! It is the seam that guards every attempt to make the incremental path do less work. The
-//! two cases below are the two halves of that guard — the work a rescan may skip, and the
-//! work it may not.
+//! It is the seam that guards every attempt to make the incremental path do less work. Three
+//! of the cases below are its halves — the work a rescan may skip, and the two shapes of work
+//! it may not.
+//!
+//! The fourth is the other direction, and it is not an equivalence test. A *correct* skip
+//! writes no rows, so every equivalence case here passes with the scope forced back to
+//! `All`; nothing in them would notice the optimisation being deleted. The last case asserts
+//! the skip itself.
 
 use nexus_core::Engine;
 use nexus_store::Store;
@@ -160,4 +165,152 @@ fn a_symbol_added_elsewhere_resolves_an_edge_in_a_file_that_did_not_change() {
 
     let _ = fs::remove_dir_all(&root);
     let _ = fs::remove_dir_all(&full);
+}
+
+/// `Child` gains an `extends` clause. No symbol appears, vanishes or is renamed — the
+/// class was already there and keeps its FQN — so the symbol-table guard sees a body-only
+/// edit and lets the rescan skip the unresolved set. But `resolve_edges` builds its
+/// supertype map from `extends`/`implements` *edges*, and the new clause is exactly what
+/// makes `User`'s call to the inherited `describe()` resolvable. `User.java` never
+/// changed, so nothing but a full re-walk can find it.
+const BASE: &str = r#"
+package mn.app;
+
+public class Base {
+    public String describe() {
+        return "base";
+    }
+}
+"#;
+
+fn child(extends: &str) -> String {
+    format!(
+        r#"
+package mn.app;
+
+public class Child {extends} {{
+    public int count() {{
+        return 1;
+    }}
+}}
+"#
+    )
+}
+
+const USER: &str = r#"
+package mn.app;
+
+public class User {
+    private final Child child = new Child();
+
+    public String run() {
+        return child.describe();
+    }
+}
+"#;
+
+#[test]
+fn an_extends_clause_added_by_a_rescan_resolves_an_inherited_call_elsewhere() {
+    let root = empty_root("supertype-inc");
+    write(&root, "src/main/java/mn/app/Base.java", BASE);
+    write(&root, "src/main/java/mn/app/Child.java", &child(""));
+    write(&root, "src/main/java/mn/app/User.java", USER);
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
+    engine.scan().expect("scan");
+
+    let before = fingerprint(&root);
+    assert!(
+        before.contains("unresolved"),
+        "the fixture must start with User's call unresolved: {before}"
+    );
+
+    // Only Child.java changes, and only by gaining a supertype.
+    write(
+        &root,
+        "src/main/java/mn/app/Child.java",
+        &child("extends Base"),
+    );
+    let report = engine.rescan().expect("rescan");
+    assert_eq!(report.files_changed, 1, "only Child.java changed");
+
+    let full = empty_root("supertype-full");
+    write(&full, "src/main/java/mn/app/Base.java", BASE);
+    write(
+        &full,
+        "src/main/java/mn/app/Child.java",
+        &child("extends Base"),
+    );
+    write(&full, "src/main/java/mn/app/User.java", USER);
+    let (mut cold, _) = Engine::init(&full, nexus_lang_pack::default_registry()).expect("init");
+    cold.scan().expect("scan");
+
+    assert_eq!(
+        fingerprint(&root),
+        fingerprint(&full),
+        "the supertype appeared, so the inherited call must resolve as it does cold"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&full);
+}
+
+/// The other half of the guard, and the half nothing else covers: the skip itself.
+///
+/// Both tests above are equivalence tests, and equivalence is what a *correct* skip
+/// preserves — force the scope back to `All` and they still pass, because walking edges that
+/// cannot resolve writes no rows. So they would not notice the optimisation being deleted.
+/// This one would: `Leaf.java` emits no edges of its own, so a rescan that scopes resolution
+/// to its own changed files walks nothing, while a rescan that re-walks the project would
+/// walk `Caller`'s still-unresolved call to the absent `Helper`.
+fn leaf(body: &str) -> String {
+    format!(
+        r#"
+package mn.app;
+
+public class Leaf {{
+    public int value() {{
+{body}
+        return 1;
+    }}
+}}
+"#
+    )
+}
+
+#[test]
+fn a_body_only_rescan_does_not_re_walk_the_unresolved_backlog() {
+    let root = empty_root("skip");
+    // Helper is absent on purpose: Caller's call stays unresolved, so there is a backlog
+    // for a whole-project resolve to walk.
+    write(&root, "src/main/java/mn/app/Caller.java", &caller(""));
+    write(&root, "src/main/java/mn/app/Leaf.java", &leaf(""));
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
+    engine.scan().expect("scan");
+    assert!(
+        fingerprint(&root).contains("unresolved"),
+        "the fixture must leave a backlog for the skip to be worth anything"
+    );
+
+    write(
+        &root,
+        "src/main/java/mn/app/Leaf.java",
+        &leaf("        int unused = 2;"),
+    );
+    let report = engine.rescan().expect("rescan");
+    assert_eq!(report.files_changed, 1, "only Leaf.java changed");
+    assert_eq!(
+        report.edges_walked, 0,
+        "a body-only edit to a file with no edges must re-walk nothing; \
+         re-walking the project would have found Caller's unresolved call"
+    );
+
+    // And the guard must still let go when it has to: adding Helper moves the symbol table.
+    write(&root, "src/main/java/mn/app/Helper.java", HELPER);
+    let report = engine.rescan().expect("rescan");
+    assert!(
+        report.edges_walked > 0,
+        "a new symbol must send resolution back over the whole unresolved set"
+    );
+
+    let _ = fs::remove_dir_all(&root);
 }

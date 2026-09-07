@@ -32,8 +32,8 @@ use std::collections::BTreeMap;
 /// lists that reach it are unbounded at their source, so both are capped here:
 ///
 ///   * `resolve` below, over the candidate words in one request. Each is also one indexed
-///     lookup on the `UserPromptSubmit` hook, whose budget is ADR-024's 400 ms; 256 holds
-///     that to about 90 ms on this repository.
+///     lookup on the `UserPromptSubmit` hook, whose budget is ADR-024's 150 ms — 400 ms is
+///     `SessionStart`; 256 holds that to about 90 ms on this repository.
 ///   * `engine::query`, over the seeds plus everything expansion reached. Expansion runs to
 ///     `max_depth: 5` with no node cap — a four-symbol prompt on this repository already
 ///     reaches 189 — so the cap is generous enough never to bite an ordinary prompt.
@@ -222,7 +222,12 @@ pub(crate) fn last_segment(fqn: &str) -> &str {
 /// rather than judged on what happened to fit.
 ///
 /// The cost of the larger window is rows materialized, not rows scanned: `LIKE '%x%'` is
-/// unindexed and reads the table whatever the `LIMIT` says.
+/// unindexed and reads the table whatever the `LIMIT` says. Measured on a synthetic
+/// 81 612-symbol index — spring-boot's size — the path this replaced,
+/// `find_symbols(word, 8)`, costs 47.9 ms/word against 51.0 ms/word for
+/// `find_symbols_by_word(word, 200)`: **+6.5 %**, which is the materialization and nothing
+/// else. `docs/eval/hook-latency.md` §"The prompt path" carries the measurement, and the
+/// caveat that the seeds this now emits have not been costed end to end.
 const WORD_HIT_LIMIT: usize = 200;
 
 /// How many **names** a word may be a token of before it names nothing.

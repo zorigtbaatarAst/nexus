@@ -114,5 +114,8 @@ correctness at seven tasks is a tripwire that detects a collapse, not a regressi
    easy; nothing measured through them can be trusted. This is design risk R-c, realised.
 2. **Fix the empty packages.** Two tasks, ten prompts, nothing injected. Find out why the
    seeding anchors nothing on those prompts before blaming the ranking.
-3. **Re-examine the fallback gate.** `query_overlap >= 2` never cleared on 35 real prompts.
+3. **Re-run the sweep through `make bench`, never `sweep.sh` directly.** The fallback gate
+   needs nothing: §"The fallback did not fire" above establishes that `query_overlap >= 2`
+   clears on both failing prompts and that the image simply did not contain the fallback.
+   What needs fixing is the harness that let a day-old binary be reported as HEAD.
 4. Only then re-run, and only then is T7's consequence meaningful.

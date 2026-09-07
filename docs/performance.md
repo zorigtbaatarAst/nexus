@@ -36,8 +36,19 @@ The row that defines the product is **`rescan` with no changes**. It runs consta
 agent turn, every CI job, every `status`. If it is not effectively instant, nothing else
 matters. It is one `git rev-parse`, one `git status`, and one indexed row read.
 
-The `rescan` rows are flat in repository size on purpose: their cost is proportional to
-*what changed*, not to how much code exists. The residual growth is the `git status` call.
+The `rescan` rows were written as flat in repository size — cost proportional to *what
+changed*, not to how much code exists. **They are not, and the budgets above are what they
+are measured against, not a description of the curve.**
+[`eval/hook-latency.md`](eval/hook-latency.md) times a one-file edit across the corpus at
+8 / 17 / 53 / 741 ms for 132 / 339 / 868 / 11 519 files: identical work, a 74x spread. The
+`resolve_edges` scope guard removed the largest constant and the same measurement now reads
+**8 / 10 / 19 / 400 ms** — better by a factor of two at the top, still not flat.
+
+What remains is per *process*, not per change: the symbol lookup map, the supertype map and
+the unresolved select, all of which have to be complete because a changed file's edge may
+point anywhere in the repository. That residue is the warm-process argument in §10, and it
+is why every `rescan` row above still passes its own budget while breaching ADR-024's
+200 ms hook budget on an 877 KLOC repository.
 
 ---
 
