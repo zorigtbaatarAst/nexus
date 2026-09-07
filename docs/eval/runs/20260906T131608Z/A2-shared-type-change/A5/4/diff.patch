@@ -1,0 +1,13 @@
+diff --git a/libs/common/src/main/java/mn/acme/common/Money.java b/libs/common/src/main/java/mn/acme/common/Money.java
+index b3dfadb..1971815 100644
+--- a/libs/common/src/main/java/mn/acme/common/Money.java
++++ b/libs/common/src/main/java/mn/acme/common/Money.java
+@@ -13,7 +13,7 @@ public final class Money {
+     private final String currency;
+ 
+     public Money(BigDecimal amount, String currency) {
+-        this.amount = amount.setScale(2, RoundingMode.HALF_UP);
++        this.amount = amount.setScale(4, RoundingMode.HALF_UP);
+         this.currency = currency;
+     }
+ 

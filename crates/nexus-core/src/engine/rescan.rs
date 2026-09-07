@@ -52,6 +52,7 @@ impl Engine {
                 facts_validated: 0,
                 items: Vec::new(),
                 files_failed: 0,
+                edges_walked: 0,
                 health: Health::Ok,
                 warnings: Vec::new(),
                 duration_ms: started.elapsed().as_millis(),
@@ -178,6 +179,7 @@ impl Engine {
                 facts_validated: 0,
                 items: Vec::new(),
                 files_failed: 0,
+                edges_walked: 0,
                 health: Health::Ok,
                 warnings,
                 duration_ms: started.elapsed().as_millis(),
@@ -539,13 +541,31 @@ impl Engine {
             symbols_changed += 1;
         }
 
+        // The second input the scope guard below has to watch. `resolve_edges` folds
+        // `extends`/`implements` edges into a supertype map and resolves inherited members
+        // through it, so adding an `extends` clause to an existing class can resolve a call
+        // in a file that did not change — while moving no symbol at all, which is exactly
+        // what the symbol-table half of the guard looks for. Read before the replace,
+        // because the replace is a delete-then-insert.
+        //
+        // The comparison is deliberately conservative: an edge whose source symbol is not in
+        // the index never lands, so it shows up as a difference every time and costs that
+        // one file its shortcut. Losing a shortcut is the safe direction.
+        let mut supertypes_changed = false;
         for (file_id, edges) in &pending_edges {
-            if *file_id != 0 {
-                Store::replace_edges_for_file(&tx, self.project_id, *file_id, scan_id, edges)?;
+            if *file_id == 0 {
+                continue;
             }
+            if !supertypes_changed {
+                let after: BTreeSet<(String, String)> = edges
+                    .iter()
+                    .filter(|e| matches!(e.edge_type, EdgeType::Extends | EdgeType::Implements))
+                    .map(|e| (e.src_fqn.clone(), e.dst_hint.clone()))
+                    .collect();
+                supertypes_changed = Store::supertype_hints_for_file(&tx, *file_id)? != after;
+            }
+            Store::replace_edges_for_file(&tx, self.project_id, *file_id, scan_id, edges)?;
         }
-        // Tier 3: an added or renamed symbol can resolve edges elsewhere without those
-        // files changing, so resolution re-runs over the unresolved set every scan.
         // The commit ledger. Append-only and idempotent, so a rescan that sees the same
         // history re-inserts nothing. Recorded here rather than in a separate pass because
         // it belongs to the same transaction as the index it describes.
@@ -557,7 +577,34 @@ impl Engine {
         {
             Store::insert_commit(&tx, self.project_id, &crate::history::to_record(c))?;
         }
-        Store::resolve_edges(&tx, self.project_id)?;
+        // Tier 3: something that changed here can resolve edges in files that did *not*
+        // change, so resolution re-runs over the whole unresolved set — but only when one of
+        // `resolve_edges`' two whole-project inputs actually moved.
+        //
+        // Those inputs are the `live_symbols` table (every name map, and the package set
+        // derived from it) and the supertype map built from `extends`/`implements` edges.
+        // Nothing else it reads is global: the unresolved rows themselves are scoped, and
+        // the source path each carries belongs to the file that emitted it.
+        //
+        // A body-only edit — what a `PostToolUse` hook sees most of the time — moves
+        // neither: the hints that failed to resolve last time fail against the identical
+        // table now. Walking them anyway cost 325 ms of the 741 ms a one-line edit took on
+        // spring-boot and resolved nothing — the unresolved count came back at 80 699 every
+        // time. Deletions are in the guard because a vanished symbol changes the table too,
+        // in the direction that can only lose resolutions.
+        let scope = if appeared.is_empty()
+            && vanished.is_empty()
+            && deleted_paths.is_empty()
+            && !supertypes_changed
+        {
+            nexus_store::ResolveScope::ThisScan(scan_id)
+        } else {
+            nexus_store::ResolveScope::All
+        };
+        // How many unresolved edges this rescan actually re-walked. Reported because it is
+        // the cost the guard above exists to avoid, and the only place the skip is visible:
+        // a correct skip changes no row, so nothing else in the index can distinguish one.
+        let edges_walked = Store::resolve_edges(&tx, self.project_id, scope)?.total;
         // A fact about code this scan changed or removed is a trap for the next reader.
         // Inside the transaction, so a crash cannot leave the index new and the memory old.
         let (facts_invalidated, facts_validated) =
@@ -582,6 +629,7 @@ impl Engine {
             facts_validated,
             items,
             files_failed: failed,
+            edges_walked,
             health: if failed > 0 {
                 Health::Degraded
             } else {

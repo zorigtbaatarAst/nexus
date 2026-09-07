@@ -1,0 +1,189 @@
+diff --git a/src/main/java/mn/payments/Payment.java b/src/main/java/mn/payments/Payment.java
+index c54da81..9b2c68b 100644
+--- a/src/main/java/mn/payments/Payment.java
++++ b/src/main/java/mn/payments/Payment.java
+@@ -3,17 +3,26 @@ package mn.payments;
+ import jakarta.persistence.Column;
+ import jakarta.persistence.Entity;
+ import jakarta.persistence.Id;
++import jakarta.persistence.Table;
++import jakarta.persistence.UniqueConstraint;
+ import jakarta.persistence.Version;
+ import java.math.BigDecimal;
+ 
+ @Entity
++@Table(
++        name = "payment",
++        uniqueConstraints =
++                @UniqueConstraint(
++                        name = "ux_payment_idempotency_key",
++                        columnNames = "idempotency_key"))
+ public class Payment {
+ 
+     @Id
+     private String id;
+ 
+     // Optimistic locking: two concurrent settlements of the same payment can no longer
+-    // both win. Added with V2__payment_unique_index.sql, which closes the other half.
++    // both win. The other half is the unique constraint on idempotency_key, restored by
++    // V4__restore_payment_idempotency_constraint.sql.
+     @Version
+     private Long version;
+ 
+@@ -30,6 +39,10 @@ public class Payment {
+         return id;
+     }
+ 
++    public void setId(String id) {
++        this.id = id;
++    }
++
+     public Long getVersion() {
+         return version;
+     }
+@@ -38,10 +51,18 @@ public class Payment {
+         return idempotencyKey;
+     }
+ 
++    public void setIdempotencyKey(String idempotencyKey) {
++        this.idempotencyKey = idempotencyKey;
++    }
++
+     public BigDecimal getAmount() {
+         return amount;
+     }
+ 
++    public void setAmount(BigDecimal amount) {
++        this.amount = amount;
++    }
++
+     public String getStatus() {
+         return status;
+     }
+diff --git a/src/main/java/mn/payments/PaymentService.java b/src/main/java/mn/payments/PaymentService.java
+index 0fe2ef3..d7b475b 100644
+--- a/src/main/java/mn/payments/PaymentService.java
++++ b/src/main/java/mn/payments/PaymentService.java
+@@ -3,6 +3,7 @@ package mn.payments;
+ import java.math.BigDecimal;
+ import java.math.RoundingMode;
+ import java.util.List;
++import java.util.UUID;
+ import org.springframework.stereotype.Service;
+ import org.springframework.transaction.annotation.Transactional;
+ 
+@@ -18,10 +19,15 @@ public class PaymentService {
+     }
+ 
+     /**
+-     * The check is back inside the transaction, and V2__payment_unique_index.sql makes the
+-     * database the final arbiter: the application check is now an optimisation, not the
+-     * guarantee. Both halves are needed — the index alone turns a duplicate into an
+-     * exception, and the transaction alone still races on a cluster.
++     * The check is back inside the transaction, and the unique constraint on
++     * idempotency_key makes the database the final arbiter: the application check is now an
++     * optimisation, not the guarantee. Both halves are needed — the constraint alone turns a
++     * duplicate into an exception, and the transaction alone still races on a cluster.
++     *
++     * <p>The constraint was added by V2__payment_unique_index.sql, dropped in error by
++     * V3__drop_unused_indexes.sql, and restored by
++     * V4__restore_payment_idempotency_constraint.sql. Do not drop it: it records no index
++     * reads because it is enforced on write, not consulted by query plans.
+      */
+     @Transactional
+     public Payment create(String idempotencyKey, BigDecimal amount) {
+@@ -30,6 +36,9 @@ public class PaymentService {
+             return repository.findByIdempotencyKey(idempotencyKey).orElseThrow();
+         }
+         Payment p = new Payment();
++        p.setId(UUID.randomUUID().toString());
++        p.setIdempotencyKey(idempotencyKey);
++        p.setAmount(amount);
+         p.setStatus("PENDING");
+         return repository.save(p);
+     }
+diff --git a/src/main/resources/db/migration/V4__restore_payment_idempotency_constraint.sql b/src/main/resources/db/migration/V4__restore_payment_idempotency_constraint.sql
+new file mode 100644
+index 0000000..8a8ad50
+--- /dev/null
++++ b/src/main/resources/db/migration/V4__restore_payment_idempotency_constraint.sql
+@@ -0,0 +1,10 @@
++-- Restores the uniqueness guarantee that V3 dropped and reopened the duplicate-payment race.
++--
++-- V3 removed ux_payment_idempotency_key because pg_stat_user_indexes recorded no reads
++-- against it. A uniqueness index is never read by a query plan -- it is enforced on write --
++-- so zero reads is its expected steady state, not evidence that it is unused.
++--
++-- Re-created as a named table constraint rather than a bare index so that it is visible in
++-- information_schema.table_constraints and is not a candidate for the next index sweep.
++ALTER TABLE payment
++  ADD CONSTRAINT ux_payment_idempotency_key UNIQUE (idempotency_key);
+diff --git a/src/test/java/mn/payments/PaymentServiceTest.java b/src/test/java/mn/payments/PaymentServiceTest.java
+index f269445..3d954a2 100644
+--- a/src/test/java/mn/payments/PaymentServiceTest.java
++++ b/src/test/java/mn/payments/PaymentServiceTest.java
+@@ -1,10 +1,16 @@
+ package mn.payments;
+ 
+ import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
+ 
+ import java.math.BigDecimal;
+ import java.util.List;
+ import org.junit.jupiter.api.Test;
++import org.mockito.ArgumentCaptor;
+ 
+ class PaymentServiceTest {
+ 
+@@ -13,4 +19,47 @@ class PaymentServiceTest {
+                 PaymentService service = new PaymentService(null, null);
+                 assertEquals(new BigDecimal("0.00"), service.total(List.of()));
+         }
++
++        /**
++         * The idempotency key has to reach the row, otherwise the unique constraint restored
++         * by V4 has nothing to enforce on and every call inserts a fresh payment.
++         */
++        @Test
++        void create_persists_the_idempotency_key_and_amount() {
++                PaymentRepository repository = mock(PaymentRepository.class);
++                when(repository.existsByIdempotencyKey("key-1")).thenReturn(false);
++                when(repository.save(any(Payment.class)))
++                                .thenAnswer(invocation -> invocation.getArgument(0));
++
++                PaymentService service = new PaymentService(repository, new PaymentValidator());
++                service.create("key-1", new BigDecimal("12.34"));
++
++                ArgumentCaptor<Payment> saved = ArgumentCaptor.forClass(Payment.class);
++                verify(repository).save(saved.capture());
++                assertEquals("key-1", saved.getValue().getIdempotencyKey());
++                assertEquals(new BigDecimal("12.34"), saved.getValue().getAmount());
++                assertEquals("PENDING", saved.getValue().getStatus());
++                assertNotNull(saved.getValue().getId());
++        }
++
++        /** An existing key must return the stored payment instead of inserting a second one. */
++        @Test
++        void create_returns_the_existing_payment_for_a_known_key() {
++                Payment existing = new Payment();
++                existing.setId("payment-1");
++                existing.setIdempotencyKey("key-1");
++                existing.setAmount(new BigDecimal("12.34"));
++                existing.setStatus("PENDING");
++
++                PaymentRepository repository = mock(PaymentRepository.class);
++                when(repository.existsByIdempotencyKey("key-1")).thenReturn(true);
++                when(repository.findByIdempotencyKey("key-1"))
++                                .thenReturn(java.util.Optional.of(existing));
++
++                PaymentService service = new PaymentService(repository, new PaymentValidator());
++                Payment result = service.create("key-1", new BigDecimal("12.34"));
++
++                assertEquals("payment-1", result.getId());
++                verify(repository, org.mockito.Mockito.never()).save(any(Payment.class));
++        }
+ }

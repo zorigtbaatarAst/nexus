@@ -1,0 +1,13 @@
+=== UserPromptSubmit prompt=68 injected=1192 bytes
+Code (11)
+  web/src/lib/orders.test.ts                           web/src/lib/orders.test.ts:1 · bm25 14.701
+  api/src/test/java/mn/shop/api/OrderDtoTest.java      api/src/test/java/mn/shop/api/OrderDtoTest.java:1 · bm25 13.298
+  api/pom.xml                                          api/pom.xml:1 · bm25 4.774
+  web/src/components/OrderSummary.tsx                  web/src/components/OrderSummary.tsx:1 · bm25 3.105
+  web/src/lib/orders.ts                                web/src/lib/orders.ts:1 · bm25 3.037
+  api/src/main/resources/graphql/order.graphqls        api/src/main/resources/graphql/order.graphqls:1 · bm25 3.025
+  api/src/main/java/mn/shop/api/Order.java             api/src/main/java/mn/shop/api/Order.java:1 · bm25 2.844
+  api/src/main/java/mn/shop/api/OrderDto.java          api/src/main/java/mn/shop/api/OrderDto.java:1 · bm25 2.669
+  api/src/main/java/mn/shop/api/OrderRepository.java   api/src/main/java/mn/shop/api/OrderRepository.java:1 · bm25 1.250
+  api/src/main/java/mn/shop/api/OrderController.java   api/src/main/java/mn/shop/api/OrderController.java:1 · bm25 1.160
+  web/package-lock.json                                web/package-lock.json:1 · bm25 0.212

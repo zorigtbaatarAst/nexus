@@ -1,0 +1,36 @@
+Nexus
+────────────────────────────────────────
+
+Project: work
+  languages    java (8)
+  frameworks   spring-boot pom.xml:11
+  build        maven · maven
+
+Initialized /work/.nexus
+  next: nexus scan
+Nexus
+────────────────────────────────────────
+
+Scan
+  scan-001 · full
+  commit       d599b0b
+  files        12
+  symbols      41
+  call sites   29 (92% coverage of 25 in-project, 4 external)
+  skipped      3 (no analyzer for this language)
+  took         7 ms
+
+  2 edges point inside the project but matched no symbol (overloads, inherited methods)
+
+Analysis
+  architect · the whole project
+  39 symbols examined
+  1 findings  (1 new, 0 recurring, 0 regressed)
+  1 ms
+
+· ARC-1  no CI is configured for this maven project
+     medium      85%  UNVERIFIED   architecture
+     pom.xml:1
+
+  1 findings — see one with: nexus finding <id>
+setup exit=0

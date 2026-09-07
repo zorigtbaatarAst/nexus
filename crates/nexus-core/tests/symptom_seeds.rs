@@ -296,3 +296,253 @@ fn a_prompt_that_does_anchor_is_untouched_by_the_fallback() {
         pkg.notes
     );
 }
+
+/// A fixture shaped like the two benchmark repositories the seed stage went silent on.
+///
+/// Java, because the defect is about camelCase: a prompt says "the idempotency key" and "the
+/// total", and the index holds `idempotencyKey` and `getTotalAmount`. Rust fixtures cannot
+/// reproduce it — `snake_case` puts the word at a separator the old suffix match already saw.
+///
+/// Three properties are load-bearing and are why this is not smaller:
+///   * `idempotency` is a token of exactly four names, spread over two files — a family;
+///   * `payment` is a token of nine, which is a theme and must still seed nothing;
+///   * `orders` is the whole name of two symbols, which must still seed nothing either.
+fn scanned_camel(name: &str) -> (PathBuf, Engine) {
+    let root = std::env::temp_dir().join(format!("nexus-camel-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    for (path, body) in [
+        (
+            "pom.xml",
+            "<project><modelVersion>4.0.0</modelVersion><groupId>mn</groupId>\
+             <artifactId>demo</artifactId><version>1</version></project>\n",
+        ),
+        (
+            "src/main/java/mn/pay/Payment.java",
+            "package mn.pay;\npublic class Payment {\n  private String idempotencyKey;\n  \
+             public String getIdempotencyKey() { return idempotencyKey; }\n}\n",
+        ),
+        (
+            "src/main/java/mn/pay/PaymentRepository.java",
+            "package mn.pay;\npublic interface PaymentRepository {\n  \
+             boolean existsByIdempotencyKey(String k);\n  \
+             Payment findByIdempotencyKey(String k);\n}\n",
+        ),
+        (
+            "src/main/java/mn/pay/PaymentService.java",
+            "package mn.pay;\npublic class PaymentService {\n  public PaymentService() {}\n  \
+             public void createPayment() {}\n}\n",
+        ),
+        (
+            "src/main/java/mn/pay/PaymentValidator.java",
+            "package mn.pay;\npublic class PaymentValidator {\n  public PaymentValidator() {}\n}\n",
+        ),
+        (
+            "src/main/java/mn/pay/PaymentDto.java",
+            "package mn.pay;\npublic class PaymentDto {\n  public PaymentDto() {}\n}\n",
+        ),
+        (
+            "src/main/java/mn/shop/Order.java",
+            "package mn.shop;\npublic class Order {\n  private java.math.BigDecimal gross;\n  \
+             public java.math.BigDecimal getTotalAmount() { return gross; }\n}\n",
+        ),
+        (
+            "src/main/java/mn/shop/OrderController.java",
+            "package mn.shop;\npublic class OrderController {\n  \
+             public java.util.List<Order> orders() { return null; }\n}\n",
+        ),
+        (
+            "src/main/java/mn/shop/OrderReportController.java",
+            "package mn.shop;\npublic class OrderReportController {\n  \
+             public java.util.List<Order> orders() { return null; }\n}\n",
+        ),
+    ] {
+        let p = root.join(path);
+        fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+        fs::write(p, body).expect("write");
+    }
+    git(&root, &["init", "-q", "-b", "main"]);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "x"]);
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
+    engine.scan().expect("scan");
+    (root, engine)
+}
+
+/// `A1-idempotency-key-length`, the prompt verbatim.
+///
+/// `key` is below the length floor and never reaches the index; `idempotency` is a *prefix* of
+/// `idempotencyKey`, and the suffix match the index used to run could not see it. Every other
+/// word in the sentence names nothing, so the whole prompt anchored nothing and the agent was
+/// handed a lexical guess over a repository it had not been told anything about.
+#[test]
+fn a_prompt_naming_a_camel_case_field_in_prose_anchors_on_it() {
+    let (_root, engine) = scanned_camel("idempotency");
+    let pkg = package(
+        &engine,
+        "The idempotency key column is too short for the new upstream provider. \
+         Widen it to 128 characters everywhere it is constrained.",
+    );
+    let files: Vec<&String> = pkg.items.iter().map(|i| &i.anchor.file).collect();
+
+    assert!(
+        files.iter().any(|f| f.ends_with("Payment.java")),
+        "`idempotency` names the field the prompt is about: {files:?}"
+    );
+    assert!(
+        files.iter().any(|f| f.ends_with("PaymentRepository.java")),
+        "and the two repository methods constrained by the same column: {files:?}"
+    );
+    assert!(
+        pkg.items.iter().all(|i| !i.why.starts_with("bm25")),
+        "the prompt anchored, so this must be a graph answer and not a lexical guess: {:?}",
+        pkg.items.iter().map(|i| &i.why).collect::<Vec<_>>()
+    );
+}
+
+/// `B2-orphaned-field-diagnosis`, the prompt verbatim — the live one, from
+/// `tests/fixtures/specs/next-storefront/fixture.toml`.
+///
+/// `orders` is the whole name of two symbols and must keep seeding nothing. What rescues this
+/// prompt is `total`, an interior token of `getTotalAmount` — the field whose rename is the
+/// bug being reported.
+///
+/// The sentence moved when the task's start commit did (it read "The orders page shows NaN for
+/// every total" against c3). It is pinned to the live wording rather than the historical one on
+/// purpose: a regression test for "the prompts the benchmark actually sends still seed" that
+/// quotes a prompt nothing sends any more passes whether or not the thing works, which is the
+/// defect class this branch exists to remove.
+#[test]
+fn a_symptom_naming_an_interior_token_anchors_on_the_field_it_describes() {
+    let (_root, engine) = scanned_camel("total");
+    let pkg = package(
+        &engine,
+        "The orders page is broken — it throws instead of rendering the total for each order. \
+         Find out why and fix it.",
+    );
+    let files: Vec<&String> = pkg.items.iter().map(|i| &i.anchor.file).collect();
+
+    assert!(
+        files.iter().any(|f| f.ends_with("Order.java")),
+        "`total` is a word in `getTotalAmount` and nothing else in the index: {files:?}"
+    );
+    assert!(
+        pkg.items.iter().all(|i| !i.why.starts_with("bm25")),
+        "the prompt anchored, so this must be a graph answer and not a lexical guess: {:?}",
+        pkg.items.iter().map(|i| &i.why).collect::<Vec<_>>()
+    );
+}
+
+/// The bound. A word can be a token of half the repository, and then it names nothing.
+///
+/// `payment` is a token of nine names here — four classes, an interface, the three declared
+/// constructors and `createPayment`. Seeding that is not a smaller package than seeding the
+/// repository, it
+/// is the same package with a story attached, so the word is refused and the request falls
+/// back to a guess that says out loud that it is one.
+#[test]
+fn a_word_that_names_half_the_repository_seeds_nothing() {
+    let (_root, engine) = scanned_camel("theme");
+    let pkg = package(&engine, "the payment behaves oddly under load");
+
+    assert!(
+        pkg.items.iter().all(|i| i.why.starts_with("bm25")),
+        "`payment` is a theme, not a name: nothing may anchor on it: {:?}",
+        pkg.items
+            .iter()
+            .map(|i| (&i.anchor.file, &i.why))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        pkg.notes.iter().any(|n| n.contains("no seed")),
+        "and the package has to say nothing anchored: {:?}",
+        pkg.notes
+    );
+}
+
+/// A fixture where one word has a crowd of near-misses around it.
+///
+/// The index is asked about a word with a single SQL query, and that query over-matches on
+/// purpose: `LIKE '%unit%'` also returns `unit_1`, and `LIKE '%order%'` also returns `reorder`.
+/// Both halves of that bill come due only at scale, so the crowd here is a real one:
+///
+///   * 210 symbols named `unit_N`, all with shorter FQNs than the one symbol actually called
+///     `unit`, which sits three modules down. They are past `WORD_HIT_LIMIT`, so ordering by
+///     length alone would return 200 near-misses and evict the answer.
+///   * 8 symbols whose names carry `order` as a token, sitting behind 20 named `reorder_N`
+///     that merely contain it. A window too small to hold both returns a *diluted* family that
+///     is under the cap, and the refusal becomes a function of row order.
+fn scanned_crowded(name: &str) -> (PathBuf, Engine) {
+    let root = std::env::temp_dir().join(format!("nexus-crowd-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let mut lib = String::from("pub mod deep;\npub mod wide;\n");
+    for i in 0..210 {
+        lib.push_str(&format!("pub fn unit_{i}() {{}}\n"));
+    }
+    for i in 0..20 {
+        lib.push_str(&format!("pub fn reorder_{i}() {{}}\n"));
+    }
+    let mut members = String::new();
+    for i in 0..8 {
+        members.push_str(&format!("pub fn order_b{i}() {{}}\n"));
+    }
+    for (path, body) in [
+        ("src/lib.rs", lib.as_str()),
+        ("src/deep/mod.rs", "pub mod inner;\n"),
+        ("src/deep/inner.rs", "pub fn unit() {}\n"),
+        ("src/wide/mod.rs", "pub mod members;\n"),
+        ("src/wide/members.rs", members.as_str()),
+    ] {
+        let p = root.join(path);
+        fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+        fs::write(p, body).expect("write");
+    }
+    git(&root, &["init", "-q", "-b", "main"]);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "x"]);
+    let (mut engine, _) = Engine::init(&root, nexus_lang_pack::default_registry()).expect("init");
+    engine.scan().expect("scan");
+    (root, engine)
+}
+
+/// Widening the query must not lose an answer the narrow one gave.
+///
+/// `find_symbols_by_word` admits every symbol whose name merely *contains* the word, and there
+/// are 210 of those here against one symbol actually called `unit`. Ordered by FQN length the
+/// near-misses fill the window and the real match never comes back — a word that anchored
+/// before the widening would anchor no longer, which is a regression dressed as a feature.
+/// The query sorts every row the narrow match would have returned to the front for this reason.
+#[test]
+fn a_crowd_of_near_misses_cannot_evict_the_symbol_a_word_actually_names() {
+    let (_root, engine) = scanned_crowded("evict");
+    let files = files_in(&engine, "the unit is reported twice");
+    assert!(
+        files.iter().any(|f| f.contains("deep/inner.rs")),
+        "`unit` is the name of exactly one symbol, however many others merely contain it: \
+         {files:?}"
+    );
+}
+
+/// The cap has to see the family, not a sample of it.
+///
+/// `order` is a token of eight names here, which is over the cap and must seed nothing. Twenty
+/// symbols named `reorder_N` merely contain the word and sort ahead of all eight. Judge the cap
+/// against a window that holds only some of them and the family arrives under the cap and
+/// seeds — the refusal would be decided by row order rather than by how wide the word is.
+#[test]
+fn a_wide_family_is_refused_even_when_near_misses_crowd_the_window() {
+    let (_root, engine) = scanned_crowded("dilute");
+    let pkg = package(&engine, "the order fails to save");
+    assert!(
+        pkg.items.iter().all(|i| i.why.starts_with("bm25")),
+        "`order` is a token of eight names, which is a theme: nothing may anchor on it: {:?}",
+        pkg.items
+            .iter()
+            .map(|i| (&i.anchor.file, &i.why))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        pkg.notes.iter().any(|n| n.contains("no seed")),
+        "and the package has to say nothing anchored: {:?}",
+        pkg.notes
+    );
+}

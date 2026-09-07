@@ -156,7 +156,7 @@ impl Engine {
         {
             Store::insert_commit(&tx, self.project_id, &crate::history::to_record(c))?;
         }
-        let resolve = Store::resolve_edges(&tx, self.project_id)?;
+        let resolve = Store::resolve_edges(&tx, self.project_id, nexus_store::ResolveScope::All)?;
         let (facts_invalidated, facts_validated) =
             Store::settle_facts(&tx, self.project_id, &anchors, scan_id, &nexus_store::now())?;
         tx.commit().map_err(nexus_store::StoreError::from)?;

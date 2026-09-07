@@ -1,0 +1,25 @@
+diff --git a/src/main/java/mn/pay/Payment.java b/src/main/java/mn/pay/Payment.java
+index 0a85229..516ef2d 100644
+--- a/src/main/java/mn/pay/Payment.java
++++ b/src/main/java/mn/pay/Payment.java
+@@ -11,7 +11,7 @@ public class Payment {
+     @Id
+     private String id;
+ 
+-    @Column(nullable = false)
++    @Column(nullable = false, length = 128)
+     private String idempotencyKey;
+ 
+     @Column(nullable = false)
+diff --git a/src/main/resources/db/migration/V1__init.sql b/src/main/resources/db/migration/V1__init.sql
+index 1403133..37a38e8 100644
+--- a/src/main/resources/db/migration/V1__init.sql
++++ b/src/main/resources/db/migration/V1__init.sql
+@@ -1,6 +1,6 @@
+ CREATE TABLE payment (
+   id              VARCHAR(36) PRIMARY KEY,
+-  idempotency_key VARCHAR(64)    NOT NULL,
++  idempotency_key VARCHAR(128)   NOT NULL,
+   amount          DECIMAL(19, 2) NOT NULL,
+   status          VARCHAR(16)    NOT NULL
+ );

@@ -82,6 +82,39 @@ compiles. The page renders `NaN`. Neither compiler can see across the seam, and 
 which both sides were generated from — is the only place the disagreement is visible."""
 plants_bug.anchor = "api/src/main/resources/graphql/order.graphqls:4"
 
+# --- c4 · the API finishes the rename and the storefront does not --------------------------
+
+[[commit]]
+id      = "c4"
+message = "Finish the tax rework: the accessor and the schema publish grossAmount"
+write = [
+  { path = "api/src/main/java/mn/shop/api/Order.java",      blob = "Order-gross.java" },
+  { path = "api/src/main/java/mn/shop/api/OrderDto.java",   blob = "OrderDto-gross.java" },
+  { path = "api/src/main/resources/graphql/order.graphqls", blob = "order-renamed.graphqls" },
+]
+plants_bug.id      = "storefront-queries-a-retired-field"
+plants_bug.kind    = "contract"
+plants_bug.summary = """
+`api/` is now internally consistent: entity, accessor, DTO and schema all say `grossAmount`, \
+and nothing inside that tree is wrong. c3's half-rename — `getTotalAmount()` still standing \
+beside a `grossAmount` field, the leftover B1's hidden test grades red — is finished here too, \
+which is what makes the claim literal: no file under `api/` names `totalAmount` in any casing. \
+The storefront was never told. `orders.ts` still selects \
+`totalAmount`, `OrderSummary.tsx` still reads it, and the client-side `Order` interface still \
+declares it — so `tsc --noEmit` is green too. The orders query names a field the schema no \
+longer declares, and the page fails on the response it gets back. There is no file on either \
+side of the seam that is wrong *by itself*: only the pair is."""
+plants_bug.anchor = "web/src/lib/orders.ts:6"
+expect.note = """
+This retires c3's orphan by removing the declaration nobody served, and it is deliberately not \
+recorded as c3's `fixed_by`: the contract still disagrees with its only client afterwards. The \
+disagreement moved across the seam, it was not repaired.
+
+c3 stays as it is because it is the corpus's only orphaned-GraphQL-field instance — \
+`crates/nexus-core/tests/debug_supply.rs` measures the debug package against it, and \
+cap-bughunter's `graphql:orphan-field` rule is what it is a specimen of. B2 starts from c4 \
+rather than c3 for a reason recorded on the task itself."""
+
 [[patch]]
 id          = "wip-status-filter"
 blob        = "wip-status-filter.patch"
@@ -105,20 +138,53 @@ note = """
 Five sites in three languages. The two frontend sites are reachable only through the schema; \
 an agent that greps for `totalAmount` finds them, but an agent that reasons about "the Java \
 files I need to change" does not. The generated file is deliberately excluded from \
-required_sites — editing it is wrong, because the next build overwrites it."""
+required_sites — editing it is wrong, because the next build overwrites it.
+
+**Known not to discriminate, and deliberately left alone.** In the 20260906T131608Z sweep the \
+control arm found all five sites five times out of five. It is one grep: the prompt quotes \
+`totalAmount` and all five sites spell it identically. No prompt wording changes that. The \
+fixture change that would — making the schema and the storefront name the field something \
+other than `totalAmount`, so the link is a schema binding rather than a shared literal — \
+cannot be made fair here, because `tests/eval/hidden/B1` asks for `grossAmount` in the schema \
+and in both frontend files. Under any divergent spelling the agent has to *guess* that \
+"rename `totalAmount` throughout" reaches an identifier the prompt never names, and the task \
+stops measuring cross-file reach and starts measuring a scope guess. Whether B1 stays in the \
+corpus is a question for the control-arm validation, not for a rewrite of this fixture."""
 
 [[task]]
 id      = "B2-orphaned-field-diagnosis"
 family  = "B"
-commit  = "c3"
-prompt  = "The orders page shows NaN for every total. Find out why and fix it."
+commit  = "c4"
+prompt  = "The orders page is broken — it throws instead of rendering the total for each order. Find out why and fix it."
 required_sites = [
-  "api/src/main/resources/graphql/order.graphqls",
   "web/src/lib/orders.ts",
   "web/src/components/OrderSummary.tsx",
 ]
 hidden_tests = ["tests/eval/hidden/B2"]
-note = "The symptom is in TypeScript; the cause is in a Java rename three files away."
+note = """
+The symptom is in TypeScript; the cause is a rename in Java that the schema has already \
+followed and the storefront has not.
+
+**This task started from c3 and was moved to c4 after the 20260906T131608Z sweep**, where the \
+control arm — an agent with no tooling of any kind — passed it five times out of five while \
+touching none of the three sites the task declared. From c3 the whole disagreement is visible \
+inside `api/`: the schema declares `totalAmount` and `OrderDto` publishes `grossAmount`, so \
+renaming one record component back turns all three hidden assertions green without opening \
+`web/` at all. That is not a defect in the hidden test — it grades agreement across the chain \
+and a revert is genuine agreement — it is a fixture that put a fully-specified copy of the \
+contract on the same side of the seam as the bug.
+
+From c4 there is nothing wrong inside `api/` to find. The disagreement cannot be observed, let \
+alone repaired, without reading a file on each side. The two `web/` sites are what a fix \
+touches; an alias (`totalAmount: grossAmount`) in the query is a fix that touches only the \
+first, which is why L3 reports rather than gates.
+
+The prompt was reworded with the start state, not for difficulty. "Shows NaN" describes one \
+situation only — a query that is *valid* against the schema resolving to no value — and that \
+requires the schema to declare a field nothing serves, which is the `api/`-internal orphan \
+that made the task locally solvable in the first place. At c4 the query names a field the \
+schema does not declare, so it is rejected outright and `data.orders` throws. The wording \
+names no file, no field and no side of the seam, exactly as the old one did."""
 
 [[task]]
 id      = "N2-copy-tweak"

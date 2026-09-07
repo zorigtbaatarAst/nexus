@@ -1,0 +1,23 @@
+{
+  "task": "A1-idempotency-key-length",
+  "repo": "spring-payments",
+  "commit": "d599b0b182a1169c3b55788f28e850f0cbfc60bd",
+  "L0_build": true,
+  "L1_hidden": true,
+  "L2_collateral": true,
+  "L3_sites_found": [],
+  "L3_sites_missed": [
+    "src/main/java/mn/pay/Payment.java",
+    "src/main/resources/db/migration/V1__init.sql",
+    "src/main/java/mn/pay/PaymentValidator.java"
+  ],
+  "passed": true,
+  "diff_empty": false,
+  "diff_applied": true,
+  "hidden_tests_placed": [
+    "src/test/java/mn/pay/HiddenTest.java"
+  ],
+  "baseline_exit": 0,
+  "graded_exit": 0,
+  "adjudicate": []
+}

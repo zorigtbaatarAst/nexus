@@ -1,0 +1,11 @@
+{
+  "stamp": "tier2-main",
+  "image": "nexus-bench:latest",
+  "image_id": "sha256:071561a20e42a505ed3dc3d057a0317fa0df492ebcc6f2a9f4e1549784a7f4ca",
+  "nexus_version": "nexus 0.3.0",
+  "model": "claude-opus-5",
+  "reps": 1,
+  "tasks": [
+    "A1-idempotency-key-length"
+  ]
+}

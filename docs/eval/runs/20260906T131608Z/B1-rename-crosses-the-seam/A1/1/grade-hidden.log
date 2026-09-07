@@ -1,0 +1,65 @@
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] -----------------------< mn.shop:storefront-api >-----------------------
+[INFO] Building storefront-api 1.0.0
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- resources:3.3.1:resources (default-resources) @ storefront-api ---
+[INFO] Copying 0 resource from src/main/resources to target/classes
+[INFO] Copying 1 resource from src/main/resources to target/classes
+[INFO] 
+[INFO] --- compiler:3.13.0:compile (default-compile) @ storefront-api ---
+[INFO] Recompiling the module because of changed source code.
+[INFO] Compiling 4 source files with javac [debug parameters release 21] to target/classes
+[INFO] 
+[INFO] --- resources:3.3.1:testResources (default-testResources) @ storefront-api ---
+[INFO] skip non existing resourceDirectory /work/api/src/test/resources
+[INFO] 
+[INFO] --- compiler:3.13.0:testCompile (default-testCompile) @ storefront-api ---
+[INFO] Recompiling the module because of changed dependency.
+[INFO] Compiling 2 source files with javac [debug parameters release 21] to target/test-classes
+[INFO] 
+[INFO] --- surefire:3.2.5:test (default-test) @ storefront-api ---
+[INFO] Using auto detected provider org.apache.maven.surefire.junitplatform.JUnitPlatformProvider
+[INFO] 
+[INFO] -------------------------------------------------------
+[INFO]  T E S T S
+[INFO] -------------------------------------------------------
+[INFO] Running mn.shop.api.OrderDtoTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.016 s -- in mn.shop.api.OrderDtoTest
+[INFO] Running mn.shop.api.HiddenTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.010 s -- in mn.shop.api.HiddenTest
+[INFO] 
+[INFO] Results:
+[INFO] 
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0
+[INFO] 
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  1.083 s
+[INFO] Finished at: 2026-09-06T14:14:04Z
+[INFO] ------------------------------------------------------------------------
+npm WARN deprecated next@14.2.0: This version has a security vulnerability. Please upgrade to a patched version. See https://nextjs.org/blog/security-update-2025-12-11 for more details.
+
+added 88 packages in 2s
+
+> build
+> tsc --noEmit
+
+
+> test
+> vitest run
+
+
+ RUN  v2.0.5 /work/web
+
+ ✓ hidden.test.ts  (2 tests) 1ms
+ ✓ src/lib/orders.test.ts  (1 test) 5ms
+
+ Test Files  2 passed (2)
+      Tests  3 passed (3)
+   Start at  14:14:07
+   Duration  354ms (transform 32ms, setup 0ms, collect 31ms, tests 6ms, environment 0ms, prepare 77ms)
+

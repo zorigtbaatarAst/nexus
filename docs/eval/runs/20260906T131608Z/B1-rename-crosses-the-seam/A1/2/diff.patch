@@ -1,0 +1,109 @@
+diff --git a/api/src/main/java/mn/shop/api/Order.java b/api/src/main/java/mn/shop/api/Order.java
+index 32c7742..9f06a73 100644
+--- a/api/src/main/java/mn/shop/api/Order.java
++++ b/api/src/main/java/mn/shop/api/Order.java
+@@ -12,7 +12,7 @@ public class Order {
+ 
+     private String reference;
+ 
+-    private BigDecimal totalAmount;
++    private BigDecimal grossAmount;
+ 
+     private String status;
+ 
+@@ -24,8 +24,8 @@ public class Order {
+         return reference;
+     }
+ 
+-    public BigDecimal getTotalAmount() {
+-        return totalAmount;
++    public BigDecimal getGrossAmount() {
++        return grossAmount;
+     }
+ 
+     public String getStatus() {
+diff --git a/api/src/main/java/mn/shop/api/OrderDto.java b/api/src/main/java/mn/shop/api/OrderDto.java
+index 87d383f..bee95cb 100644
+--- a/api/src/main/java/mn/shop/api/OrderDto.java
++++ b/api/src/main/java/mn/shop/api/OrderDto.java
+@@ -2,9 +2,9 @@ package mn.shop.api;
+ 
+ import java.math.BigDecimal;
+ 
+-public record OrderDto(String id, String reference, BigDecimal totalAmount, String status) {
++public record OrderDto(String id, String reference, BigDecimal grossAmount, String status) {
+ 
+     public static OrderDto of(Order o) {
+-        return new OrderDto(o.getId(), o.getReference(), o.getTotalAmount(), o.getStatus());
++        return new OrderDto(o.getId(), o.getReference(), o.getGrossAmount(), o.getStatus());
+     }
+ }
+diff --git a/api/src/main/resources/graphql/order.graphqls b/api/src/main/resources/graphql/order.graphqls
+index 835bbbe..2947e74 100644
+--- a/api/src/main/resources/graphql/order.graphqls
++++ b/api/src/main/resources/graphql/order.graphqls
+@@ -1,7 +1,7 @@
+ type Order {
+   id: ID!
+   reference: String!
+-  totalAmount: Float!
++  grossAmount: Float!
+   status: String!
+ }
+ 
+diff --git a/web/src/components/OrderSummary.tsx b/web/src/components/OrderSummary.tsx
+index 71eb645..cbff02f 100644
+--- a/web/src/components/OrderSummary.tsx
++++ b/web/src/components/OrderSummary.tsx
+@@ -1,7 +1,7 @@
+ import type { Order } from "../lib/orders";
+ 
+ export function OrderSummary({ orders }: { orders: Order[] }) {
+-  const total = orders.reduce((sum, o) => sum + o.totalAmount, 0);
++  const total = orders.reduce((sum, o) => sum + o.grossAmount, 0);
+   return (
+     <section aria-label="Order summary">
+       <h2>Orders</h2>
+@@ -9,7 +9,7 @@ export function OrderSummary({ orders }: { orders: Order[] }) {
+         {orders.map((o) => (
+           <li key={o.id}>
+             <span>{o.reference}</span>
+-            <span>{o.totalAmount.toFixed(2)}</span>
++            <span>{o.grossAmount.toFixed(2)}</span>
+             <span>{o.status}</span>
+           </li>
+         ))}
+diff --git a/web/src/generated/graphql-generated.ts b/web/src/generated/graphql-generated.ts
+index a0a2da8..7c518e8 100644
+--- a/web/src/generated/graphql-generated.ts
++++ b/web/src/generated/graphql-generated.ts
+@@ -8,7 +8,7 @@ export type Order = {
+   __typename?: "Order";
+   id: Scalars["ID"];
+   reference: Scalars["String"];
+-  totalAmount: Scalars["Float"];
++  grossAmount: Scalars["Float"];
+   status: Scalars["String"];
+ };
+ export type Query = { __typename?: "Query"; orders: Array<Order>; order?: Maybe<Order> };
+diff --git a/web/src/lib/orders.ts b/web/src/lib/orders.ts
+index b10d649..983731f 100644
+--- a/web/src/lib/orders.ts
++++ b/web/src/lib/orders.ts
+@@ -3,7 +3,7 @@ export const ORDERS_QUERY = /* GraphQL */ `
+     orders {
+       id
+       reference
+-      totalAmount
++      grossAmount
+       status
+     }
+   }
+@@ -22,6 +22,6 @@ export async function fetchOrders(): Promise<Order[]> {
+ export interface Order {
+   id: string;
+   reference: string;
+-  totalAmount: number;
++  grossAmount: number;
+   status: string;
+ }

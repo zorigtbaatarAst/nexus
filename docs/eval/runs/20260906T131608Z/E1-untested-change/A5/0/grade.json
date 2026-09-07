@@ -1,0 +1,21 @@
+{
+  "task": "E1-untested-change",
+  "repo": "spring-payments",
+  "commit": "d599b0b182a1169c3b55788f28e850f0cbfc60bd",
+  "L0_build": true,
+  "L1_hidden": true,
+  "L2_collateral": true,
+  "L3_sites_found": [
+    "src/main/java/mn/pay/PaymentService.java"
+  ],
+  "L3_sites_missed": [],
+  "passed": true,
+  "diff_empty": false,
+  "diff_applied": true,
+  "hidden_tests_placed": [
+    "src/test/java/mn/pay/HiddenTest.java"
+  ],
+  "baseline_exit": 0,
+  "graded_exit": 0,
+  "adjudicate": []
+}

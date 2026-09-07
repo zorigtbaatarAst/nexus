@@ -24,8 +24,8 @@
       "api/src/main/resources/graphql/order.graphqls"
     ],
     "found": {},
-    "items_included": 1,
-    "tokens_estimated": 272,
+    "items_included": 4,
+    "tokens_estimated": 471,
     "intent": "debug"
   },
   {

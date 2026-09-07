@@ -1,0 +1,16 @@
+diff --git a/src/main/resources/db/migration/V4__restore_payment_unique_index.sql b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+new file mode 100644
+index 0000000..0530a40
+--- /dev/null
++++ b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+@@ -0,0 +1,10 @@
++-- Restores the unique index that V3 dropped. The Q3 storage review read a zero read count in
++-- pg_stat_user_indexes as "unused", but this index is a uniqueness constraint, not a lookup
++-- path: it never serves a read, and dropping it reopened the duplicate-payment race that V2
++-- closed. Do not drop it again on read-count evidence.
++--
++-- This will fail if duplicate idempotency keys are already in the table. That is deliberate:
++-- reconcile (and refund) the duplicates admitted while the index was missing before deploying,
++-- rather than letting the deploy silently leave the race open. To find them:
++--   SELECT idempotency_key, count(*) FROM payment GROUP BY 1 HAVING count(*) > 1;
++CREATE UNIQUE INDEX ux_payment_idempotency_key ON payment (idempotency_key);

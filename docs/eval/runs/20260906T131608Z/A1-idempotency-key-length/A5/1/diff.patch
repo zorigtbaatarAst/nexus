@@ -1,0 +1,8 @@
+diff --git a/src/main/resources/db/migration/V2__widen_idempotency_key.sql b/src/main/resources/db/migration/V2__widen_idempotency_key.sql
+new file mode 100644
+index 0000000..fa5e67e
+--- /dev/null
++++ b/src/main/resources/db/migration/V2__widen_idempotency_key.sql
+@@ -0,0 +1,2 @@
++-- The new upstream provider issues idempotency keys longer than the original 64 characters.
++ALTER TABLE payment ALTER COLUMN idempotency_key TYPE VARCHAR(128);

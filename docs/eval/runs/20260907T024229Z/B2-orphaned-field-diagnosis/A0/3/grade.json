@@ -1,0 +1,22 @@
+{
+  "task": "B2-orphaned-field-diagnosis",
+  "repo": "next-storefront",
+  "commit": "95dab9bc4463cc1513645f976d13fcdf84a5fc21",
+  "L0_build": true,
+  "L1_hidden": true,
+  "L2_collateral": true,
+  "L3_sites_found": [
+    "web/src/lib/orders.ts",
+    "web/src/components/OrderSummary.tsx"
+  ],
+  "L3_sites_missed": [],
+  "passed": true,
+  "diff_empty": false,
+  "diff_applied": true,
+  "hidden_tests_placed": [
+    "api/src/test/java/mn/shop/api/HiddenTest.java"
+  ],
+  "baseline_exit": 0,
+  "graded_exit": 0,
+  "adjudicate": []
+}

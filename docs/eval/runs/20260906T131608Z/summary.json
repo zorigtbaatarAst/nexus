@@ -1,0 +1,314 @@
+{
+  "base": "docs/eval/runs/20260906T131608Z",
+  "model": "claude-opus-5",
+  "n_runs": 95,
+  "n_ungraded": 0,
+  "ungraded_paths": [],
+  "tasks": [
+    "A1-idempotency-key-length",
+    "A2-shared-type-change",
+    "B1-rename-crosses-the-seam",
+    "B2-orphaned-field-diagnosis",
+    "C1-regression-recognised",
+    "E1-untested-change",
+    "N1-null-task"
+  ],
+  "arms": [
+    "A0",
+    "A1",
+    "A5"
+  ],
+  "task_sets": {
+    "A1_vs_A0": {
+      "tasks": [
+        "A1-idempotency-key-length",
+        "A2-shared-type-change",
+        "B1-rename-crosses-the-seam",
+        "B2-orphaned-field-diagnosis",
+        "C1-regression-recognised"
+      ],
+      "n": 5
+    },
+    "A1_vs_A5": {
+      "tasks": [
+        "A1-idempotency-key-length",
+        "A2-shared-type-change",
+        "B1-rename-crosses-the-seam",
+        "B2-orphaned-field-diagnosis",
+        "C1-regression-recognised",
+        "E1-untested-change",
+        "N1-null-task"
+      ],
+      "n": 7
+    }
+  },
+  "flag_counts": {},
+  "arms_stats": {
+    "A0": {
+      "n_total": 25,
+      "n_infra": 0,
+      "n_flagged": 0,
+      "n_clean": 25,
+      "median_tokens": 302963,
+      "iqr_tokens": [
+        257206.0,
+        346351.0
+      ],
+      "max_run_tokens": 608491,
+      "median_cache_read_tokens": 270829,
+      "median_cost_usd": 0.44533449999999997,
+      "median_injected_bytes": null,
+      "n_with_injection_log": 0,
+      "n_prompt_packages": 0,
+      "n_empty_packages": 0,
+      "n_lexical_packages": 0,
+      "tasks": [
+        "A1-idempotency-key-length",
+        "A2-shared-type-change",
+        "B1-rename-crosses-the-seam",
+        "B2-orphaned-field-diagnosis",
+        "C1-regression-recognised"
+      ],
+      "n_tasks": 5,
+      "passes": 25,
+      "pass_rate": 1.0,
+      "pass_rate_with_flagged_as_fail": 1.0,
+      "l1_only_rate": 1.0,
+      "false_done": 0,
+      "false_done_rate": 0.0,
+      "cps": 307719.12,
+      "cps_clean_only": 307719.12,
+      "cps_usd": 0.45669584
+    },
+    "A1": {
+      "n_total": 35,
+      "n_infra": 0,
+      "n_flagged": 0,
+      "n_clean": 35,
+      "median_tokens": 246030,
+      "iqr_tokens": [
+        147338,
+        335517
+      ],
+      "max_run_tokens": 490325,
+      "median_cache_read_tokens": 229132,
+      "median_cost_usd": 0.33304849999999997,
+      "median_injected_bytes": 338,
+      "n_with_injection_log": 35,
+      "n_prompt_packages": 35,
+      "n_empty_packages": 10,
+      "n_lexical_packages": 0,
+      "tasks": [
+        "A1-idempotency-key-length",
+        "A2-shared-type-change",
+        "B1-rename-crosses-the-seam",
+        "B2-orphaned-field-diagnosis",
+        "C1-regression-recognised",
+        "E1-untested-change",
+        "N1-null-task"
+      ],
+      "n_tasks": 7,
+      "passes": 35,
+      "pass_rate": 1.0,
+      "pass_rate_with_flagged_as_fail": 1.0,
+      "l1_only_rate": 1.0,
+      "false_done": 0,
+      "false_done_rate": 0.0,
+      "cps": 247474.85714285713,
+      "cps_clean_only": 247474.85714285713,
+      "cps_usd": 0.3699085857142857
+    },
+    "A5": {
+      "n_total": 35,
+      "n_infra": 0,
+      "n_flagged": 0,
+      "n_clean": 35,
+      "median_tokens": 218639,
+      "iqr_tokens": [
+        174426,
+        361361
+      ],
+      "max_run_tokens": 548268,
+      "median_cache_read_tokens": 197248,
+      "median_cost_usd": 0.34128149999999996,
+      "median_injected_bytes": 1122,
+      "n_with_injection_log": 35,
+      "n_prompt_packages": 35,
+      "n_empty_packages": 0,
+      "n_lexical_packages": 35,
+      "tasks": [
+        "A1-idempotency-key-length",
+        "A2-shared-type-change",
+        "B1-rename-crosses-the-seam",
+        "B2-orphaned-field-diagnosis",
+        "C1-regression-recognised",
+        "E1-untested-change",
+        "N1-null-task"
+      ],
+      "n_tasks": 7,
+      "passes": 35,
+      "pass_rate": 1.0,
+      "pass_rate_with_flagged_as_fail": 1.0,
+      "l1_only_rate": 1.0,
+      "false_done": 0,
+      "false_done_rate": 0.0,
+      "cps": 248754.54285714286,
+      "cps_clean_only": 248754.54285714286,
+      "cps_usd": 0.3785997428571428
+    }
+  },
+  "comparisons": {
+    "A1_vs_A0_tokens": {
+      "deltas": [
+        21474,
+        -17622,
+        -40127,
+        7223,
+        140848
+      ],
+      "skipped_tasks": [],
+      "task_set": [
+        "A1-idempotency-key-length",
+        "A2-shared-type-change",
+        "B1-rename-crosses-the-seam",
+        "B2-orphaned-field-diagnosis",
+        "C1-regression-recognised"
+      ],
+      "n_task_set": 5,
+      "median_delta": 7223,
+      "ci": [
+        -40127,
+        140848
+      ],
+      "sign_test": {
+        "favourable": 2,
+        "total": 5
+      },
+      "injection": {
+        "A1": {
+          "n_empty_packages": 10,
+          "n_lexical_packages": 0,
+          "n_prompt_packages": 35,
+          "n_with_injection_log": 35
+        },
+        "A0": {
+          "n_empty_packages": 0,
+          "n_lexical_packages": 0,
+          "n_prompt_packages": 0,
+          "n_with_injection_log": 0
+        }
+      }
+    },
+    "A1_vs_A5_tokens": {
+      "deltas": [
+        12113,
+        68417,
+        -23999,
+        -24419,
+        58833,
+        -34876,
+        -3677
+      ],
+      "skipped_tasks": [],
+      "task_set": [
+        "A1-idempotency-key-length",
+        "A2-shared-type-change",
+        "B1-rename-crosses-the-seam",
+        "B2-orphaned-field-diagnosis",
+        "C1-regression-recognised",
+        "E1-untested-change",
+        "N1-null-task"
+      ],
+      "n_task_set": 7,
+      "median_delta": -3677,
+      "ci": [
+        -24419,
+        58833
+      ],
+      "sign_test": {
+        "favourable": 4,
+        "total": 7
+      },
+      "injection": {
+        "A1": {
+          "n_empty_packages": 10,
+          "n_lexical_packages": 0,
+          "n_prompt_packages": 35,
+          "n_with_injection_log": 35
+        },
+        "A5": {
+          "n_empty_packages": 0,
+          "n_lexical_packages": 35,
+          "n_prompt_packages": 35,
+          "n_with_injection_log": 35
+        }
+      }
+    }
+  },
+  "t4_threshold": {
+    "deltas_pct": [
+      -11.695423521858055,
+      16.32477183256417,
+      14.63557137679809,
+      -0.2751156770152724,
+      -13.714586391204408
+    ],
+    "skipped_tasks": [],
+    "task_set": [
+      "A1-idempotency-key-length",
+      "A2-shared-type-change",
+      "B1-rename-crosses-the-seam",
+      "B2-orphaned-field-diagnosis",
+      "C1-regression-recognised"
+    ],
+    "n_task_set": 5,
+    "median_reduction_pct": -0.2751156770152724,
+    "ci_pct": [
+      -13.714586391204408,
+      16.32477183256417
+    ],
+    "sign_test": {
+      "favourable": 2,
+      "total": 5
+    },
+    "n_tasks": 5,
+    "min_tasks_required": 3,
+    "meets_t4": false
+  },
+  "t7_threshold": {
+    "deltas_pct": [
+      4.261852329906458,
+      -28.42364309070955,
+      12.281398861661476,
+      -2.344101786704768,
+      -8.262856431722565,
+      22.068985634677638,
+      4.203898726819232
+    ],
+    "skipped_tasks": [],
+    "task_set": [
+      "A1-idempotency-key-length",
+      "A2-shared-type-change",
+      "B1-rename-crosses-the-seam",
+      "B2-orphaned-field-diagnosis",
+      "C1-regression-recognised",
+      "E1-untested-change",
+      "N1-null-task"
+    ],
+    "n_task_set": 7,
+    "median_reduction_pct": 4.203898726819232,
+    "ci_pct": [
+      -8.262856431722565,
+      12.281398861661476
+    ],
+    "sign_test": {
+      "favourable": 4,
+      "total": 7
+    },
+    "n_tasks": 7,
+    "n_non_tied": 7,
+    "p_value": 0.5,
+    "min_tasks_required": 3,
+    "meets_t7": false
+  }
+}

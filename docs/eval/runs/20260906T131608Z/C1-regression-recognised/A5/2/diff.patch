@@ -1,0 +1,67 @@
+diff --git a/src/main/java/mn/payments/Payment.java b/src/main/java/mn/payments/Payment.java
+index c54da81..a98d9fc 100644
+--- a/src/main/java/mn/payments/Payment.java
++++ b/src/main/java/mn/payments/Payment.java
+@@ -13,7 +13,7 @@ public class Payment {
+     private String id;
+ 
+     // Optimistic locking: two concurrent settlements of the same payment can no longer
+-    // both win. Added with V2__payment_unique_index.sql, which closes the other half.
++    // both win. The other half is the unique index ux_payment_idempotency_key.
+     @Version
+     private Long version;
+ 
+diff --git a/src/main/java/mn/payments/PaymentService.java b/src/main/java/mn/payments/PaymentService.java
+index 0fe2ef3..782ae73 100644
+--- a/src/main/java/mn/payments/PaymentService.java
++++ b/src/main/java/mn/payments/PaymentService.java
+@@ -18,10 +18,12 @@ public class PaymentService {
+     }
+ 
+     /**
+-     * The check is back inside the transaction, and V2__payment_unique_index.sql makes the
+-     * database the final arbiter: the application check is now an optimisation, not the
+-     * guarantee. Both halves are needed — the index alone turns a duplicate into an
+-     * exception, and the transaction alone still races on a cluster.
++     * The check is back inside the transaction, and the unique index
++     * ux_payment_idempotency_key makes the database the final arbiter: the application check
++     * is now an optimisation, not the guarantee. Both halves are needed — the index alone
++     * turns a duplicate into an exception, and the transaction alone still races on a
++     * cluster. The index is currently carried by V4__restore_payment_unique_index.sql; if it
++     * is ever missing, this method silently double-charges.
+      */
+     @Transactional
+     public Payment create(String idempotencyKey, BigDecimal amount) {
+diff --git a/src/main/resources/db/migration/V4__restore_payment_unique_index.sql b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+new file mode 100644
+index 0000000..1d51333
+--- /dev/null
++++ b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+@@ -0,0 +1,27 @@
++-- Restores ux_payment_idempotency_key, which V3__drop_unused_indexes.sql removed.
++--
++-- V3 read "no reads in pg_stat_user_indexes" as "unused". A unique index backing a
++-- constraint records no reads by design: it is enforced on write, not scanned on read.
++-- Dropping it reopened the duplicate-payment race that V2 closed — PaymentService#create
++-- still does existsByIdempotencyKey inside the transaction, but that check races between
++-- cluster nodes, and the index was what made the database the final arbiter.
++--
++-- Do not drop this index. It is a correctness constraint, not a lookup path.
++
++-- Fail with a readable message rather than an opaque 23505 if the rows written while the
++-- index was missing have not been reconciled yet.
++DO $$
++DECLARE
++  dup_count BIGINT;
++BEGIN
++  SELECT count(*) INTO dup_count FROM (
++    SELECT idempotency_key FROM payment GROUP BY idempotency_key HAVING count(*) > 1
++  ) d;
++  IF dup_count > 0 THEN
++    RAISE EXCEPTION
++      'Cannot restore ux_payment_idempotency_key: % idempotency keys have duplicate payment rows. Reconcile them first (see SELECT idempotency_key, count(*) FROM payment GROUP BY 1 HAVING count(*) > 1).',
++      dup_count;
++  END IF;
++END $$;
++
++CREATE UNIQUE INDEX ux_payment_idempotency_key ON payment (idempotency_key);

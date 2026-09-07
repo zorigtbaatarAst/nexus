@@ -1,0 +1,36 @@
+Nexus
+────────────────────────────────────────
+
+Project: work
+  languages    java (7)
+  frameworks   spring-boot 3.3.5 build.gradle:18
+  build        gradle · gradle
+
+Initialized /work/.nexus
+  next: nexus scan
+Nexus
+────────────────────────────────────────
+
+Scan
+  scan-001 · full
+  commit       3faebf1
+  files        10
+  symbols      32
+  call sites   15 (92% coverage of 13 in-project, 2 external)
+  skipped      3 (no analyzer for this language)
+  took         6 ms
+
+  1 edges point inside the project but matched no symbol (overloads, inherited methods)
+
+Analysis
+  architect · the whole project
+  32 symbols examined
+  1 findings  (1 new, 0 recurring, 0 regressed)
+  1 ms
+
+· ARC-1  no CI is configured for this gradle project
+     medium      85%  UNVERIFIED   architecture
+     build.gradle:1
+
+  1 findings — see one with: nexus finding <id>
+setup exit=0

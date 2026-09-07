@@ -7,6 +7,12 @@
 #
 #   0. plan        not a grading at all: the sweep's own cell plan, which nothing else in this
 #                  repository executes. Free, and first for that reason.
+#   0c. image-artifacts  also not a grading: that every file the image bakes from the tree —
+#                  nexus, nexus-hook, fixture-build — is still the tree's, by content. A stale
+#                  image cost 95 paid runs once, and a stale fixture-build would cost grades.
+#   0d. copy-table also not a grading: that the check's artifact table still covers every COPY
+#                  in the Dockerfile. 0c proves the check refuses what it compares; this proves
+#                  it compares everything.
 #   1. empty       an empty diff must fail — and must fail on L1 *only*. L0 and L2 true proves
 #                  the container, the mount and the build actually worked; a mechanical failure
 #                  would zero them too and be indistinguishable from a bad agent.
@@ -80,16 +86,218 @@ B1=B1-rename-crosses-the-seam
 # a five-task one, and analyse.py — which derives each comparison's task set from the run tree —
 # reports an asymmetry that no longer exists. The error lands in the result, not in the harness.
 # DRY_RUN=1 prints the plan and exits before the guards, the gate and any docker call.
+#
+# The expected count is computed from TASKS/ARMS/REPS as this process sees them — the same
+# variables sweep.sh itself defaults from — rather than a hardcoded 95, so a validation run
+# (Task 4 of the tier2-instrument-repair plan: ARMS=A0, checking the corpus before A1 exists to
+# compare against) is checked on its own terms instead of being refused by a gate that only knows
+# the full sweep. This is what lets `sweep.sh` call this file as its own pre-flight gate no
+# matter what TASKS/ARMS/REPS the operator passed it — those env vars reach this subprocess the
+# same way they reach sweep.sh's own defaults. Which tasks are ranking-only is duplicated here
+# rather than asked of arms_for() itself: asking sweep.sh the same question this check exists to
+# answer would let the exact arms_for() typo this file was written to catch slip straight through.
+RANKING_ONLY_TASKS="E1-untested-change N1-null-task"
+FULL_ARM_SET="A0 A1 A5"
+RANKING_ARM_SET="A1 A5"
+DEFAULT_TASKS="A1-idempotency-key-length A2-shared-type-change B1-rename-crosses-the-seam B2-orphaned-field-diagnosis C1-regression-recognised E1-untested-change N1-null-task"
+
+expected_cell_count() {  # tasks (space separated), arms restriction ("" = none), reps
+  local tasks="$1" arms="$2" reps="$3" total=0 task base_arms n arm
+  for task in $tasks; do
+    case " $RANKING_ONLY_TASKS " in
+      *" $task "*) base_arms="$RANKING_ARM_SET" ;;
+      *) base_arms="$FULL_ARM_SET" ;;
+    esac
+    n=0
+    for arm in $base_arms; do
+      if [ -z "$arms" ]; then
+        n=$((n + 1))
+      else
+        case " $arms " in
+          *" $arm "*) n=$((n + 1)) ;;
+        esac
+      fi
+    done
+    total=$((total + n * reps))
+  done
+  echo "$total"
+}
+
+REQ_TASKS="${TASKS:-$DEFAULT_TASKS}"
+REQ_REPS="${REPS:-5}"
+EXPECTED_CELLS="$(expected_cell_count "$REQ_TASKS" "${ARMS:-}" "$REQ_REPS")"
+
 PLAN="$(DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" | tail -n +2)"  # line 1 is the stamp line
 PLAN_CELLS="$(printf '%s\n' "$PLAN" | wc -l)"
-[ "$PLAN_CELLS" = 95 ] \
-  || { echo "FAIL [plan] the sweep plans $PLAN_CELLS cells, not 95 (5x3x5 + 2x2x5)" >&2; exit 1; }
+[ "$PLAN_CELLS" = "$EXPECTED_CELLS" ] \
+  || {
+    echo "FAIL [plan] the sweep plans $PLAN_CELLS cells, not $EXPECTED_CELLS for" \
+      "TASKS=${TASKS:-<default>} ARMS=${ARMS:-<none>} REPS=${REPS:-<default>}" >&2
+    exit 1
+  }
 if printf '%s\n' "$PLAN" | grep -E '^(E1-untested-change|N1-null-task)/A0/'; then
   echo "FAIL [plan] a ranking-only task is planned at A0 (printed above); T4's task set would" >&2
   echo "silently become seven tasks instead of five and nothing in the output would say so." >&2
   exit 1
 fi
-echo "ok   plan 95 cells, neither ranking-only task at A0"
+echo "ok   plan $PLAN_CELLS cells (matches TASKS/ARMS/REPS as requested), neither ranking-only" \
+  "task at A0"
+
+# --- 0b. ARMS restricts per task, and only ever narrows arms_for() ------------------------------
+
+# The A0-only validation run Task 4 exists for: the five three-arm tasks contribute one arm each,
+# the two ranking-only tasks — which arms_for() never gives A0 in the first place — contribute
+# none. 5 tasks x 1 arm x 5 reps = 25.
+PLAN_A0="$(ARMS=A0 DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" | tail -n +2)"
+PLAN_A0_CELLS="$(printf '%s\n' "$PLAN_A0" | wc -l)"
+[ "$PLAN_A0_CELLS" = 25 ] \
+  || { echo "FAIL [arms=A0] ARMS=A0 plans $PLAN_A0_CELLS cells, not 25 (5 tasks x 1 arm x 5 reps)" >&2; exit 1; }
+if printf '%s\n' "$PLAN_A0" | grep -E '^(E1-untested-change|N1-null-task)/'; then
+  echo "FAIL [arms=A0] a ranking-only task has cells under ARMS=A0 (printed above)" >&2
+  exit 1
+fi
+echo "ok   ARMS=A0 plans 25 cells over the five three-arm tasks, zero on the ranking-only tasks"
+
+# An ARMS value naming an arm arms_for() never returns for any task must be refused outright, not
+# silently intersected down to nothing — a plan that silently narrows to zero cells for every task
+# still exits 0 and reads as "ran, found nothing" rather than "you mistyped an arm."
+if ARMS="A0 A9" DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" >/dev/null 2>&1; then
+  echo "FAIL [arms=widen] ARMS='A0 A9' should be refused: A9 is not an arm arms_for() ever returns" >&2
+  exit 1
+fi
+echo "ok   ARMS naming an arm arms_for() never returns is refused, not silently honoured"
+
+# --- 0c. everything the image bakes from the tree must be the tree's copy, by content ----------
+
+# The $37.62 case. Both binaries answered `nexus 0.3.0`; one of them was a day old. So the
+# fixtures here are the image's own artifacts, and copies of them differing by one byte: they
+# report an identical --version (asserted, because that is the point) and differ by content.
+# Any check that compares version strings, timestamps, image ids or paths passes both, and the
+# refusal cases below fail. That is what makes this unable to be satisfied by the weakened
+# comparison it exists to forbid.
+#
+# `nexus` is not the only artifact and not the most dangerous one: `fixture-build` is the L0
+# build-and-grade path, so drift there changes grades rather than context. It gets its own
+# refusal case for that reason — and because the review that widened this check found the real
+# `build.sh` already drifted from the real image on the machine it ran on.
+CHECK_ARTIFACTS="$ROOT/scripts/eval/check_image_artifacts.sh"
+IMAGE="${IMAGE:-nexus-bench:latest}"
+
+# A tree root built out of the image itself, so "matches" is constructed rather than assumed —
+# the real tree may legitimately differ from the image at any moment, which is the whole point.
+mkdir -p "$TMP/tree/target/release" "$TMP/tree/scripts/eval"
+docker run --rm --entrypoint cat "$IMAGE" /usr/local/bin/nexus > "$TMP/tree/target/release/nexus"
+docker run --rm --entrypoint cat "$IMAGE" /usr/local/bin/nexus-hook > "$TMP/tree/scripts/eval/nexus-hook.sh"
+docker run --rm --entrypoint cat "$IMAGE" /usr/local/bin/fixture-build > "$TMP/tree/scripts/eval/build.sh"
+chmod +x "$TMP/tree/target/release/nexus"
+
+cp -r "$TMP/tree" "$TMP/tree-bad-nexus"
+printf '\0' >> "$TMP/tree-bad-nexus/target/release/nexus"   # still a valid ELF: trailing bytes are ignored
+cp -r "$TMP/tree" "$TMP/tree-bad-build"
+echo "# a comment that changes nothing about what this script does" >> "$TMP/tree-bad-build/scripts/eval/build.sh"
+
+# Run both --version probes inside the image, not on the host: these are the image's own
+# Debian-linked binaries and the host is whatever the operator runs. Executing them here worked
+# but only by glibc luck, and a test that breaks on an unrelated host upgrade gets deleted.
+VERSIONS="$(docker run --rm -v "$TMP:/t:Z" --entrypoint sh "$IMAGE" -c \
+  '/t/tree/target/release/nexus --version && /t/tree-bad-nexus/target/release/nexus --version')"
+[ "$(printf '%s\n' "$VERSIONS" | sort -u | wc -l)" = 1 ] \
+  || { echo "FAIL [image-artifacts] the two nexus fixtures disagree on --version:" >&2
+       printf '%s\n' "$VERSIONS" >&2
+       echo "so the mismatch case below no longer proves a version string cannot detect it." >&2
+       echo "Fix the fixtures, not the assertion." >&2
+       exit 1; }
+
+STAMPED="$("$CHECK_ARTIFACTS" "$IMAGE" "$TMP/tree")" \
+  || { echo "FAIL [image-artifacts] the check refused a tree byte-identical to the image's" >&2; exit 1; }
+# What it prints is what meta.json stamps as the sweep's provenance, so it is asserted, not
+# assumed: one line per artifact, each carrying that file's real sha256.
+[ "$(printf '%s\n' "$STAMPED" | wc -l)" = 3 ] \
+  || { echo "FAIL [image-artifacts] the check stamped $(printf '%s\n' "$STAMPED" | wc -l) artifacts, not 3:" >&2
+       printf '%s\n' "$STAMPED" >&2; exit 1; }
+while read -r image_path sha; do
+  case "$image_path" in
+    /usr/local/bin/nexus)         tree_file="$TMP/tree/target/release/nexus" ;;
+    /usr/local/bin/nexus-hook)    tree_file="$TMP/tree/scripts/eval/nexus-hook.sh" ;;
+    /usr/local/bin/fixture-build) tree_file="$TMP/tree/scripts/eval/build.sh" ;;
+    *) echo "FAIL [image-artifacts] unknown artifact stamped: $image_path" >&2; exit 1 ;;
+  esac
+  [ "$sha" = "$(sha256sum "$tree_file" | cut -d' ' -f1)" ] \
+    || { echo "FAIL [image-artifacts] stamped '$sha' for $image_path, which is not its sha256" >&2; exit 1; }
+done <<<"$STAMPED"
+
+# Two refusals, because covering the binary and not the grader is the same failure with a
+# different file name — and the second one cannot be dismissed as "it is about the binary".
+for case in "tree-bad-nexus:target/release/nexus:one byte appended, identical --version" \
+            "tree-bad-build:scripts/eval/build.sh:one comment line appended"; do
+  bad_tree="$TMP/${case%%:*}"; rest="${case#*:}"; bad_file="${rest%%:*}"; how="${rest#*:}"
+  if REFUSAL="$("$CHECK_ARTIFACTS" "$IMAGE" "$bad_tree" 2>&1)"; then
+    echo "FAIL [image-artifacts] the check PASSED a tree whose $bad_file differs from the" >&2
+    echo "image's ($how). This is the defect that cost 95 paid runs." >&2
+    exit 1
+  fi
+  # Naming the file is the difference between a rebuild and a hunt.
+  grep -q "$bad_file" <<<"$REFUSAL" \
+    || { echo "FAIL [image-artifacts] the refusal for $bad_file does not name it:" >&2
+         echo "$REFUSAL" >&2; exit 1; }
+  # A refusal nobody can act on is how the operator ends up reaching for SKIP_GATE.
+  grep -q 'make bench-image' <<<"$REFUSAL" \
+    || { echo "FAIL [image-artifacts] the refusal does not name the fix:" >&2; echo "$REFUSAL" >&2; exit 1; }
+done
+echo "ok   image-artifacts stamps all three, and refuses both a one-byte-different nexus of the" \
+  "same --version and a one-line-different build.sh, naming the file and the rebuild"
+
+# --- 0d. the check's artifact table must cover every tree file the Dockerfile bakes in ----------
+
+# Free, no container. 0c proves the check refuses what it compares; this proves it compares
+# everything. The table in check_image_artifacts.sh is coupled to scripts/eval/Dockerfile by
+# hand, and a COPY added there but not here narrows the guard silently — which is this branch's
+# own defect, one level up: the first version of the check covered `nexus` alone and shipped
+# while `build.sh` was already drifted.
+DOCKERFILE="$ROOT/scripts/eval/Dockerfile"
+
+# Sources are read as the whitespace-separated fields between `COPY` and the destination, so any
+# form that puts something else there must be refused rather than guessed at: `--from=`/`--chown=`
+# flags, the JSON-array form, a heredoc, and a quoted or spaced path — which whitespace-splitting
+# would tear into two garbled fields, failing for the wrong reason with an unreadable name.
+# Refused up front so the limitation is enforced rather than discovered. If the Dockerfile ever
+# goes multi-stage, this case and check_image_artifacts.sh's table need revisiting together.
+if grep -nE -e '^COPY[[:space:]]+(--|\[|<)' -e "^COPY[[:space:]].*[\"']" "$DOCKERFILE"; then
+  echo "FAIL [copy-table] the Dockerfile uses a COPY form this case cannot parse (printed" >&2
+  echo "above): a flag, the JSON-array form, a heredoc, or a quoted path. Revisit this case" >&2
+  echo "and check_image_artifacts.sh's artifact table together." >&2
+  exit 1
+fi
+
+# The table rows are the only lines in that file starting with an image path, so this reads the
+# table itself rather than anywhere the path happens to be mentioned — a path named only in a
+# comment must not count as covered.
+COVERED="$(grep -E '^/usr/local/bin/' "$ROOT/scripts/eval/check_image_artifacts.sh" | awk '{print $2}')"
+UNTRACKED=""
+while read -r src; do
+  # target/fixtures is excluded deliberately, and must stay excluded: the Dockerfile COPYs the
+  # corpus to /warm and /verify and `rm -rf`s both inside the same RUN layers, so the final image
+  # contains no copy of it — verified, `ls /warm /verify` exits 2 — and a run clones each fixture
+  # from the host at run time instead. Adding it to the table would not be a stricter check, it
+  # would be a comparison against a file that does not exist. See check_image_artifacts.sh's
+  # header for the whole reason, including what image-side staleness that leaves uncovered.
+  if [ "$src" = "target/fixtures" ]; then
+    continue
+  fi
+  grep -qxF "$src" <<<"$COVERED" || UNTRACKED="$UNTRACKED $src"
+  # EVERY source, not only field 2: `COPY a b /dest/` is legal and bakes in both. Reading the
+  # first alone would leave `b` uncompared with this case green — the silent narrowing this case
+  # exists to prevent, reproduced inside it. (A `COPY` with fewer than three fields is not a
+  # valid instruction and fails `docker build`, so the empty loop it produces here needs no case.)
+done < <(awk '/^COPY[[:space:]]/ { for (i = 2; i < NF; i++) print $i }' "$DOCKERFILE")
+
+[ -z "$UNTRACKED" ] \
+  || { echo "FAIL [copy-table] the Dockerfile bakes in files that check_image_artifacts.sh does" >&2
+       echo "not compare:$UNTRACKED" >&2
+       echo "A sweep would stamp clean provenance for an artifact nothing checked. Add each to" >&2
+       echo "the ARTIFACTS table with the image path it is COPYed to." >&2
+       exit 1; }
+echo "ok   copy-table every tree file the Dockerfile bakes in is in the check's artifact table"
 
 # --- 1. an empty diff must not pass ------------------------------------------------------------
 

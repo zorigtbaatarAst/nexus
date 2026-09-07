@@ -1,0 +1,186 @@
+diff --git a/src/main/java/mn/payments/Payment.java b/src/main/java/mn/payments/Payment.java
+index c54da81..0ad1d57 100644
+--- a/src/main/java/mn/payments/Payment.java
++++ b/src/main/java/mn/payments/Payment.java
+@@ -26,6 +26,22 @@ public class Payment {
+     @Column(nullable = false)
+     private String status;
+ 
++    protected Payment() {
++        // for JPA
++    }
++
++    /**
++     * Every column the table declares NOT NULL is set here rather than through setters: an
++     * idempotency key that is never assigned defeats idempotency silently, because a null key
++     * matches no existing payment and collides with nothing under the unique index.
++     */
++    public Payment(String id, String idempotencyKey, BigDecimal amount, String status) {
++        this.id = id;
++        this.idempotencyKey = idempotencyKey;
++        this.amount = amount;
++        this.status = status;
++    }
++
+     public String getId() {
+         return id;
+     }
+diff --git a/src/main/java/mn/payments/PaymentRepository.java b/src/main/java/mn/payments/PaymentRepository.java
+index f46a5a0..9f33b32 100644
+--- a/src/main/java/mn/payments/PaymentRepository.java
++++ b/src/main/java/mn/payments/PaymentRepository.java
+@@ -5,7 +5,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
+ 
+ public interface PaymentRepository extends JpaRepository<Payment, String> {
+ 
+-        boolean existsByIdempotencyKey(String idempotencyKey);
+-
+         Optional<Payment> findByIdempotencyKey(String idempotencyKey);
+ }
+diff --git a/src/main/java/mn/payments/PaymentService.java b/src/main/java/mn/payments/PaymentService.java
+index 0fe2ef3..582ac7b 100644
+--- a/src/main/java/mn/payments/PaymentService.java
++++ b/src/main/java/mn/payments/PaymentService.java
+@@ -3,8 +3,9 @@ package mn.payments;
+ import java.math.BigDecimal;
+ import java.math.RoundingMode;
+ import java.util.List;
++import java.util.UUID;
++import org.springframework.dao.DataIntegrityViolationException;
+ import org.springframework.stereotype.Service;
+-import org.springframework.transaction.annotation.Transactional;
+ 
+ @Service
+ public class PaymentService {
+@@ -18,20 +19,35 @@ public class PaymentService {
+     }
+ 
+     /**
+-     * The check is back inside the transaction, and V2__payment_unique_index.sql makes the
+-     * database the final arbiter: the application check is now an optimisation, not the
+-     * guarantee. Both halves are needed — the index alone turns a duplicate into an
+-     * exception, and the transaction alone still races on a cluster.
++     * V4__restore_payment_unique_index.sql makes the database the arbiter of idempotency; the
++     * lookup below is only an optimisation that keeps the common retry off the insert path.
++     * A check-then-insert in the application cannot be the guarantee — under READ COMMITTED
++     * two concurrent transactions both read "absent" and both insert, whether or not the
++     * check shares their transaction.
++     *
++     * <p>The insert therefore runs in its own transaction (the one {@code saveAndFlush} opens)
++     * so the loser of the race can recover: a constraint violation marks its transaction
++     * rollback-only, and the re-read has to happen after that transaction has ended.
+      */
+-    @Transactional
+     public Payment create(String idempotencyKey, BigDecimal amount) {
+         validator.check(idempotencyKey, amount);
+-        if (repository.existsByIdempotencyKey(idempotencyKey)) {
+-            return repository.findByIdempotencyKey(idempotencyKey).orElseThrow();
++        return repository
++                .findByIdempotencyKey(idempotencyKey)
++                .orElseGet(() -> insert(idempotencyKey, amount));
++    }
++
++    private Payment insert(String idempotencyKey, BigDecimal amount) {
++        Payment p =
++                new Payment(UUID.randomUUID().toString(), idempotencyKey, amount, "PENDING");
++        try {
++            return repository.saveAndFlush(p);
++        } catch (DataIntegrityViolationException duplicate) {
++            // A concurrent call with the same key inserted first. Its payment is the one that
++            // counts; this call must return it rather than charge again.
++            return repository
++                    .findByIdempotencyKey(idempotencyKey)
++                    .orElseThrow(() -> duplicate);
+         }
+-        Payment p = new Payment();
+-        p.setStatus("PENDING");
+-        return repository.save(p);
+     }
+ 
+     /** The live total. Rounds half-up to two places, which is what the ledger expects. */
+diff --git a/src/main/resources/db/migration/V4__restore_payment_unique_index.sql b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+new file mode 100644
+index 0000000..abc72d8
+--- /dev/null
++++ b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+@@ -0,0 +1,12 @@
++-- Restores the uniqueness guarantee that V3 dropped and reopened the duplicate-payment race.
++--
++-- ux_payment_idempotency_key records no reads in pg_stat_user_indexes because it is a
++-- uniqueness constraint, not a lookup path. "No recorded reads" is not evidence that a
++-- unique index is unused, so it must be excluded from future storage-review sweeps.
++--
++-- This migration FAILS if duplicate idempotency keys already exist in the table. Find them
++-- with:
++--   SELECT idempotency_key, count(*) FROM payment GROUP BY 1 HAVING count(*) > 1;
++-- Reconcile those payments (refund or void the extra charge) before applying. Do not delete
++-- payment rows to make the index build -- the duplicates are real money that was captured.
++CREATE UNIQUE INDEX ux_payment_idempotency_key ON payment (idempotency_key);
+diff --git a/src/test/java/mn/payments/PaymentServiceTest.java b/src/test/java/mn/payments/PaymentServiceTest.java
+index f269445..3af5bc0 100644
+--- a/src/test/java/mn/payments/PaymentServiceTest.java
++++ b/src/test/java/mn/payments/PaymentServiceTest.java
+@@ -1,16 +1,63 @@
+ package mn.payments;
+ 
+ import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertSame;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
+ 
+ import java.math.BigDecimal;
+ import java.util.List;
++import java.util.Optional;
+ import org.junit.jupiter.api.Test;
++import org.mockito.ArgumentCaptor;
++import org.springframework.dao.DataIntegrityViolationException;
+ 
+ class PaymentServiceTest {
+ 
++        private final PaymentRepository repository = mock(PaymentRepository.class);
++        private final PaymentService service = new PaymentService(repository, new PaymentValidator());
++
+         @Test
+         void total_rounds_half_up_to_two_places() {
+                 PaymentService service = new PaymentService(null, null);
+                 assertEquals(new BigDecimal("0.00"), service.total(List.of()));
+         }
++
++        @Test
++        void create_persists_the_idempotency_key_and_amount() {
++                when(repository.findByIdempotencyKey("k")).thenReturn(Optional.empty());
++                when(repository.saveAndFlush(any())).thenAnswer(i -> i.getArgument(0));
++
++                service.create("k", new BigDecimal("10.00"));
++
++                ArgumentCaptor<Payment> saved = ArgumentCaptor.forClass(Payment.class);
++                verify(repository).saveAndFlush(saved.capture());
++                assertEquals("k", saved.getValue().getIdempotencyKey());
++                assertEquals(new BigDecimal("10.00"), saved.getValue().getAmount());
++                assertEquals("PENDING", saved.getValue().getStatus());
++        }
++
++        @Test
++        void create_returns_the_existing_payment_without_inserting_again() {
++                Payment existing = new Payment("id", "k", new BigDecimal("10.00"), "PENDING");
++                when(repository.findByIdempotencyKey("k")).thenReturn(Optional.of(existing));
++
++                assertSame(existing, service.create("k", new BigDecimal("10.00")));
++                verify(repository, never()).saveAndFlush(any());
++        }
++
++        @Test
++        void create_returns_the_winner_when_a_concurrent_call_inserts_first() {
++                Payment winner = new Payment("id", "k", new BigDecimal("10.00"), "PENDING");
++                when(repository.findByIdempotencyKey("k"))
++                                .thenReturn(Optional.empty())
++                                .thenReturn(Optional.of(winner));
++                when(repository.saveAndFlush(any()))
++                                .thenThrow(new DataIntegrityViolationException("ux_payment_idempotency_key"));
++
++                assertSame(winner, service.create("k", new BigDecimal("10.00")));
++        }
+ }

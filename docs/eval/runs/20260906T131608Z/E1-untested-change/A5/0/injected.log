@@ -1,0 +1,13 @@
+=== UserPromptSubmit prompt=100 injected=1236 bytes
+Code (11)
+  src/main/java/mn/pay/PaymentService.java             src/main/java/mn/pay/PaymentService.java:1 · bm25 8.771
+  src/main/java/mn/pay/legacy/LegacyPaymentCalculator.java src/main/java/mn/pay/legacy/LegacyPaymentCalculator.java:1 · bm25 5.280
+  src/main/java/mn/pay/PaymentController.java          src/main/java/mn/pay/PaymentController.java:1 · bm25 4.852
+  src/test/java/mn/pay/PaymentServiceTest.java         src/test/java/mn/pay/PaymentServiceTest.java:1 · bm25 4.425
+  pom.xml                                              pom.xml:1 · bm25 4.293
+  src/main/resources/graphql/payment.graphqls          src/main/resources/graphql/payment.graphqls:1 · bm25 2.217
+  src/main/java/mn/pay/PaymentRepository.java          src/main/java/mn/pay/PaymentRepository.java:1 · bm25 2.099
+  src/main/java/mn/pay/PaymentDto.java                 src/main/java/mn/pay/PaymentDto.java:1 · bm25 1.767
+  src/main/java/mn/pay/Payment.java                    src/main/java/mn/pay/Payment.java:1 · bm25 1.678
+  src/main/resources/db/migration/V1__init.sql         src/main/resources/db/migration/V1__init.sql:1 · bm25 0.926
+  src/main/java/mn/pay/PaymentValidator.java           src/main/java/mn/pay/PaymentValidator.java:1 · bm25 0.615

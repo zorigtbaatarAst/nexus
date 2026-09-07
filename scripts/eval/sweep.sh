@@ -13,6 +13,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RUN="$ROOT/scripts/eval/run.sh"
 GRADE="$ROOT/scripts/eval/grade.sh"
 GATE="$ROOT/scripts/eval/test_grade.sh"
+CHECK_ARTIFACTS="$ROOT/scripts/eval/check_image_artifacts.sh"
 
 STAMP="${STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
 BASE="$ROOT/docs/eval/runs/$STAMP"
@@ -49,19 +50,53 @@ arms_for() {  # task id -> the arms it runs, space separated
   esac
 }
 
+# ARMS restricts which arms each task runs, for a validation sweep that only needs one arm (see
+# Task 4 of the tier2-instrument-repair plan: an A0-only run to check the corpus, before any A1
+# exists to compare against). It can only ever narrow arms_for()'s answer, never widen it: it is
+# intersected per task, so ARMS=A0 still runs zero cells on E1/N1, which arms_for() never gives
+# A0 in the first place. Reusing the intersected result as the loop variable inside arms_for()'s
+# own case statement would be the same silent-widening bug this file is written to avoid, so the
+# per-task result below is named TASK_ARMS, never ARMS — arms_for() itself never sees the override.
+#
+# Any arm named in ARMS that arms_for() would never return for *any* task is refused up front
+# rather than silently intersected away to nothing: a typo here should fail loudly, not produce
+# a quietly-empty plan that reads as "ran, found nothing."
+if [ -n "${ARMS:-}" ]; then
+  ALL_ARMS="$(arms_for '')"  # the "*" branch is arms_for()'s superset of every arm any task gets
+  for arm in $ARMS; do
+    case " $ALL_ARMS " in
+      *" $arm "*) ;;
+      *)
+        echo "sweep.sh: ARMS names '$arm', which arms_for() never returns for any task" \
+          "(known arms: $ALL_ARMS). Refusing rather than silently planning zero cells for it." >&2
+        exit 1
+        ;;
+    esac
+  done
+fi
+
 # The cell plan, built once and then *executed* below — the plan and the sweep cannot disagree
 # because they are the same list. That is what makes DRY_RUN worth having: a typo in either arm
 # of the case above silently hands an added task three arms, and this ticket's own trap would
 # then be living in the line meant to prevent it. Nothing else in the repo executes this file,
-# so test_grade.sh asserts the plan (95 cells, no A0 on the added tasks) before it grades
-# anything — free, and ahead of every container.
+# so test_grade.sh asserts the plan (against the requested TASKS/ARMS/REPS, 95 cells by default,
+# no A0 on the added tasks) before it grades anything — free, and ahead of every container.
 #
 # The exit is here, before the credential warning, the guards and the gate: no docker, no built
 # binary, nothing on disk, and no recursion when the gate is the caller.
 CELLS=()
 for task in "${TASKS[@]}"; do
-  read -ra ARMS <<<"$(arms_for "$task")"
-  for arm in "${ARMS[@]}"; do
+  read -ra TASK_ARMS <<<"$(arms_for "$task")"
+  if [ -n "${ARMS:-}" ]; then
+    SELECTED_ARMS=()
+    for arm in "${TASK_ARMS[@]}"; do
+      case " $ARMS " in
+        *" $arm "*) SELECTED_ARMS+=("$arm") ;;
+      esac
+    done
+    TASK_ARMS=("${SELECTED_ARMS[@]}")
+  fi
+  for arm in "${TASK_ARMS[@]}"; do
     for rep in $(seq 0 $((REPS - 1))); do
       CELLS+=("$task/$arm/$rep")
     done
@@ -140,6 +175,15 @@ if [ -f "$META" ]; then
   # a regenerated corpus would still change what run.sh/grade.sh actually clone at run time.
   # Out of scope for what this task was asked to stamp (image + nexus version) — flagged here so
   # a future reader doesn't assume this guard is complete.
+  #
+  # The image/tree content check below is deliberately NOT repeated here. Resuming compares the
+  # image to the *stamp*, not to the tree: image ids are content addresses, so a matching
+  # PREV_IMAGE_ID already proves the binary inside is byte-identical to the one the earlier
+  # cells ran — the stamped nexus_image_sha256 is what the sweep is reported against, and it
+  # cannot have moved. Re-checking against the tree here would instead refuse every resume in
+  # which someone rebuilt target/release/nexus during the hours the sweep was running, and the
+  # only way out of that refusal is a rebuilt image, which the id pin then refuses in turn. A
+  # guard whose two halves deadlock gets disabled, and then guards nothing.
   {
     read -r PREV_IMAGE_ID PREV_MODEL PREV_REPS
     read -r PREV_TASKS
@@ -190,18 +234,35 @@ print(' '.join(m.get('tasks', [])))
     done
   fi
 else
-  python3 - "$META" "$STAMP" "$IMAGE" "$IMAGE_ID" "$NEXUS_VERSION" "$MODEL" "$REPS" "${TASKS[@]}" <<'PY'
+  # A fresh sweep is reported against this tree, so everything the image bakes from the tree
+  # must be this tree's copy — the tool under test, the hook that injects context, and the L0
+  # build-and-grade script. Compared by content, and stamped by content: `nexus_version` below
+  # is the host binary's --version, which is what stamped `nexus 0.3.0` over an image built a
+  # day earlier. It stays for readability; the sha256s are the fields that can actually be
+  # checked, because they are taken from inside the image and change with every edit whether or
+  # not anyone bumped a version. Anyone can rebuild a commit and compare them.
+  # See check_image_artifacts.sh, including what it does NOT cover and why.
+  IMAGE_ARTIFACTS="$("$CHECK_ARTIFACTS" "$IMAGE" "$ROOT")"
+
+  python3 - "$META" "$STAMP" "$IMAGE" "$IMAGE_ID" "$NEXUS_VERSION" "$IMAGE_ARTIFACTS" "$MODEL" "$REPS" "${TASKS[@]}" <<'PY'
 import json
 import sys
 
-path, stamp, image, image_id, nexus_version, model, reps = sys.argv[1:8]
-tasks = sys.argv[8:]
+path, stamp, image, image_id, nexus_version, image_artifacts, model, reps = sys.argv[1:9]
+tasks = sys.argv[9:]
+artifacts = dict(line.split() for line in image_artifacts.splitlines() if line.strip())
 json.dump(
     {
         "stamp": stamp,
         "image": image,
         "image_id": image_id,
         "nexus_version": nexus_version,
+        # Every checked artifact, so a report cannot claim clean provenance for a set that was
+        # never compared. nexus_image_sha256 is the same value as the map's /usr/local/bin/nexus
+        # entry, kept because the docs and the incident write-up name it: one derivation, two
+        # names, and the duplicate is written here rather than being able to disagree.
+        "nexus_image_sha256": artifacts["/usr/local/bin/nexus"],
+        "image_artifact_sha256": artifacts,
         "model": model,
         "reps": int(reps),
         "tasks": sorted(tasks),
@@ -210,7 +271,8 @@ json.dump(
     indent=2,
 )
 PY
-  echo "sweep.sh: stamped $META (image $IMAGE_ID, $NEXUS_VERSION)"
+  echo "sweep.sh: stamped $META (image $IMAGE_ID, $NEXUS_VERSION," \
+    "$(printf '%s\n' "$IMAGE_ARTIFACTS" | wc -l) artifacts verified against the tree)"
 fi
 
 # --- the sweep itself -----------------------------------------------------------------------

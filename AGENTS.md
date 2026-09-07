@@ -135,9 +135,21 @@ that is hard to attribute.
 - **An imported claim is anchored on a symbol only when it names one exactly.** graphify's
   semantic pass produces claims about the project, and `nexus memory import` records them as
   facts. Subject resolution requires the matched symbol's own last segment to *be* the word:
-  `find_symbols` matches by suffix, which is right for a prompt someone typed and wrong for
-  English prose, where "integration" anchored a design claim on `NoContinuousIntegration`.
-  A claim that names nothing anchors on the document that states it.
+  the index is searched by suffix and by name, which is right for a prompt someone typed and
+  wrong for English prose, where "integration" anchored a design claim on
+  `NoContinuousIntegration`. A claim that names nothing anchors on the document that states it.
+
+- **A prompt word that names no symbol may still seed the identifiers it is a word *in*.**
+  Prose says "the idempotency key" and "the total"; the index holds `idempotencyKey` and
+  `getTotalAmount`. Suffix matching sees neither, and two of the seven Tier 2 benchmark
+  prompts anchored nothing for that reason alone. `seeds::token_family` splits an identifier
+  on camelCase and `snake_case` humps and seeds every symbol the word is a token of — but
+  only when *no* symbol is called that outright (two symbols named `handler` are two things,
+  and picking one is a coin flip), and only up to `TOKEN_FAMILY_NAME_CAP`, because past a
+  handful a shared token is a theme rather than a name. `payment` is a token of 13 of
+  `spring-payments`' 39 symbols and must keep seeding nothing. The cap counts **names**: a
+  family member that is a container still fans out through `members_of` like any other seed,
+  so the symbol-level ceiling for one word is the cap times that limit.
 
 ## Traps
 

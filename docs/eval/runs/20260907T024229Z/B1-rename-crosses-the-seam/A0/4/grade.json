@@ -1,0 +1,26 @@
+{
+  "task": "B1-rename-crosses-the-seam",
+  "repo": "next-storefront",
+  "commit": "b7f233721a780cd1caf176557f455357d2a3f696",
+  "L0_build": true,
+  "L1_hidden": true,
+  "L2_collateral": true,
+  "L3_sites_found": [
+    "api/src/main/java/mn/shop/api/Order.java",
+    "api/src/main/java/mn/shop/api/OrderDto.java",
+    "api/src/main/resources/graphql/order.graphqls",
+    "web/src/lib/orders.ts",
+    "web/src/components/OrderSummary.tsx"
+  ],
+  "L3_sites_missed": [],
+  "passed": true,
+  "diff_empty": false,
+  "diff_applied": true,
+  "hidden_tests_placed": [
+    "api/src/test/java/mn/shop/api/HiddenTest.java",
+    "web/hidden.test.ts"
+  ],
+  "baseline_exit": 0,
+  "graded_exit": 0,
+  "adjudicate": []
+}

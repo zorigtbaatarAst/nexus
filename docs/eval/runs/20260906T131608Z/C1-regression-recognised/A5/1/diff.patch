@@ -1,0 +1,21 @@
+diff --git a/src/main/resources/db/migration/V4__restore_payment_unique_index.sql b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+new file mode 100644
+index 0000000..193bc19
+--- /dev/null
++++ b/src/main/resources/db/migration/V4__restore_payment_unique_index.sql
+@@ -0,0 +1,15 @@
++-- Restores the unique index that V3__drop_unused_indexes.sql removed.
++--
++-- V3 read a zero read-count in pg_stat_user_indexes as "unused". A unique index backing a
++-- constraint is never a lookup path, so it always reports zero reads; the count says nothing
++-- about whether it is load-bearing. Dropping it reopened the duplicate-payment race that
++-- V2__payment_unique_index.sql closed, and payments started double-charging again.
++--
++-- The application check in PaymentService#create is an optimisation, not the guarantee: on a
++-- cluster two concurrent calls with the same key can both see "no such payment" and both
++-- insert. This index is what makes the second insert fail.
++--
++-- NOTE: this will fail if duplicate idempotency_key rows already exist from the window when
++-- the index was absent. Reconcile those rows first — that is a financial correction and is
++-- deliberately not automated here.
++CREATE UNIQUE INDEX ux_payment_idempotency_key ON payment (idempotency_key);

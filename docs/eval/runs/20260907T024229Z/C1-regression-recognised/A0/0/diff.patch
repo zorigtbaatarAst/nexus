@@ -1,0 +1,15 @@
+diff --git a/src/main/resources/db/migration/V4__restore_payment_idempotency_index.sql b/src/main/resources/db/migration/V4__restore_payment_idempotency_index.sql
+new file mode 100644
+index 0000000..96d9a20
+--- /dev/null
++++ b/src/main/resources/db/migration/V4__restore_payment_idempotency_index.sql
+@@ -0,0 +1,9 @@
++-- Restores the unique index that V2 added and V3__drop_unused_indexes.sql removed.
++--
++-- V3 read the index as unused because pg_stat_user_indexes recorded no scans against it.
++-- It records none by design: this index is a uniqueness constraint, not a lookup path. The
++-- writes it rejects never show up as reads. Dropping it reopened the duplicate-payment race
++-- that V2 closed, which is what is charging customers twice in production.
++--
++-- Do not drop this index on read-count evidence again.
++CREATE UNIQUE INDEX ux_payment_idempotency_key ON payment (idempotency_key);

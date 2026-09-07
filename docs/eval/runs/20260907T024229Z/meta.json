@@ -1,0 +1,23 @@
+{
+  "stamp": "20260907T024229Z",
+  "image": "nexus-bench:latest",
+  "image_id": "sha256:3b8eefb2330c344873de4ed45e531110848c63a95c0edfdcceac04e2c4fd1f3b",
+  "nexus_version": "nexus 0.3.0",
+  "nexus_image_sha256": "8b3cbbc6e245beb463135c251b878961c940bbe29456ac9327630bdcc0217630",
+  "image_artifact_sha256": {
+    "/usr/local/bin/nexus": "8b3cbbc6e245beb463135c251b878961c940bbe29456ac9327630bdcc0217630",
+    "/usr/local/bin/nexus-hook": "2c594d5d21306364093742569cd8492296e60888d9b67fa1bea0cab622f34634",
+    "/usr/local/bin/fixture-build": "edfc5f53b29236062af1bc89a35f211b6593be20ff96b38943a03a23e6c152cb"
+  },
+  "model": "claude-opus-5",
+  "reps": 5,
+  "tasks": [
+    "A1-idempotency-key-length",
+    "A2-shared-type-change",
+    "B1-rename-crosses-the-seam",
+    "B2-orphaned-field-diagnosis",
+    "C1-regression-recognised",
+    "E1-untested-change",
+    "N1-null-task"
+  ]
+}

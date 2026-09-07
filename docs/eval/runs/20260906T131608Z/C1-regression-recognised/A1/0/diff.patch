@@ -1,0 +1,278 @@
+diff --git a/src/main/java/mn/payments/Payment.java b/src/main/java/mn/payments/Payment.java
+index c54da81..990d792 100644
+--- a/src/main/java/mn/payments/Payment.java
++++ b/src/main/java/mn/payments/Payment.java
+@@ -13,7 +13,8 @@ public class Payment {
+     private String id;
+ 
+     // Optimistic locking: two concurrent settlements of the same payment can no longer
+-    // both win. Added with V2__payment_unique_index.sql, which closes the other half.
++    // both win. Added with V2__payment_unique_index.sql; the uniqueness half of that fix
++    // was dropped by V3 and restored by V4__restore_payment_idempotency_constraint.sql.
+     @Version
+     private Long version;
+ 
+@@ -30,6 +31,10 @@ public class Payment {
+         return id;
+     }
+ 
++    public void setId(String id) {
++        this.id = id;
++    }
++
+     public Long getVersion() {
+         return version;
+     }
+@@ -38,10 +43,18 @@ public class Payment {
+         return idempotencyKey;
+     }
+ 
++    public void setIdempotencyKey(String idempotencyKey) {
++        this.idempotencyKey = idempotencyKey;
++    }
++
+     public BigDecimal getAmount() {
+         return amount;
+     }
+ 
++    public void setAmount(BigDecimal amount) {
++        this.amount = amount;
++    }
++
+     public String getStatus() {
+         return status;
+     }
+diff --git a/src/main/java/mn/payments/PaymentRepository.java b/src/main/java/mn/payments/PaymentRepository.java
+index f46a5a0..9f33b32 100644
+--- a/src/main/java/mn/payments/PaymentRepository.java
++++ b/src/main/java/mn/payments/PaymentRepository.java
+@@ -5,7 +5,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
+ 
+ public interface PaymentRepository extends JpaRepository<Payment, String> {
+ 
+-        boolean existsByIdempotencyKey(String idempotencyKey);
+-
+         Optional<Payment> findByIdempotencyKey(String idempotencyKey);
+ }
+diff --git a/src/main/java/mn/payments/PaymentService.java b/src/main/java/mn/payments/PaymentService.java
+index 0fe2ef3..924942b 100644
+--- a/src/main/java/mn/payments/PaymentService.java
++++ b/src/main/java/mn/payments/PaymentService.java
+@@ -3,35 +3,48 @@ package mn.payments;
+ import java.math.BigDecimal;
+ import java.math.RoundingMode;
+ import java.util.List;
++import org.springframework.dao.DataIntegrityViolationException;
+ import org.springframework.stereotype.Service;
+-import org.springframework.transaction.annotation.Transactional;
+ 
+ @Service
+ public class PaymentService {
+ 
+     private final PaymentRepository repository;
+     private final PaymentValidator validator;
++    private final PaymentWriter writer;
+ 
+-    public PaymentService(PaymentRepository repository, PaymentValidator validator) {
++    public PaymentService(
++            PaymentRepository repository, PaymentValidator validator, PaymentWriter writer) {
+         this.repository = repository;
+         this.validator = validator;
++        this.writer = writer;
+     }
+ 
+     /**
+-     * The check is back inside the transaction, and V2__payment_unique_index.sql makes the
+-     * database the final arbiter: the application check is now an optimisation, not the
+-     * guarantee. Both halves are needed — the index alone turns a duplicate into an
+-     * exception, and the transaction alone still races on a cluster.
++     * Idempotent create. Three parts, and all three are load-bearing:
++     *
++     * <ol>
++     *   <li>the check and the insert share one transaction ({@link PaymentWriter});
++     *   <li>ux_payment_idempotency_key (V4) rejects a second row for the same key, which is
++     *       what actually settles a race across nodes -- the check above is an optimisation;
++     *   <li>the loser of that race recovers here, outside the failed transaction, and
++     *       returns the row the winner wrote.
++     * </ol>
++     *
++     * <p>Without (3) the constraint would turn a double charge into a 500 for a caller that
++     * did nothing wrong. Without (2) there is no guarantee at all -- that is exactly what
++     * V3 removed and what let the duplicates back into production.
+      */
+-    @Transactional
+     public Payment create(String idempotencyKey, BigDecimal amount) {
+         validator.check(idempotencyKey, amount);
+-        if (repository.existsByIdempotencyKey(idempotencyKey)) {
+-            return repository.findByIdempotencyKey(idempotencyKey).orElseThrow();
++        try {
++            return writer.createIfAbsent(idempotencyKey, amount);
++        } catch (DataIntegrityViolationException race) {
++            // Someone inserted this key between our read and our commit. The constraint
++            // rejected our row, so no second charge exists; hand back the winner. If the
++            // violation was something else, there is no such row and we rethrow.
++            return repository.findByIdempotencyKey(idempotencyKey).orElseThrow(() -> race);
+         }
+-        Payment p = new Payment();
+-        p.setStatus("PENDING");
+-        return repository.save(p);
+     }
+ 
+     /** The live total. Rounds half-up to two places, which is what the ledger expects. */
+diff --git a/src/main/java/mn/payments/PaymentWriter.java b/src/main/java/mn/payments/PaymentWriter.java
+new file mode 100644
+index 0000000..5a1479d
+--- /dev/null
++++ b/src/main/java/mn/payments/PaymentWriter.java
+@@ -0,0 +1,48 @@
++package mn.payments;
++
++import java.math.BigDecimal;
++import java.util.UUID;
++import org.springframework.stereotype.Component;
++import org.springframework.transaction.annotation.Transactional;
++
++/**
++ * The transactional half of {@link PaymentService#create}.
++ *
++ * <p>It is a separate bean on purpose. The unique constraint is enforced when the insert is
++ * flushed, which happens at commit -- after this method returns -- so the resulting
++ * exception cannot be caught, nor the winning row read back, inside the transaction that
++ * caused it. PaymentService therefore does that recovery outside this boundary. Calling it
++ * through an injected bean also keeps the transaction real: a self-invocation would bypass
++ * the proxy, which is how the original race was introduced in 51ed745.
++ */
++@Component
++public class PaymentWriter {
++
++    private final PaymentRepository repository;
++
++    PaymentWriter(PaymentRepository repository) {
++        this.repository = repository;
++    }
++
++    /**
++     * Returns the existing payment for {@code idempotencyKey}, or inserts a new one. The
++     * read and the insert share one transaction, but that alone only settles races within a
++     * single node -- ux_payment_idempotency_key (V4) settles the rest by rejecting the
++     * second row.
++     */
++    @Transactional
++    public Payment createIfAbsent(String idempotencyKey, BigDecimal amount) {
++        return repository
++                .findByIdempotencyKey(idempotencyKey)
++                .orElseGet(() -> repository.save(newPayment(idempotencyKey, amount)));
++    }
++
++    private static Payment newPayment(String idempotencyKey, BigDecimal amount) {
++        Payment p = new Payment();
++        p.setId(UUID.randomUUID().toString());
++        p.setIdempotencyKey(idempotencyKey);
++        p.setAmount(amount);
++        p.setStatus("PENDING");
++        return p;
++    }
++}
+diff --git a/src/main/resources/db/migration/V4__restore_payment_idempotency_constraint.sql b/src/main/resources/db/migration/V4__restore_payment_idempotency_constraint.sql
+new file mode 100644
+index 0000000..3fe8ac2
+--- /dev/null
++++ b/src/main/resources/db/migration/V4__restore_payment_idempotency_constraint.sql
+@@ -0,0 +1,24 @@
++-- Restores the uniqueness guarantee that V3 removed.
++--
++-- V3 dropped ux_payment_idempotency_key because the Q3 storage review found no reads for it
++-- in pg_stat_user_indexes. It had no reads because it is a uniqueness guarantee, not a
++-- lookup path, and dropping it reopened the race V2 closed: the application check in
++-- PaymentService cannot settle two concurrent inserts of the same key -- under READ
++-- COMMITTED both transactions see no existing row and both insert. Only the database can
++-- settle that, and this is how it does it.
++--
++-- Restored as a table constraint rather than a bare index. The backing index still reports
++-- zero scans, so it will look just as "unused" at the next storage review -- but DROP INDEX
++-- now refuses to remove it while the constraint depends on it, which is the point.
++--
++-- OPERATOR NOTE: this migration fails if duplicates were written while the constraint was
++-- missing. Find them first:
++--
++--   SELECT idempotency_key, count(*), array_agg(id)
++--     FROM payment GROUP BY idempotency_key HAVING count(*) > 1;
++--
++-- Reconcile those (refund or void the extra charge) before deploying. Do not delete the
++-- extra rows blind: each one may already have been settled downstream, and dropping the
++-- record without reversing the charge hides the double charge instead of fixing it.
++ALTER TABLE payment
++  ADD CONSTRAINT ux_payment_idempotency_key UNIQUE (idempotency_key);
+diff --git a/src/test/java/mn/payments/PaymentServiceTest.java b/src/test/java/mn/payments/PaymentServiceTest.java
+index f269445..a5b59b5 100644
+--- a/src/test/java/mn/payments/PaymentServiceTest.java
++++ b/src/test/java/mn/payments/PaymentServiceTest.java
+@@ -1,16 +1,63 @@
+ package mn.payments;
+ 
+ import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertSame;
++import static org.junit.jupiter.api.Assertions.assertThrows;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.when;
+ 
+ import java.math.BigDecimal;
+ import java.util.List;
++import java.util.Optional;
+ import org.junit.jupiter.api.Test;
++import org.springframework.dao.DataIntegrityViolationException;
+ 
+ class PaymentServiceTest {
+ 
+-        @Test
+-        void total_rounds_half_up_to_two_places() {
+-                PaymentService service = new PaymentService(null, null);
+-                assertEquals(new BigDecimal("0.00"), service.total(List.of()));
+-        }
++    @Test
++    void total_rounds_half_up_to_two_places() {
++        PaymentService service = new PaymentService(null, null, null);
++        assertEquals(new BigDecimal("0.00"), service.total(List.of()));
++    }
++
++    /**
++     * The regression from V3: with the unique constraint gone, the loser of this race
++     * inserted a second row and the caller was charged twice. With the constraint back, the
++     * insert is rejected and the caller gets the winner's payment.
++     */
++    @Test
++    void losing_the_insert_race_returns_the_existing_payment_instead_of_charging_twice() {
++        PaymentRepository repository = mock(PaymentRepository.class);
++        PaymentWriter writer = mock(PaymentWriter.class);
++        Payment winner = new Payment();
++        winner.setIdempotencyKey("k1");
++
++        when(writer.createIfAbsent(eq("k1"), any()))
++                .thenThrow(new DataIntegrityViolationException("ux_payment_idempotency_key"));
++        when(repository.findByIdempotencyKey("k1")).thenReturn(Optional.of(winner));
++
++        PaymentService service =
++                new PaymentService(repository, new PaymentValidator(), writer);
++
++        assertSame(winner, service.create("k1", new BigDecimal("10.00")));
++    }
++
++    @Test
++    void an_unrelated_constraint_violation_is_not_swallowed() {
++        PaymentRepository repository = mock(PaymentRepository.class);
++        PaymentWriter writer = mock(PaymentWriter.class);
++
++        when(writer.createIfAbsent(eq("k2"), any()))
++                .thenThrow(new DataIntegrityViolationException("amount must not be null"));
++        when(repository.findByIdempotencyKey("k2")).thenReturn(Optional.empty());
++
++        PaymentService service =
++                new PaymentService(repository, new PaymentValidator(), writer);
++
++        assertThrows(
++                DataIntegrityViolationException.class,
++                () -> service.create("k2", new BigDecimal("10.00")));
++    }
+ }

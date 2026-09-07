@@ -160,6 +160,28 @@ pub struct EdgeRow {
     pub confidence: f64,
 }
 
+/// Which unresolved edges a resolution pass has to walk.
+///
+/// The lookup maps `resolve_edges` matches hints against are built from `live_symbols`. So
+/// if a scan added no symbol, renamed none and removed none, that table is byte-for-byte
+/// what the previous pass saw, and every edge it failed to resolve then fails identically
+/// now — re-walking them is guaranteed to change nothing.
+///
+/// It is not a small saving. On spring-boot (81 612 symbols) that walk is 80 699 edges and
+/// 325 ms, on every rescan, resolving nothing: the edges point at JDK and library symbols
+/// that were never in the index and never will be. It ran on a one-comment-line edit, which
+/// is exactly the change a `PostToolUse` hook sees after an agent edits a body.
+#[derive(Debug, Clone, Copy)]
+pub enum ResolveScope {
+    /// Every unresolved edge in the project. What a full scan does, and what a rescan must
+    /// still do whenever the symbol table moved — an appearance elsewhere is precisely what
+    /// makes an edge in an untouched file resolvable.
+    All,
+    /// Only the edges this scan wrote. `replace_edges_for_file` stamps them with the scan
+    /// id, so this is exact rather than approximate.
+    ThisScan(ScanId),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ResolveStats {
     pub total: usize,
@@ -980,6 +1002,32 @@ impl Store {
         Ok(written)
     }
 
+    /// The `extends`/`implements` hints one file currently contributes, as
+    /// `(subtype FQN, supertype hint)` pairs — the same shape `resolve_edges` folds into its
+    /// supertype map.
+    ///
+    /// Exists so a rescan can tell whether re-parsing a file moved that map. Adding an
+    /// `extends` clause to an existing class moves no symbol, so the symbol-table guard
+    /// cannot see it, and the inherited-member tier it feeds resolves edges in files that
+    /// did not change.
+    pub fn supertype_hints_for_file(
+        tx: &Transaction<'_>,
+        file_id: FileId,
+    ) -> Result<std::collections::BTreeSet<(String, String)>> {
+        let mut stmt = tx.prepare(
+            "SELECT s.fqn, e.dst_fqn_hint FROM symbol_edges e
+             JOIN symbols s ON s.id = e.src_symbol_id
+             WHERE e.file_id = ?1 AND e.edge_type IN ('extends','implements')
+               AND e.dst_fqn_hint IS NOT NULL",
+        )?;
+        let rows = stmt
+            .query_map(params![file_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<std::collections::BTreeSet<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Live files that supplied edges for symbols another file owns.
     ///
     /// Normally a symbol's edges come from the file that defines it, and this returns
@@ -1014,7 +1062,11 @@ impl Store {
     /// Runs once per scan, after every symbol is written — an analyzer cannot do this
     /// because it only ever sees one file. Each edge records which tier resolved it, so a
     /// three-hop heuristic chain is visibly a guess rather than silently a compiler fact.
-    pub fn resolve_edges(tx: &Transaction<'_>, project_id: ProjectId) -> Result<ResolveStats> {
+    pub fn resolve_edges(
+        tx: &Transaction<'_>,
+        project_id: ProjectId,
+        scope: ResolveScope,
+    ) -> Result<ResolveStats> {
         let mut by_fqn: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
         let mut by_prefix: std::collections::HashMap<String, Vec<i64>> =
             std::collections::HashMap::new();
@@ -1065,21 +1117,28 @@ impl Store {
             }
         }
 
-        let unresolved: Vec<(i64, String, String, String)> = {
-            let mut stmt = tx.prepare(
-                "SELECT e.id, e.dst_fqn_hint, e.edge_type, f.path
+        const UNRESOLVED: &str = "SELECT e.id, e.dst_fqn_hint, e.edge_type, f.path
                  FROM symbol_edges e
                  JOIN symbols s ON s.id = e.src_symbol_id
                  JOIN files f ON f.id = s.file_id
                  WHERE e.project_id = ?1 AND e.dst_symbol_id IS NULL
-                   AND e.dst_fqn_hint IS NOT NULL",
-            )?;
-            let rows = stmt
-                .query_map(params![project_id], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            rows
+                   AND e.dst_fqn_hint IS NOT NULL";
+        let read = |r: &rusqlite::Row<'_>| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?));
+        let unresolved: Vec<(i64, String, String, String)> = match scope {
+            ResolveScope::All => {
+                let mut stmt = tx.prepare(UNRESOLVED)?;
+                let rows = stmt
+                    .query_map(params![project_id], read)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                rows
+            }
+            ResolveScope::ThisScan(scan_id) => {
+                let mut stmt = tx.prepare(&format!("{UNRESOLVED} AND e.last_seen_scan_id = ?2"))?;
+                let rows = stmt
+                    .query_map(params![project_id, scan_id], read)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                rows
+            }
         };
 
         // Packages this project actually defines. A hint outside all of them points at a
@@ -1625,6 +1684,57 @@ impl Store {
         let mut stmt = self.conn.prepare(sql)?;
         let rows = stmt
             .query_map(params![project_id, target, limit as i64], |r| {
+                Ok(SymbolRef {
+                    id: r.get(0)?,
+                    fqn: r.get(1)?,
+                    kind: r.get(2)?,
+                    file_path: r.get(3)?,
+                    start_line: r.get(4)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// The symbols a bare word out of prose could be naming: everything `find_symbols`
+    /// matches, plus every symbol whose own `name` merely *contains* the word.
+    ///
+    /// `find_symbols` matches an FQN suffix, which is right for a target a person typed and
+    /// blind to a word that is a *prefix* or an interior token of a camelCase identifier:
+    /// `'%' || 'idempotency'` never reaches `idempotencyKey`, and `'%' || 'total'` never
+    /// reaches `getTotalAmount`. Two of seven real benchmark prompts anchored nothing for
+    /// exactly that reason.
+    ///
+    /// The extra clause is only the coarse half of a token match — SQLite has no word
+    /// boundary — so it deliberately over-matches and the caller decides where a token
+    /// begins. That is why this is a separate query rather than a wider `find_symbols`:
+    /// `get-symbol`, `impact` and `verify` resolve a name someone typed and must not start
+    /// answering with every symbol that merely contains it.
+    ///
+    /// The ordering is load-bearing, not cosmetic. Every row `find_symbols` would have matched
+    /// sorts ahead of the rows only the new clause admits, so a word with a crowd of merely
+    /// *containing* matches cannot push its own exact match out of the `LIMIT` window. Without
+    /// that, widening the query would quietly *lose* answers the narrow one gave: 210 symbols
+    /// named `unit_1..unit_210` evict the one symbol actually called `unit`, and a caller that
+    /// anchored before returns nothing.
+    pub fn find_symbols_by_word(
+        &self,
+        project_id: ProjectId,
+        word: &str,
+        limit: usize,
+    ) -> Result<Vec<SymbolRef>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.fqn, s.kind, f.path, s.start_line
+             FROM live_symbols s JOIN files f ON f.id = s.file_id
+             WHERE s.project_id = ?1
+               AND (s.fqn = ?2 OR s.fqn LIKE '%' || ?2 OR s.fqn LIKE '%' || ?2 || '(%'
+                    OR s.name = ?2 OR s.name LIKE '%' || ?2 || '%')
+             ORDER BY (s.fqn = ?2 OR s.fqn LIKE '%' || ?2 OR s.fqn LIKE '%' || ?2 || '(%'
+                       OR s.name = ?2) DESC,
+                      LENGTH(s.fqn) LIMIT ?3",
+        )?;
+        let rows = stmt
+            .query_map(params![project_id, word, limit as i64], |r| {
                 Ok(SymbolRef {
                     id: r.get(0)?,
                     fqn: r.get(1)?,

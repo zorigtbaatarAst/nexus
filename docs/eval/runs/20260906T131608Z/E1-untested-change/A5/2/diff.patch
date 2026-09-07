@@ -1,0 +1,90 @@
+diff --git a/src/main/java/mn/pay/PaymentService.java b/src/main/java/mn/pay/PaymentService.java
+index 63c8c98..4e9e778 100644
+--- a/src/main/java/mn/pay/PaymentService.java
++++ b/src/main/java/mn/pay/PaymentService.java
+@@ -32,6 +32,22 @@ public class PaymentService {
+         return repository.save(p);
+     }
+ 
++    /**
++     * Cancellation is only defined for a payment that has not moved on yet, so the status check
++     * and the write share one transaction: a concurrent cancel cannot slip between them.
++     */
++    @Transactional
++    public Payment cancel(String paymentId) {
++        Payment p = repository.findById(paymentId)
++                .orElseThrow(() -> new IllegalArgumentException("unknown payment: " + paymentId));
++        if (!"PENDING".equals(p.getStatus())) {
++            throw new IllegalStateException(
++                    "only a PENDING payment can be cancelled, was " + p.getStatus());
++        }
++        p.setStatus("CANCELLED");
++        return repository.save(p);
++    }
++
+     /** The live total. Rounds half-up to two places, which is what the ledger expects. */
+     public BigDecimal total(List<Payment> payments) {
+         BigDecimal sum = BigDecimal.ZERO;
+diff --git a/src/test/java/mn/pay/PaymentServiceTest.java b/src/test/java/mn/pay/PaymentServiceTest.java
+index c4ca4c0..f5e3a0e 100644
+--- a/src/test/java/mn/pay/PaymentServiceTest.java
++++ b/src/test/java/mn/pay/PaymentServiceTest.java
+@@ -1,9 +1,16 @@
+ package mn.pay;
+ 
+ import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertThrows;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
+ 
+ import java.math.BigDecimal;
+ import java.util.List;
++import java.util.Optional;
+ import org.junit.jupiter.api.Test;
+ 
+ class PaymentServiceTest {
+@@ -13,4 +20,41 @@ class PaymentServiceTest {
+         PaymentService service = new PaymentService(null, null);
+         assertEquals(new BigDecimal("0.00"), service.total(List.of()));
+     }
++
++    @Test
++    void cancel_moves_a_pending_payment_to_cancelled() {
++        PaymentRepository repository = mock(PaymentRepository.class);
++        Payment pending = new Payment();
++        pending.setStatus("PENDING");
++        when(repository.findById("p1")).thenReturn(Optional.of(pending));
++        when(repository.save(pending)).thenReturn(pending);
++
++        Payment cancelled = new PaymentService(repository, null).cancel("p1");
++
++        assertEquals("CANCELLED", cancelled.getStatus());
++        verify(repository).save(pending);
++    }
++
++    @Test
++    void cancel_rejects_a_payment_that_is_not_pending() {
++        PaymentRepository repository = mock(PaymentRepository.class);
++        Payment settled = new Payment();
++        settled.setStatus("SETTLED");
++        when(repository.findById("p1")).thenReturn(Optional.of(settled));
++
++        PaymentService service = new PaymentService(repository, null);
++        assertThrows(IllegalStateException.class, () -> service.cancel("p1"));
++
++        assertEquals("SETTLED", settled.getStatus());
++        verify(repository, never()).save(any());
++    }
++
++    @Test
++    void cancel_rejects_an_unknown_payment() {
++        PaymentRepository repository = mock(PaymentRepository.class);
++        when(repository.findById("nope")).thenReturn(Optional.empty());
++
++        PaymentService service = new PaymentService(repository, null);
++        assertThrows(IllegalArgumentException.class, () -> service.cancel("nope"));
++    }
+ }

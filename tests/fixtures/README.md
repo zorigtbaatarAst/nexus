@@ -42,7 +42,7 @@ does. They have to be built on purpose.
 | Fixture | Role | Commits | Carries |
 |---|---|---:|---|
 | `spring-payments` | payments | 7 | The full history: refactor → bug → reformat → rename → fix → regression. A dirty-start patch, a Family H decoy, and a multi-turn task |
-| `next-storefront` | realistic full-stack | 3 | Spring GraphQL API and a Next.js frontend **in one repository**, joined only by a schema. Codegen output that must not be indexed |
+| `next-storefront` | realistic full-stack | 4 | Spring GraphQL API and a Next.js frontend **in one repository**, joined only by a schema. Codegen output that must not be indexed |
 | `acme-monorepo` | multi-service | 3 | Three Gradle modules over one shared library, plus a feature branch. Sibling-vs-external resolution and narrow-scan detection |
 | `legacy-billing` | legacy / deceptive | 4 | Three plausible invoice calculators, one of them live. The harmful-context fixture |
 
