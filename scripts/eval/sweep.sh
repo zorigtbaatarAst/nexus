@@ -24,9 +24,32 @@ REPS="${REPS:-5}"
 IMAGE="${IMAGE:-nexus-bench:latest}"
 NEXUS_BIN="$ROOT/target/release/nexus"
 
-# The seven benchmark tasks, overridable so a dry run can exercise the refusal path (M1, E2) that
+# Which corpus. The generated one is the default and is unchanged; `CORPUS=tokio` selects the
+# real-repository corpus of tests/fixtures/corpora/tokio, five tasks from tokio's own history.
+#
+# A named corpus rather than an operator typing five task ids: a sweep is quoted by the set of
+# tasks it ran, and a mistyped or half-remembered TASKS= silently produces a smaller corpus that
+# analyse.py then derives its comparisons from. Explicit TASKS still wins, for the documented
+# resume-one-task case; it just is not how a whole corpus gets selected.
+#
+# The tokio corpus has no ranking-only tasks: E1 and N1 exist to give T7's sign test enough
+# non-tied observations on the generated corpus, and neither has a tokio counterpart, so
+# arms_for() gives all five of these three arms and the plan is 5 x 3 x 5 = 75.
+TOKIO_TASKS="R1-stream-map-size-hint-overflow R2-lines-codec-invalid-utf8 R3-framed-spurious-decode R4-abstract-socket-leading-nul R5-semaphore-reopens-after-forget"
+GENERATED_TASKS="A1-idempotency-key-length A2-shared-type-change B1-rename-crosses-the-seam B2-orphaned-field-diagnosis C1-regression-recognised E1-untested-change N1-null-task"
+
+case "${CORPUS:-generated}" in
+  generated) DEFAULT_TASKS="$GENERATED_TASKS" ;;
+  tokio)     DEFAULT_TASKS="$TOKIO_TASKS" ;;
+  *)
+    echo "sweep.sh: CORPUS=${CORPUS} is not a corpus. Known: generated, tokio." >&2
+    exit 1
+    ;;
+esac
+
+# The benchmark tasks, overridable so a dry run can exercise the refusal path (M1, E2) that
 # never belongs in a real sweep — that path is proven by constructing it, not by argument.
-read -ra TASKS <<<"${TASKS:-A1-idempotency-key-length A2-shared-type-change B1-rename-crosses-the-seam B2-orphaned-field-diagnosis C1-regression-recognised E1-untested-change N1-null-task}"
+read -ra TASKS <<<"${TASKS:-$DEFAULT_TASKS}"
 
 # The corpus is asymmetric on purpose, and the asymmetry is the whole point of the two added
 # tasks — so it is expressed per task, travelling with the task id, rather than as a second task

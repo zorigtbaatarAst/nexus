@@ -352,13 +352,66 @@ author's own*, is evidence. Read `tests/eval/hidden/README.md` before touching a
 
 ---
 
+## The tokio corpus
+
+[`tier2-corpus-verdict.md`](tier2-corpus-verdict.md) closed the generated corpus: its fixtures
+are 6–8 kB, a bare agent reads the whole repository, and every arm passes every task at every
+difficulty. Its prescription was fixtures "at a scale where the repository does not fit in
+context … around 10³ files".
+
+`tests/fixtures/corpora/tokio` is that corpus. It is **tokio** at five points in its own
+history: 781–859 files and 156–176 KLOC of Rust per start state, out of 4634 commits. Nothing in it is authored here except the prompt:
+the bug was real, the fix was real, and the hidden test is the one the fix's author wrote.
+
+| task | crate · flags | fix commit | source files the real fix touched |
+|---|---|---|---|
+| `R1-stream-map-size-hint-overflow` | `tokio-stream` | `f59aae42` | 1 |
+| `R2-lines-codec-invalid-utf8` | `tokio-util --features codec` | `129f9fc0` | 1 |
+| `R3-framed-spurious-decode` | `tokio-util --features codec` | `96f64f4e` | 1 |
+| `R4-abstract-socket-leading-nul` | `tokio --features full` | `0cea36fa` | **2** |
+| `R5-semaphore-reopens-after-forget` | `tokio --features full` | `3ea11e2a` | 1 |
+
+**Construction.** Each start state is the fix commit's *parent* with the commit's test changes
+applied and its source changes absent: a red test the agent can run, and no fix. Prompts are
+symptom-shaped and name neither the file nor the function. `R4` is the one whose fix
+demonstrably needs both files — either half alone leaves the test red, verified in isolation.
+
+**Grading** is the same three gates, over cargo rather than Maven:
+
+| | |
+|---|---|
+| L0 | the crate and its test target compile (`cargo test --no-run`) |
+| L1 | the historical test passes — restored from `tests/eval/hidden/<task>/` after the agent is gone, so editing it in the start state buys nothing |
+| L2 | every *other* test in the same binary still passes (`-- --skip <the task's own test>`) |
+| L3 | the source files the real fix touched — reported, never gated, exactly as elsewhere |
+
+**Every start state is proven red inside the image, at image build time.** The pre-warm asserts
+that each task compiles, that its collateral is green and that its own test FAILS; a start state
+that passes fails `docker build` rather than a $37 sweep. That is the defect the verdict found,
+caught one layer earlier.
+
+**Why cargo is warm.** The image pre-builds one target directory per task (`/cargo-target/<task>`)
+at that task's start commit, and `scripts/eval/bench_mtime.sh` pins each fresh clone's mtimes
+below the pre-warm's so cargo reuses them. Without it every graded build is a cold ~20–75 s,
+twice a cell, 75 cells.
+
+**It is not the generated corpus's replacement, it is its successor.** The 95-cell generated
+plan is unchanged and still the default; `CORPUS=tokio` selects this one, at 75 cells (5 tasks ×
+3 arms × 5 reps — there is no tokio counterpart to `E1`/`N1`, so every task runs all three arms).
+
 ## How to run it
 
 ```bash
-make bench-image          # release binary + fixtures + the pinned run image
+make bench-image          # release binary + fixtures + tokio + the pinned run image
 ./scripts/eval/parity.sh  # 2 cheap paid runs: token accounting is identical across arms
 make bench                # 95 paid runs on claude-opus-5. Hours. Real money.
 python3 scripts/eval/analyse.py docs/eval/runs/<stamp>
+```
+
+The tokio corpus, 75 cells, same everything else:
+
+```bash
+CORPUS=tokio ./scripts/eval/sweep.sh
 ```
 
 **Credentials — prefer `ANTHROPIC_API_KEY` for a sweep.** `run.sh` copies

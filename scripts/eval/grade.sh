@@ -28,6 +28,22 @@
 # The graded tree is a *copy* of the baseline tree, so the hidden tests are the only difference
 # between them. That is what makes the exit-code delta attributable to the hidden tests, and it
 # is also what makes a compile error inside a hidden test recognisable: the baseline compiled.
+#
+# --- the Cargo path ----------------------------------------------------------------------------
+#
+# The tokio corpus (tests/fixtures/corpora/tokio) is the same three gates over a real ~165-KLOC
+# repository, and it differs from the generated corpus in exactly two places, both below:
+#
+#   * `fixture-build` cannot serve it. Which crate, which feature flags and which test binary
+#     are properties of the task, not of the tree — `tokio-util`'s codec tests do not compile
+#     without `--features codec` — so those tasks carry build_cmd / collateral_cmd / test_cmd
+#     and the grader runs what the task declares.
+#   * L2 comes from `-- --skip <the task's own test>`. The task's test is present in the start
+#     state there (the agent gets a red test it can run), so a collateral gate that ran it
+#     would be red for every unfixed run and would measure nothing.
+#
+# Everything else — the clone, the diff, the two trees, the attribution, L3, the JSON — is
+# shared, and deliberately so: two graders would eventually disagree about what `passed` means.
 set -euo pipefail
 
 TASK="${1:?task id}"
@@ -47,6 +63,21 @@ if python3 "$LOOKUP" "$TASK" start_state >/dev/null 2>&1; then
   exit 1
 fi
 read -r REPO COMMIT _ < <(python3 "$LOOKUP" "$TASK")
+
+# A task that declares `test_cmd` is graded by the Cargo path. Read once, here, so that every
+# later branch turns on the same answer rather than each asking the manifest its own question.
+TEST_CMD="$(python3 "$LOOKUP" "$TASK" test_cmd 2>/dev/null || true)"
+# Cleared first: a Rust developer's shell often exports this, and inheriting it would send the
+# grading container at a host path that does not exist inside it.
+CARGO_TARGET_DIR=""
+if [ -n "$TEST_CMD" ]; then
+  BUILD_CMD="$(python3 "$LOOKUP" "$TASK" build_cmd)"
+  COLLATERAL_CMD="$(python3 "$LOOKUP" "$TASK" collateral_cmd)"
+  # Per task, because the five start states are five different commits of the same crates: one
+  # shared target directory would let each task's pre-warm invalidate the last one's, and the
+  # whole point of the warm image is that a cell pays seconds instead of a minute.
+  CARGO_TARGET_DIR="/cargo-target/$TASK"
+fi
 
 FIXTURE="$ROOT/target/fixtures/$REPO"
 [ -d "$FIXTURE" ] || { echo "run make fixtures first" >&2; exit 1; }
@@ -87,6 +118,15 @@ BASELINE="$WORK/baseline"
 git clone -q "$FIXTURE" "$BASELINE"
 git -C "$BASELINE" checkout -q "$COMMIT"
 
+# Before the patch, never after: everything the agent changed must stay newer than the image's
+# pre-warmed target directory or cargo would skip rebuilding the very files being graded.
+#
+# An `if`, not `[ … ] && …`: as the last command of an AND-OR list a false test is the script's
+# exit status, and under `set -e` a non-Cargo task would abort the grader here.
+if [ -n "$TEST_CMD" ]; then
+  "$ROOT/scripts/eval/bench_mtime.sh" "$BASELINE"
+fi
+
 # `git apply` refuses an empty patch outright, and an empty patch is a common real result — a
 # run that timed out, or one that decided there was nothing to do. It is graded rather than
 # skipped: the hidden tests are red at every start commit, so an untouched tree fails L1.
@@ -108,6 +148,51 @@ cp -a "$BASELINE" "$GRADED"
 mapfile -t HIDDEN < <(python3 "$LOOKUP" "$TASK" hidden_tests)
 [ "${#HIDDEN[@]}" -gt 0 ] || { echo "$TASK declares no hidden_tests" >&2; exit 1; }
 
+# The Cargo path routes by path, not by content: a hidden test directory there mirrors the
+# repository, `tokio/tests/uds_stream.rs` under `tokio/tests/uds_stream.rs`. There is nothing
+# to infer — Rust integration tests are `<crate>/tests/*.rs` by cargo's own rule, and the file
+# already sits at its real path in the start state.
+#
+# It OVERWRITES, and that is the point rather than an accident. The start state contains this
+# same file, so an agent that weakens an assertion, deletes the test or renames it away leaves
+# a tree that is green on its own terms; restoring the historical copy before L1 is what makes
+# the gate the author's test rather than the agent's. `git diff`-ing the copy against what the
+# agent left is deliberately NOT done: tampering is not a separate verdict, it is a failed L1.
+if [ -n "$TEST_CMD" ]; then
+  PLACED="$(python3 - "$GRADED" "${HIDDEN[@]/#/$ROOT/}" <<'PY'
+import os
+import pathlib
+import shutil
+import sys
+
+tree = pathlib.Path(sys.argv[1])
+placed = []
+for directory in sys.argv[2:]:
+    root = pathlib.Path(directory)
+    files = sorted(p for p in root.rglob("*") if p.is_file())
+    if not files:
+        sys.exit(f"place_hidden: no hidden tests in {directory}")
+    for source in files:
+        relative = source.relative_to(root)
+        destination = tree / relative
+        # The file must already exist: the start state is the parent commit plus exactly these
+        # files, so a miss means the fixture and the hidden tests have drifted apart and L1
+        # would be graded against a test the agent never saw.
+        if not destination.exists():
+            sys.exit(f"place_hidden: {relative} is not in the start state; corpus is stale")
+        shutil.copyfile(source, destination)
+        # Now, not the source file's own mtime. bench_mtime.sh has pinned this tree to 2020 so
+        # that cargo reuses the image's pre-warmed artifacts, and `copy2` would carry over a
+        # timestamp older than that pre-warm — leaving cargo free to consider the test binary
+        # up to date and grade L1 against a binary built from the agent's copy of the test.
+        # A current mtime is the only unambiguous instruction to recompile it.
+        os.utime(destination, None)
+        placed.append(str(relative))
+
+print("\n".join(placed))
+PY
+)"
+else
 PLACED="$(python3 - "$GRADED" "${HIDDEN[@]/#/$ROOT/}" <<'PY'
 """Copy every file of a task's hidden-test directories into the graded tree.
 
@@ -187,13 +272,14 @@ for directory in sys.argv[2:]:
 print("\n".join(placed))
 PY
 )"
+fi
 
 # --- the two builds ----------------------------------------------------------------------------
 
 # :Z relabels the mount for SELinux. Without it the container sees an empty /work and Maven
 # reports a missing POM from /tmp/hsperfdata_root, which looks nothing like the real problem.
-run_build() {  # tree, log -> BUILD_STATUS
-  local tree="$1" log="$2"
+run_build() {  # tree, log, command -> BUILD_STATUS
+  local tree="$1" log="$2" command="$3"
   BUILD_STATUS=0
   # Bounded, because nothing else bounds it: run.sh caps the agent, but a fix that leaves a test
   # looping forever would stall the whole sweep here. A kill at the deadline exits 124 (137 if
@@ -218,8 +304,10 @@ run_build() {  # tree, log -> BUILD_STATUS
   docker run --rm --name "$CONTAINER" --network=none \
     -v "$tree:/work:Z" -w /work \
     -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+    -e BENCH_COMMAND="$command" \
+    ${CARGO_TARGET_DIR:+-e CARGO_TARGET_DIR="$CARGO_TARGET_DIR"} \
     "$IMAGE" \
-    bash -lc 'fixture-build .; status=$?; chown -R "$HOST_UID:$HOST_GID" /work 2>/dev/null || true; exit $status' \
+    bash -lc 'eval "$BENCH_COMMAND"; status=$?; chown -R "$HOST_UID:$HOST_GID" /work 2>/dev/null || true; exit $status' \
     >"$log" 2>&1 </dev/null || BUILD_STATUS=$?
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 
@@ -261,8 +349,19 @@ run_build() {  # tree, log -> BUILD_STATUS
   esac
 }
 
-run_build "$BASELINE" "$OUT/grade-baseline.log"; BASELINE_EXIT="$BUILD_STATUS"
-run_build "$GRADED" "$OUT/grade-hidden.log";     GRADED_EXIT="$BUILD_STATUS"
+# What each tree is asked. `fixture-build` answers "compile and run the project's tests" for
+# the generated corpus and needs no argument; a Cargo task names its own three commands and the
+# baseline runs two of them, joined by `&&` for the same reason `fixture-build` does both in one
+# process — L0 and L2 are one build, attributed afterwards from the log.
+BASELINE_COMMAND='fixture-build .'
+GRADED_COMMAND='fixture-build .'
+if [ -n "$TEST_CMD" ]; then
+  BASELINE_COMMAND="$BUILD_CMD && $COLLATERAL_CMD"
+  GRADED_COMMAND="$TEST_CMD"
+fi
+
+run_build "$BASELINE" "$OUT/grade-baseline.log" "$BASELINE_COMMAND"; BASELINE_EXIT="$BUILD_STATUS"
+run_build "$GRADED" "$OUT/grade-hidden.log" "$GRADED_COMMAND";       GRADED_EXIT="$BUILD_STATUS"
 
 # --- the verdict --------------------------------------------------------------------------------
 
@@ -285,8 +384,14 @@ run = pathlib.Path(out)
 # A compiler's own failure banner, in the three toolchains this corpus builds with. Used only
 # to attribute a failure between L0 and L2, and to tell a hidden test that would not compile
 # from one that ran and failed an assertion — never to decide `passed`.
+#
+# `could not compile` is rustc's own banner and `error[E0308]` its diagnostic code; both are
+# needed, because a linker failure prints the first and no code, and `cargo test --no-run`
+# stops on the first crate with a code long before it prints the summary.
 COMPILER_FAILED = re.compile(
-    r"COMPILATION ERROR|Compilation failed|compile\w*Java FAILED|error TS\d+", re.I
+    r"COMPILATION ERROR|Compilation failed|compile\w*Java FAILED|error TS\d+"
+    r"|error\[E\d+\]|error: could not compile",
+    re.I,
 )
 
 # A test runner saying, in its own words, that a test ran and failed. Every alternative is
@@ -298,6 +403,7 @@ TEST_FAILED = re.compile(
     r"|tests completed, [1-9]\d* failed"        # gradle
     r"|There were failing tests"                # gradle
     r"|Test Files\s+[1-9]\d* failed"            # vitest
+    r"|test result: FAILED"                     # libtest, via `cargo test`
 )
 
 baseline_log = (run / "grade-baseline.log").read_text(errors="replace")

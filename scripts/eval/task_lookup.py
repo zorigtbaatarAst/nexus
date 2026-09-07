@@ -18,12 +18,18 @@ import pathlib
 import sys
 import tomllib
 
-SPECS = "tests/fixtures/specs/*/fixture.toml"
+# Two directories, one format. `tests/fixtures/specs` belongs to `nexus fixture generate`,
+# which writes every repository there from a list of blobs and validates the shape it knows;
+# a 181-KLOC real repository cannot be a list of blobs, so the tokio corpus lives beside it in
+# `tests/fixtures/corpora` and is materialised by scripts/eval/tokio_fixture.sh instead. The
+# `[[task]]` table is the same table either way — same id, commit, prompt, required_sites and
+# hidden_tests — which is why this is a second glob and not a second lookup.
+SPECS = ("tests/fixtures/specs/*/fixture.toml", "tests/fixtures/corpora/*/fixture.toml")
 
 
 def find_task(root, task_id):
     """Return (repo, spec-relative task table) for a task id, or (None, None)."""
-    for spec in sorted(root.glob(SPECS)):
+    for spec in sorted(s for pattern in SPECS for s in root.glob(pattern)):
         with spec.open("rb") as fh:
             doc = tomllib.load(fh)
         for task in doc.get("task", []):

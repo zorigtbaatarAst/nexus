@@ -3,7 +3,7 @@ CAP_BIN := target/release/bughunter
 PREFIX  ?= $(HOME)/.local
 
 .PHONY: help build release test lint fmt check eval-selftest install uninstall clean demo smoke \
-        fixtures fixtures-verify bench-image bench
+        fixtures fixtures-verify tokio-fixture bench-image bench
 
 help:
 	@echo "build    debug build"
@@ -17,6 +17,7 @@ help:
 	@echo "demo     scan a repository and prove the incremental cascade (REPO=path)"
 	@echo "fixtures         build the benchmark corpus -> target/fixtures"
 	@echo "fixtures-verify  prove the corpus is reproducible (CI gate)"
+	@echo "tokio-fixture    materialise the real-repository corpus -> target/fixtures/tokio"
 	@echo "bench-image      build the benchmark run image, with its offline caches warmed"
 	@echo "bench            Tier 2: 95 agent runs in containers (costs money, takes hours)"
 	@echo "eval             measure resolution accuracy against a SCIP oracle (needs an indexer)"
@@ -62,8 +63,16 @@ fixtures-verify:
 # The benchmark's run image. Both prerequisites are real: the Dockerfile copies the host-built
 # binary in, and it warms its offline dependency caches from the generated corpus. Never part
 # of `make check` — it downloads a JDK image and a few hundred megabytes of dependencies.
+#
+# tokio-fixture is the real-repository corpus of docs/eval/tier2-corpus-verdict.md's
+# prescription: 868 files and 181 KLOC, replayed from tokio's own history rather than
+# generated. It clones once and reuses the clone, so this is cheap on every build but the
+# first. TOKIO_SOURCE=<path> to replay from a local mirror instead of GitHub.
+tokio-fixture:
+	./scripts/eval/tokio_fixture.sh
+
 IMAGE ?= nexus-bench:latest
-bench-image: release fixtures
+bench-image: release fixtures tokio-fixture
 	docker build -t $(IMAGE) -f scripts/eval/Dockerfile .
 
 # The Tier 2 benchmark: 95 agent runs in containers, real money, hours. Never part of

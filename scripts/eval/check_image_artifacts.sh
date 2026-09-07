@@ -15,6 +15,11 @@
 # All three are exact copies — scripts/eval/Dockerfile COPYs each in with no rewrite, no strip
 # and no rebuild — so equal bytes is the correct bar, not an approximation of one.
 #
+# `bench-mtime` joined the table with the tokio corpus. It decides which files cargo considers
+# stale, so drift there does not change a grade's *value* but can change whether the thing
+# graded is the agent's edit or the image's pre-warmed copy of it — a silent false green, and
+# the reason it is compared rather than trusted.
+#
 # `nexus` is not the only one that matters, and is not the worst one. `fixture-build` IS the L0
 # build-and-grade path: drift there changes *grades*, where drift in `nexus` only changes the
 # context an arm is given. When this check was first written it covered `nexus` alone, and the
@@ -51,6 +56,7 @@ ARTIFACTS="
 /usr/local/bin/nexus         target/release/nexus
 /usr/local/bin/nexus-hook    scripts/eval/nexus-hook.sh
 /usr/local/bin/fixture-build scripts/eval/build.sh
+/usr/local/bin/bench-mtime   scripts/eval/bench_mtime.sh
 "
 
 IMAGE_PATHS=""

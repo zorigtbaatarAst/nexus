@@ -1,0 +1,150 @@
+# tokio — the real-repository corpus.
+#
+# docs/eval/tier2-corpus-verdict.md killed the generated Tier 2 corpus with one number: its
+# fixtures are 6–8 kB, so a bare agent reads the whole repository and passes every task. There
+# is no retrieval problem when the codebase fits in a context window. The verdict's own
+# prescription was "fixtures at a scale where the repository does not fit in context … the
+# interesting range starts around 10³ files".
+#
+# So this corpus is not generated. It is tokio: 781–859 files and 156–176 KLOC of Rust at the
+# five start states, drawn from 4634 commits of real history. Nothing here is written by us
+# except the prompt — the bug was real, the fix was real, and the hidden test is the one the
+# fix's author wrote.
+#
+# ## Why this file is not under tests/fixtures/specs/
+#
+# `nexus fixture generate` owns that directory: every spec there is a list of blobs it writes
+# into a synthetic git history, and it validates the shape it knows. A repository of this size
+# cannot be a list of blobs. Putting this file there would make `make fixtures` try to generate
+# it and fail. So the *format* is the existing one — the `[[task]]` table below is the same
+# table `task_lookup.py` already reads, with the same id/commit/prompt/required_sites/
+# hidden_tests keys — and only the directory differs. `task_lookup.py` globs both.
+#
+# ## What the extra keys are for
+#
+# The generated corpus builds with `fixture-build`, which detects a build system from the files
+# in the tree (pom.xml, settings.gradle, web/package.json) and needs no per-task knowledge. A
+# Cargo workspace cannot work that way: which crate, which feature flags and which test binary
+# are properties of the *task*, not of the repository, and the feature flags are load-bearing —
+# `tokio-util`'s codec tests do not even compile without `--features codec`, which is a
+# toolchain error and not a fail-then-pass signal. So each task carries the three commands the
+# grader runs. See scripts/eval/grade.sh, "the Cargo path".
+#
+#   build_cmd       L0 — the crate and its test targets compile.
+#   collateral_cmd  L2 — every OTHER test in the same binary still passes. `--skip` is what
+#                   makes L2 attributable: the task's own test is present in the start state,
+#                   so a collateral gate that ran it would be red for every run before a fix
+#                   and would say nothing about collateral damage.
+#   test_cmd        L1 — the one test from history, run against the pristine copy of the test
+#                   file, restored after the agent is gone.
+#
+# ## Construction
+#
+# The start state is the fix commit's PARENT with the commit's test changes applied and its
+# source changes absent: the agent has a red test it can run, and no fix. `real_fix` records
+# the commit the source half was removed from, so the grader's own test can reconstruct the
+# historical fix and prove the task grades green when it is applied.
+#
+# Every start state was verified to fail its test at the parent, in a container, before this
+# file existed. A task that is green at the start state grades nothing — that is precisely the
+# defect that made the generated corpus worthless.
+
+[fixture]
+name        = "tokio"
+description = "tokio at five points in its own history: ~800 files, ~165 KLOC, five real bugs."
+stack       = ["rust", "cargo"]
+role        = "real-repository"
+
+# Where the repository is materialised from. scripts/eval/tokio_fixture.sh clones this,
+# replays the five start states onto it and writes target/fixtures/tokio.manifest.json.
+[source]
+url = "https://github.com/tokio-rs/tokio.git"
+
+[[task]]
+id      = "R1-stream-map-size-hint-overflow"
+family  = "R"
+commit  = "R1"
+prompt  = "Summing two child streams whose size_hint reports usize::MAX makes a StreamMap panic with \"attempt to add with overflow\" in debug builds instead of reporting a saturated hint."
+real_fix = "f59aae423eaf7131d6923085c1c66b50a49bb4e2"
+parent   = "dc3a883b99f8255cad5409458be95a0bcec2320c"
+required_sites = ["tokio-stream/src/stream_map.rs"]
+hidden_tests   = ["tests/eval/hidden/R1-stream-map-size-hint-overflow"]
+test_name      = "size_hint_overflow"
+build_cmd      = "cargo test -j 2 -p tokio-stream --test stream_stream_map --no-run"
+collateral_cmd = "cargo test -j 2 -p tokio-stream --test stream_stream_map -- --skip size_hint_overflow"
+test_cmd       = "cargo test -j 2 -p tokio-stream --test stream_stream_map size_hint_overflow"
+note = """
+The easiest of the five and deliberately kept: the panic names its own file and line, so it is \
+the corpus's control for "a task a bare agent should solve"."""
+
+[[task]]
+id      = "R2-lines-codec-invalid-utf8"
+family  = "R"
+commit  = "R2"
+prompt  = "Feeding a line-delimited stream that ends in invalid UTF-8 makes the decoder panic with a slice range error on the following read instead of returning a decode error."
+real_fix = "129f9fc0c8e9787dee3db5a6f65c3370ed148f7e"
+parent   = "b5c227d51feff804fe7ce73721fb32f4227fad73"
+required_sites = ["tokio-util/src/codec/lines_codec.rs"]
+hidden_tests   = ["tests/eval/hidden/R2-lines-codec-invalid-utf8"]
+test_name      = "lines_decoder_invalid_utf8"
+build_cmd      = "cargo test -j 2 -p tokio-util --features codec --test codecs --no-run"
+collateral_cmd = "cargo test -j 2 -p tokio-util --features codec --test codecs -- --skip lines_decoder_invalid_utf8"
+test_cmd       = "cargo test -j 2 -p tokio-util --features codec --test codecs lines_decoder_invalid_utf8"
+note = """
+The panic points at `decode`; the missing state reset is in `decode_eof`. Same file, wrong \
+function — the cheapest way to be confidently wrong here is to trust the backtrace."""
+
+[[task]]
+id      = "R3-framed-spurious-decode"
+family  = "R"
+commit  = "R3"
+prompt  = "Rebuilding a framed stream from its parts with an empty read buffer causes the decoder to be invoked one extra time before any bytes have been read."
+real_fix = "96f64f4ee2afc0a6db76390134dd183d59ca5351"
+parent   = "00d10c22f831f7d4508444f17a84e19319eaf36b"
+required_sites = ["tokio-util/src/codec/framed_impl.rs"]
+hidden_tests   = ["tests/eval/hidden/R3-framed-spurious-decode"]
+test_name      = "from_parts_empty_read_buf_does_not_spuriously_decode"
+build_cmd      = "cargo test -j 2 -p tokio-util --features codec --test framed --no-run"
+collateral_cmd = "cargo test -j 2 -p tokio-util --features codec --test framed -- --skip from_parts_empty_read_buf_does_not_spuriously_decode"
+test_cmd       = "cargo test -j 2 -p tokio-util --features codec --test framed from_parts_empty_read_buf_does_not_spuriously_decode"
+note = """
+`is_readable: size > 0` reads a buffer's *capacity* where it means its length. The entry point \
+the test uses is in framed.rs and the bug is in framed_impl.rs: one hop."""
+
+[[task]]
+id      = "R4-abstract-socket-leading-nul"
+family  = "R"
+commit  = "R4"
+prompt  = "Binding and connecting a Unix socket by an abstract name silently registers the wrong name — the address that comes back has an extra leading NUL byte and no longer matches what was asked for."
+real_fix = "0cea36fa3d60e7294a8e24a00b69c60b26c88c3d"
+parent   = "d6213594ca3767f182e8981fde7a119575e94c65"
+required_sites = ["tokio/src/net/unix/listener.rs", "tokio/src/net/unix/stream.rs"]
+hidden_tests   = ["tests/eval/hidden/R4-abstract-socket-leading-nul"]
+test_name      = "abstract_socket_name"
+build_cmd      = "cargo test -j 2 -p tokio --features full --test uds_stream --no-run"
+collateral_cmd = "cargo test -j 2 -p tokio --features full --test uds_stream -- --skip abstract_socket_name"
+test_cmd       = "cargo test -j 2 -p tokio --features full --test uds_stream abstract_socket_name"
+note = """
+The only task in the set where a one-file fix demonstrably does not pass. Both halves were run \
+in isolation during validation: listener.rs alone FAILED, stream.rs alone FAILED, both PASSED. \
+The same buggy expression at two sibling call sites — "grep every caller", enforced by a test.
+
+Needs Linux abstract Unix sockets. Fine in the container; would not run on macOS."""
+
+[[task]]
+id      = "R5-semaphore-reopens-after-forget"
+family  = "R"
+commit  = "R5"
+prompt  = "After a semaphore has been closed, forgetting permits on it makes it start handing out permits again as if it had never been closed."
+real_fix = "3ea11e2a5fb4139ca21b441044d98994a2b126c5"
+parent   = "c79121391db8f8d36d4213feeb25381caee110c7"
+required_sites = ["tokio/src/sync/batch_semaphore.rs"]
+hidden_tests   = ["tests/eval/hidden/R5-semaphore-reopens-after-forget"]
+test_name      = "forget_closed"
+build_cmd      = "cargo test -j 2 -p tokio --features full --test sync_semaphore --no-run"
+collateral_cmd = "cargo test -j 2 -p tokio --features full --test sync_semaphore -- --skip forget_closed"
+test_cmd       = "cargo test -j 2 -p tokio --features full --test sync_semaphore forget_closed"
+note = """
+The commit adds four tests and only `forget_closed` is red at the parent, so it alone is the \
+hidden test and the other three ride along as collateral. The public API a reporter would \
+reach for is `sync/semaphore.rs`; the dropped closed-bit is one mask in a CAS one file over."""

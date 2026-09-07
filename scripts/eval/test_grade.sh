@@ -30,12 +30,20 @@
 #   7-9.           the three distinguishable outcomes of a red baseline: a project test that
 #                  genuinely failed, main sources that would not compile, and a build that never
 #                  ran. The third must not wear the costume of the first.
+#   14-18.         the tokio corpus: an empty diff, the real historical fix, and a diff that
+#                  edits the TEST instead of the source — on the easiest task; then the real
+#                  fix and half of it on the one task whose fix demonstrably needs two files.
+#                  These are the only cases that exercise the Cargo path at all: a different
+#                  build command, a different hidden-test placement, and a different pair of
+#                  log signatures for "it did not compile" and "a test failed".
 #   10-13.         A2, B2, E1 and N1 on an empty diff — the two tasks no case above reaches at
 #                  all (the only Gradle toolchain, the only reflection-based hidden test), and
 #                  the two that joined the sweep last and whose hidden tests have never been run
 #                  through the grader.
 #
-# Runs thirteen gradings, twenty-six containers, offline. Costs nothing but a few minutes.
+# Runs eighteen gradings, thirty-six containers, offline. Costs nothing but a few minutes —
+# the five tokio cases are seconds each because the image pre-warms their cargo target
+# directories; if they are ever slow, the warm-up is broken and the sweep is about to be too.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -99,7 +107,16 @@ B1=B1-rename-crosses-the-seam
 RANKING_ONLY_TASKS="E1-untested-change N1-null-task"
 FULL_ARM_SET="A0 A1 A5"
 RANKING_ARM_SET="A1 A5"
-DEFAULT_TASKS="A1-idempotency-key-length A2-shared-type-change B1-rename-crosses-the-seam B2-orphaned-field-diagnosis C1-regression-recognised E1-untested-change N1-null-task"
+GENERATED_TASKS="A1-idempotency-key-length A2-shared-type-change B1-rename-crosses-the-seam B2-orphaned-field-diagnosis C1-regression-recognised E1-untested-change N1-null-task"
+TOKIO_TASKS="R1-stream-map-size-hint-overflow R2-lines-codec-invalid-utf8 R3-framed-spurious-decode R4-abstract-socket-leading-nul R5-semaphore-reopens-after-forget"
+
+# Duplicated from sweep.sh for the reason the ranking-only list above is duplicated: asking
+# sweep.sh which tasks it would run is not a check on which tasks it runs.
+case "${CORPUS:-generated}" in
+  generated) DEFAULT_TASKS="$GENERATED_TASKS" ;;
+  tokio)     DEFAULT_TASKS="$TOKIO_TASKS" ;;
+  *) echo "FAIL [plan] CORPUS=${CORPUS} is not a corpus this file knows" >&2; exit 1 ;;
+esac
 
 expected_cell_count() {  # tasks (space separated), arms restriction ("" = none), reps
   local tasks="$1" arms="$2" reps="$3" total=0 task base_arms n arm
@@ -158,6 +175,30 @@ if printf '%s\n' "$PLAN_A0" | grep -E '^(E1-untested-change|N1-null-task)/'; the
 fi
 echo "ok   ARMS=A0 plans 25 cells over the five three-arm tasks, zero on the ranking-only tasks"
 
+# --- 0b2. the two corpora plan their own sizes, and each other's not at all ---------------------
+
+# The generated corpus was measured at 95 cells and every number quoted from it rests on that
+# set; the tokio corpus is 75, and neither may drift into the other. Both are pinned here rather
+# than only through DEFAULT_TASKS above, because that variable follows CORPUS — so on its own it
+# would assert whatever the environment happened to say and agree with itself either way.
+#
+# `env -u TASKS` because an operator resuming a single task (`TASKS=…`, the documented resume)
+# would otherwise have their override answer a question about the whole corpus.
+for corpus in "generated:95" "tokio:75"; do
+  want="${corpus#*:}"
+  got="$(env -u TASKS CORPUS="${corpus%%:*}" DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" \
+           | tail -n +2 | wc -l)"
+  [ "$got" = "$want" ] \
+    || { echo "FAIL [corpus] CORPUS=${corpus%%:*} plans $got cells, not $want" >&2; exit 1; }
+done
+# A corpus name nothing knows must be refused, not silently defaulted to the generated one —
+# a typo there would report tokio numbers taken from the corpus the verdict already condemned.
+if env -u TASKS CORPUS=nonesuch DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" >/dev/null 2>&1; then
+  echo "FAIL [corpus] CORPUS=nonesuch was accepted rather than refused" >&2
+  exit 1
+fi
+echo "ok   corpus generated plans 95, tokio plans 75, an unknown corpus name is refused"
+
 # An ARMS value naming an arm arms_for() never returns for any task must be refused outright, not
 # silently intersected down to nothing — a plan that silently narrows to zero cells for every task
 # still exits 0 and reads as "ran, found nothing" rather than "you mistyped an arm."
@@ -189,6 +230,7 @@ mkdir -p "$TMP/tree/target/release" "$TMP/tree/scripts/eval"
 docker run --rm --entrypoint cat "$IMAGE" /usr/local/bin/nexus > "$TMP/tree/target/release/nexus"
 docker run --rm --entrypoint cat "$IMAGE" /usr/local/bin/nexus-hook > "$TMP/tree/scripts/eval/nexus-hook.sh"
 docker run --rm --entrypoint cat "$IMAGE" /usr/local/bin/fixture-build > "$TMP/tree/scripts/eval/build.sh"
+docker run --rm --entrypoint cat "$IMAGE" /usr/local/bin/bench-mtime > "$TMP/tree/scripts/eval/bench_mtime.sh"
 chmod +x "$TMP/tree/target/release/nexus"
 
 cp -r "$TMP/tree" "$TMP/tree-bad-nexus"
@@ -212,14 +254,15 @@ STAMPED="$("$CHECK_ARTIFACTS" "$IMAGE" "$TMP/tree")" \
   || { echo "FAIL [image-artifacts] the check refused a tree byte-identical to the image's" >&2; exit 1; }
 # What it prints is what meta.json stamps as the sweep's provenance, so it is asserted, not
 # assumed: one line per artifact, each carrying that file's real sha256.
-[ "$(printf '%s\n' "$STAMPED" | wc -l)" = 3 ] \
-  || { echo "FAIL [image-artifacts] the check stamped $(printf '%s\n' "$STAMPED" | wc -l) artifacts, not 3:" >&2
+[ "$(printf '%s\n' "$STAMPED" | wc -l)" = 4 ] \
+  || { echo "FAIL [image-artifacts] the check stamped $(printf '%s\n' "$STAMPED" | wc -l) artifacts, not 4:" >&2
        printf '%s\n' "$STAMPED" >&2; exit 1; }
 while read -r image_path sha; do
   case "$image_path" in
     /usr/local/bin/nexus)         tree_file="$TMP/tree/target/release/nexus" ;;
     /usr/local/bin/nexus-hook)    tree_file="$TMP/tree/scripts/eval/nexus-hook.sh" ;;
     /usr/local/bin/fixture-build) tree_file="$TMP/tree/scripts/eval/build.sh" ;;
+    /usr/local/bin/bench-mtime)   tree_file="$TMP/tree/scripts/eval/bench_mtime.sh" ;;
     *) echo "FAIL [image-artifacts] unknown artifact stamped: $image_path" >&2; exit 1 ;;
   esac
   [ "$sha" = "$(sha256sum "$tree_file" | cut -d' ' -f1)" ] \
@@ -244,7 +287,7 @@ for case in "tree-bad-nexus:target/release/nexus:one byte appended, identical --
   grep -q 'make bench-image' <<<"$REFUSAL" \
     || { echo "FAIL [image-artifacts] the refusal does not name the fix:" >&2; echo "$REFUSAL" >&2; exit 1; }
 done
-echo "ok   image-artifacts stamps all three, and refuses both a one-byte-different nexus of the" \
+echo "ok   image-artifacts stamps all four, and refuses both a one-byte-different nexus of the" \
   "same --version and a one-line-different build.sh, naming the file and the rebuild"
 
 # --- 0d. the check's artifact table must cover every tree file the Dockerfile bakes in ----------
@@ -281,9 +324,13 @@ while read -r src; do
   # from the host at run time instead. Adding it to the table would not be a stricter check, it
   # would be a comparison against a file that does not exist. See check_image_artifacts.sh's
   # header for the whole reason, including what image-side staleness that leaves uncovered.
-  if [ "$src" = "target/fixtures" ]; then
-    continue
-  fi
+  #
+  # A prefix, not the one literal path: the tokio corpus adds `target/fixtures/tokio` and
+  # `target/fixtures/tokio.prewarm.sh`, both COPYed and both consumed inside the RUN that uses
+  # them. The rule is about the directory, so it is written as the directory.
+  case "$src" in
+    target/fixtures | target/fixtures/*) continue ;;
+  esac
   grep -qxF "$src" <<<"$COVERED" || UNTRACKED="$UNTRACKED $src"
   # EVERY source, not only field 2: `COPY a b /dest/` is legal and bakes in both. Reading the
   # first alone would leave `b` uncompared with this case green — the silent narrowing this case
@@ -487,5 +534,113 @@ for case in "A2-shared-type-change:libs/common/src/test/java/mn/acme/common/Hidd
     "g[\"hidden_tests_placed\"] == [\"${case#*:}\"]" \
     'g["adjudicate"] == []'
 done
+
+
+# --- 14-18. the tokio corpus, on the Cargo path -------------------------------------------------
+#
+# Everything above grades Maven, Gradle or npm. Nothing above would notice if `cargo` were never
+# invoked, if the restored test file were never recompiled, or if a red cargo build were
+# attributed to the wrong gate — and a corpus that grades nothing is exactly what
+# docs/eval/tier2-corpus-verdict.md cost.
+#
+# The historical fix is reconstructed from the repository rather than committed as a patch file,
+# for the same reason the cases above build their diffs from the fixture: a patch file rots the
+# moment the corpus moves. `required_sites` is the source half of the real commit by
+# construction, so `git diff <parent> <fix> -- <sites>` IS the fix, with its test half excluded.
+real_fix_edit() {  # task [site...] -> a shell snippet that applies the historical source fix
+  local task="$1"; shift
+  local fix parent sites
+  fix="$(python3 "$LOOKUP" "$task" real_fix)"
+  parent="$(python3 "$LOOKUP" "$task" parent)"
+  if [ "$#" -gt 0 ]; then sites="$*"; else sites="$(python3 "$LOOKUP" "$task" required_sites | tr '\n' ' ')"; fi
+  # -s, so an empty diff — a moved path, a rewritten spec — fails here rather than silently
+  # synthesizing a no-op and reporting it as "the real fix does not pass".
+  echo "git diff $parent $fix -- $sites > \"\$TMP/fix.patch\" && test -s \"\$TMP/fix.patch\" && git apply \"\$TMP/fix.patch\""
+}
+
+R1=R1-stream-map-size-hint-overflow
+R4=R4-abstract-socket-leading-nul
+
+# 14. An empty diff is red on L1 and green everywhere else. L0 and L2 true is the load-bearing
+#     half: it says the crate compiled and the OTHER tests in that binary ran and passed, which
+#     is what `-- --skip` is for. If `--skip` stopped working, the task's own red test would
+#     land in L2 and every run of the corpus would look like collateral damage.
+mkdir -p "$TMP/tokio-empty"
+: > "$TMP/tokio-empty/diff.patch"
+"$GRADE" "$R1" "$TMP/tokio-empty" >/dev/null
+assert_grade tokio-empty \
+  'g["passed"] is False' \
+  'g["L1_hidden"] is False' \
+  'g["L0_build"] is True' \
+  'g["L2_collateral"] is True' \
+  'g["diff_empty"] is True' \
+  'g["L3_sites_missed"] == ["tokio-stream/src/stream_map.rs"]' \
+  'g["hidden_tests_placed"] == ["tokio-stream/tests/stream_stream_map.rs"]' \
+  'g["adjudicate"] == []'
+
+# The grade must come from the test running and failing, not from the crate failing to build:
+# those are the same `passed: false` and only the log tells them apart.
+grep -q 'test result: FAILED' "$TMP/tokio-empty/grade-hidden.log" \
+  || { echo "FAIL [tokio-empty] the hidden run did not report a failed test" >&2; exit 1; }
+echo "ok   tokio-empty red on L1 because the test ran and failed"
+
+# 15. The real commit's source half, and nothing else, must pass every gate.
+synthesize "$R1" tokio-fix "$(real_fix_edit "$R1")"
+"$GRADE" "$R1" "$TMP/tokio-fix" >/dev/null
+assert_grade tokio-fix \
+  'g["passed"] is True' \
+  'g["L0_build"] is True' \
+  'g["L1_hidden"] is True' \
+  'g["L2_collateral"] is True' \
+  'g["diff_applied"] is True' \
+  'g["L3_sites_found"] == ["tokio-stream/src/stream_map.rs"]' \
+  'g["adjudicate"] == []'
+
+# 16. The test is in the start state, so an agent can edit it. Here the failing assertion is
+#     simply deleted and the source is left broken. On the agent's own tree that is green; L1
+#     restores the author's copy, so it must be red. Without this case, cases 14 and 15 would
+#     both pass just as well if the restore step were a no-op.
+# Deleting the assertion, and only the assertion: the panic is raised inside `size_hint()`, so a
+# test that no longer calls it is green, and everything around it still type-checks. Cutting the
+# `insert`s too would leave `StreamMap::new()` with nothing to infer from and fail L0 for a
+# reason that has nothing to do with tampering.
+synthesize "$R1" tokio-tamper \
+  "sed -i '/assert_eq!(map.size_hint(), (usize::MAX, None));/d' tokio-stream/tests/stream_stream_map.rs"
+"$GRADE" "$R1" "$TMP/tokio-tamper" >/dev/null
+assert_grade tokio-tamper \
+  'g["passed"] is False' \
+  'g["L1_hidden"] is False' \
+  'g["L0_build"] is True' \
+  'g["L2_collateral"] is True' \
+  'g["L3_sites_found"] == []'
+grep -q 'test result: FAILED' "$TMP/tokio-tamper/grade-hidden.log" \
+  || { echo "FAIL [tokio-tamper] the gutted test was graded, not the restored one" >&2; exit 1; }
+echo "ok   tokio-tamper editing the test does not move the grade"
+
+# 17-18. The cross-file task. `--features full`, two sibling call sites, and a fix at either one
+#        alone that leaves the test red — proven in validation, asserted here, because it is the
+#        only property in the corpus that a one-file agent cannot fake.
+synthesize "$R4" tokio-r4-fix "$(real_fix_edit "$R4")"
+"$GRADE" "$R4" "$TMP/tokio-r4-fix" >/dev/null
+assert_grade tokio-r4-fix \
+  'g["passed"] is True' \
+  'g["L1_hidden"] is True' \
+  'g["L3_sites_missed"] == []' \
+  'g["hidden_tests_placed"] == ["tokio/tests/uds_stream.rs"]' \
+  'g["adjudicate"] == []'
+
+synthesize "$R4" tokio-r4-half "$(real_fix_edit "$R4" tokio/src/net/unix/listener.rs)"
+"$GRADE" "$R4" "$TMP/tokio-r4-half" >/dev/null
+assert_grade tokio-r4-half \
+  'g["passed"] is False' \
+  'g["L1_hidden"] is False' \
+  'g["L0_build"] is True' \
+  'g["L2_collateral"] is True' \
+  'g["L3_sites_found"] == ["tokio/src/net/unix/listener.rs"]' \
+  'g["L3_sites_missed"] == ["tokio/src/net/unix/stream.rs"]' \
+  'g["adjudicate"] == []'
+grep -q 'test result: FAILED' "$TMP/tokio-r4-half/grade-hidden.log" \
+  || { echo "FAIL [tokio-r4-half] half the fix was not caught by the test" >&2; exit 1; }
+echo "ok   tokio-r4-half one of the two call sites is not enough"
 
 echo "the grader fails an empty diff, passes a correct one, and says why in between"

@@ -62,6 +62,19 @@ trap 'rm -rf "$WORK"' EXIT
 git clone -q "$FIXTURE" "$WORK/repo"
 git -C "$WORK/repo" checkout -q "$COMMIT"
 
+# A Cargo task gets the image's pre-warmed target directory, and the two halves of that are
+# both required: the mtime pin is what lets cargo reuse the warm artifacts at all (see
+# bench_mtime.sh), and CARGO_TARGET_DIR is what keeps the agent's own builds out of /work —
+# where they would be root-owned, gigabytes, and inside the tree the diff is taken from.
+# Nothing here decides a grade; it decides whether the agent spends its first 75 seconds
+# waiting for a cold build.
+CARGO_TARGET_DIR=""
+if TASK_TEST_CMD="$(python3 "$ROOT/scripts/eval/task_lookup.py" "$TASK" test_cmd 2>/dev/null)" \
+   && [ -n "$TASK_TEST_CMD" ]; then
+  "$ROOT/scripts/eval/bench_mtime.sh" "$WORK/repo"
+  CARGO_TARGET_DIR="/cargo-target/$TASK"
+fi
+
 mkdir -p "$WORK/repo/.claude"
 cp "$ROOT/scripts/eval/arms/$ARM.json" "$WORK/repo/.claude/settings.json"
 
@@ -124,6 +137,7 @@ docker run --rm \
   -v "$WORK/home:/root/.claude:Z" \
   -e ANTHROPIC_API_KEY \
   -e IS_SANDBOX=1 \
+  ${CARGO_TARGET_DIR:+-e CARGO_TARGET_DIR="$CARGO_TARGET_DIR"} \
   -e HOST_UID="$(id -u)" \
   -e HOST_GID="$(id -g)" \
   "$IMAGE" \
