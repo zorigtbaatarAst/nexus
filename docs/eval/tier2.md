@@ -114,7 +114,8 @@ Filled in from `meta.json` and `summary.json` when a sweep completes.
 | Arms | A0 bare · A1 Nexus · A5 BM25 lexical control |
 | Repetitions | 5 per (task × arm) — 95 paid runs (5×3×5 + 2×2×5) |
 | Stamp | *(from `meta.json`)* |
-| Nexus version | *(from `meta.json`)* |
+| Nexus version | *(from `meta.json`)* — readability only; it cannot tell two builds of one version apart |
+| Nexus binary sha256 | *(from `meta.json`, read out of the image)* — the provenance that can be checked |
 | Image id | *(from `meta.json`)* |
 | Wall clock / total cost | *(from the sweep)* |
 
@@ -403,8 +404,15 @@ and the message you see says only that. Check the account's billing for the run,
 delete `.run-started` to pay for the cell again or leave the cell out of the sweep. Guessing
 either way silently double-charges or silently drops a run, which is why it stops.
 
-`meta.json` pins the image id, the nexus version and the model at the top of the run tree. A
-resume that disagrees with **the image or the model** is refused rather than half-mixed in; the
-nexus version is stamped and never compared, and the resume invocation above skips
-`bench-image`, so that is precisely the path where the host binary can differ from the version
-the tree claims.
+`meta.json` pins the image id, the model, the nexus version and — since the stale-binary
+incident — the sha256 of the `nexus` **inside the image**. A resume that disagrees with the
+image or the model is refused rather than half-mixed in.
+
+The version string is stamped and never compared, because it cannot carry this: the sweep that
+cost $37.62 ran an image built a day before the code it was reported against, and both binaries
+answered `nexus 0.3.0`. So before a fresh stamp, `scripts/eval/check_image_binary.sh` compares
+the image's `nexus` against `target/release/nexus` by content and refuses a mismatch, naming
+`make bench` / `make bench-image`. A resume does not repeat that comparison — the image id is a
+content address, so a matching id already proves the binary is the stamped one, and re-checking
+against a tree that may have moved during the sweep would refuse every such resume with no way
+out that the id pin would then accept.

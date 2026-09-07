@@ -13,6 +13,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RUN="$ROOT/scripts/eval/run.sh"
 GRADE="$ROOT/scripts/eval/grade.sh"
 GATE="$ROOT/scripts/eval/test_grade.sh"
+CHECK_BIN="$ROOT/scripts/eval/check_image_binary.sh"
 
 STAMP="${STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
 BASE="$ROOT/docs/eval/runs/$STAMP"
@@ -174,6 +175,15 @@ if [ -f "$META" ]; then
   # a regenerated corpus would still change what run.sh/grade.sh actually clone at run time.
   # Out of scope for what this task was asked to stamp (image + nexus version) — flagged here so
   # a future reader doesn't assume this guard is complete.
+  #
+  # The image/tree content check below is deliberately NOT repeated here. Resuming compares the
+  # image to the *stamp*, not to the tree: image ids are content addresses, so a matching
+  # PREV_IMAGE_ID already proves the binary inside is byte-identical to the one the earlier
+  # cells ran — the stamped nexus_image_sha256 is what the sweep is reported against, and it
+  # cannot have moved. Re-checking against the tree here would instead refuse every resume in
+  # which someone rebuilt target/release/nexus during the hours the sweep was running, and the
+  # only way out of that refusal is a rebuilt image, which the id pin then refuses in turn. A
+  # guard whose two halves deadlock gets disabled, and then guards nothing.
   {
     read -r PREV_IMAGE_ID PREV_MODEL PREV_REPS
     read -r PREV_TASKS
@@ -224,18 +234,27 @@ print(' '.join(m.get('tasks', [])))
     done
   fi
 else
-  python3 - "$META" "$STAMP" "$IMAGE" "$IMAGE_ID" "$NEXUS_VERSION" "$MODEL" "$REPS" "${TASKS[@]}" <<'PY'
+  # A fresh sweep is reported against this tree, so the image must contain this tree's binary.
+  # Compared by content, and stamped by content: `nexus_version` below is the host binary's
+  # --version, which is what stamped `nexus 0.3.0` over an image built a day earlier. It stays
+  # for readability; nexus_image_sha256 is the field that can actually be checked, because it
+  # is taken from inside the image and changes with every code change whether or not anyone
+  # bumped a version. Anyone can rebuild a commit and compare it. See check_image_binary.sh.
+  IMAGE_NEXUS_SHA="$("$CHECK_BIN" "$IMAGE" "$NEXUS_BIN")"
+
+  python3 - "$META" "$STAMP" "$IMAGE" "$IMAGE_ID" "$NEXUS_VERSION" "$IMAGE_NEXUS_SHA" "$MODEL" "$REPS" "${TASKS[@]}" <<'PY'
 import json
 import sys
 
-path, stamp, image, image_id, nexus_version, model, reps = sys.argv[1:8]
-tasks = sys.argv[8:]
+path, stamp, image, image_id, nexus_version, nexus_image_sha256, model, reps = sys.argv[1:9]
+tasks = sys.argv[9:]
 json.dump(
     {
         "stamp": stamp,
         "image": image,
         "image_id": image_id,
         "nexus_version": nexus_version,
+        "nexus_image_sha256": nexus_image_sha256,
         "model": model,
         "reps": int(reps),
         "tasks": sorted(tasks),
@@ -244,7 +263,7 @@ json.dump(
     indent=2,
 )
 PY
-  echo "sweep.sh: stamped $META (image $IMAGE_ID, $NEXUS_VERSION)"
+  echo "sweep.sh: stamped $META (image $IMAGE_ID, $NEXUS_VERSION, nexus sha256 $IMAGE_NEXUS_SHA)"
 fi
 
 # --- the sweep itself -----------------------------------------------------------------------

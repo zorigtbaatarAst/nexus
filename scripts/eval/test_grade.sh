@@ -7,6 +7,8 @@
 #
 #   0. plan        not a grading at all: the sweep's own cell plan, which nothing else in this
 #                  repository executes. Free, and first for that reason.
+#   0c. image-binary  also not a grading: that the image's `nexus` is the tree's, by content.
+#                  One container, no build. A stale image cost 95 paid runs once.
 #   1. empty       an empty diff must fail — and must fail on L1 *only*. L0 and L2 true proves
 #                  the container, the mount and the build actually worked; a mechanical failure
 #                  would zero them too and be indistinguishable from a bad agent.
@@ -160,6 +162,48 @@ if ARMS="A0 A9" DRY_RUN=1 "$ROOT/scripts/eval/sweep.sh" >/dev/null 2>&1; then
   exit 1
 fi
 echo "ok   ARMS naming an arm arms_for() never returns is refused, not silently honoured"
+
+# --- 0c. the image's nexus must be this tree's nexus, by content --------------------------------
+
+# The $37.62 case. Both binaries answered `nexus 0.3.0`; one of them was a day old. So the two
+# fixtures here are the image's own binary and that same binary with one byte appended: they
+# report an identical --version (asserted, because that is the point) and differ by content.
+# Any check that compares version strings, timestamps, image ids or paths passes both, and the
+# refusal case below fails. That is what makes this test unable to be satisfied by the weakened
+# comparison it exists to forbid.
+CHECK_BIN="$ROOT/scripts/eval/check_image_binary.sh"
+IMAGE="${IMAGE:-nexus-bench:latest}"
+
+docker run --rm --entrypoint cat "$IMAGE" /usr/local/bin/nexus > "$TMP/nexus-same"
+chmod +x "$TMP/nexus-same"
+cp "$TMP/nexus-same" "$TMP/nexus-one-byte-longer"
+printf '\0' >> "$TMP/nexus-one-byte-longer"   # still a valid ELF: trailing bytes are ignored
+
+SAME_VERSION="$("$TMP/nexus-same" --version)"
+LONGER_VERSION="$("$TMP/nexus-one-byte-longer" --version)"
+[ "$SAME_VERSION" = "$LONGER_VERSION" ] \
+  || { echo "FAIL [image-binary] the two fixtures disagree on --version ('$SAME_VERSION' vs" >&2
+       echo "'$LONGER_VERSION'), so the mismatch case below no longer proves that a version" >&2
+       echo "string cannot detect it. Fix the fixtures, not the assertion." >&2
+       exit 1; }
+
+CHECK_SHA="$("$CHECK_BIN" "$IMAGE" "$TMP/nexus-same")" \
+  || { echo "FAIL [image-binary] the check refused a binary byte-identical to the image's" >&2; exit 1; }
+[ "$CHECK_SHA" = "$(sha256sum "$TMP/nexus-same" | cut -d' ' -f1)" ] \
+  || { echo "FAIL [image-binary] the check printed '$CHECK_SHA', not the binary's sha256 —" >&2
+       echo "that value is what meta.json stamps as the sweep's provenance." >&2
+       exit 1; }
+
+if REFUSAL="$("$CHECK_BIN" "$IMAGE" "$TMP/nexus-one-byte-longer" 2>&1)"; then
+  echo "FAIL [image-binary] the check PASSED a binary that differs from the image's by one" >&2
+  echo "byte while reporting the same --version. This is the defect that cost 95 paid runs." >&2
+  exit 1
+fi
+# A refusal nobody can act on is how the operator ends up reaching for SKIP_GATE.
+grep -q 'make bench-image' <<<"$REFUSAL" \
+  || { echo "FAIL [image-binary] the refusal does not name the fix:" >&2; echo "$REFUSAL" >&2; exit 1; }
+echo "ok   image-binary passes an identical binary, refuses a one-byte-different one of the" \
+  "same --version, and names the rebuild"
 
 # --- 1. an empty diff must not pass ------------------------------------------------------------
 
