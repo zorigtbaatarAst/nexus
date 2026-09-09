@@ -6,7 +6,7 @@
 //! their symptoms, produced zero hits and three empty packages, while the code they named sat
 //! in the index the whole time.
 
-use nexus_core::context::{Purpose, TaskRequest, TASK_BUDGET_TOKENS};
+use nexus_core::context::{Intent, Purpose, SeedStrength, TaskRequest, TASK_BUDGET_TOKENS};
 use nexus_core::Engine;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -545,4 +545,52 @@ fn a_wide_family_is_refused_even_when_near_misses_crowd_the_window() {
         "and the package has to say nothing anchored: {:?}",
         pkg.notes
     );
+}
+
+/// The stronger reading of a symbol wins whichever reading arrives first.
+///
+/// A seed's strength is decoupled from its `SeedSource`, and one source — `NameMatch` — carries
+/// all three grades: a code-shaped word, a prose word naming exactly one symbol, and a prose
+/// word that is only a token of some names. So `offer`'s merge cannot follow the source the way
+/// `why` does; it takes the *stronger* strength. Without that, a symbol offered first as one
+/// token of a family and then as a name someone typed would keep the 0.3 — the source did not
+/// improve, so nothing would update — and the grade would depend on the order the words happen
+/// to be sorted in.
+///
+/// Both orders are asserted, because a test that exercised only one would pass against exactly
+/// the bug this rule exists to prevent. Candidate words are sorted, and ASCII puts a capital
+/// before a lowercase letter, so the two prompts below deliver the two readings in opposite
+/// orders: `idempotency` < `idempotencyKey`, but `getIdempotencyKey` < `idempotency`.
+#[test]
+fn the_stronger_reading_of_a_word_wins_whichever_arrives_first() {
+    let (_root, engine) = scanned_camel("merge");
+
+    for (order, text, fqn) in [
+        (
+            "weak first",
+            "the idempotencyKey is reused whenever idempotency is retried",
+            "#idempotencyKey",
+        ),
+        (
+            "strong first",
+            "getIdempotencyKey returns the wrong idempotency after a retry",
+            "#getIdempotencyKey(",
+        ),
+    ] {
+        let mut r = TaskRequest::session(TASK_BUDGET_TOKENS);
+        r.text = text.into();
+        r.purpose = Purpose::Task;
+        let seeds = engine.seeds(&r, Intent::Debug).expect("seeds").seeds;
+        let seed = seeds
+            .iter()
+            .find(|s| s.symbol.fqn.contains(fqn))
+            .unwrap_or_else(|| panic!("{order}: {fqn} must seed at all: {seeds:?}"));
+        assert_eq!(
+            seed.strength,
+            SeedStrength::CodeShape,
+            "{order}: `idempotency` offers this symbol as one token of a four-name family, and \
+             the code-shaped word names it outright. The stronger reading must survive the \
+             merge: {seed:?}"
+        );
+    }
 }

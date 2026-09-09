@@ -140,7 +140,7 @@ asserted.
 One function. Every term recorded per candidate.
 
 ```
-score(item) =   w_seed  · seed_proximity        // 1.0 at a seed; the impact score otherwise
+score(item) =   w_seed  · seed_proximity        // a seed's strength; the impact score otherwise
               + w_graph · graph_score           // Π edge_weight × confidence along the chain
               + w_churn · churn                 // log1p(commits touching it in window) / log1p(max)
               + w_recent· recency               // exp(-age_days / half_life)
@@ -153,6 +153,10 @@ score(item) =   w_seed  · seed_proximity        // 1.0 at a seed; the impact sc
 
 Sub-terms, all deterministic:
 
+- `seed_proximity` at a seed: a word carrying code shape 1.0, a prose word naming exactly one
+  symbol 0.6, a prose word that is only a token of some names 0.3. Evidence strength, not a
+  flat 1.0 — a prose word that happens to name a symbol must not anchor as hard as a name
+  someone typed. No grade is zero: the weaker ones still seed and lose rank contests.
 - `subject_match`: exact FQN 1.0, module prefix 0.6, project 0.3 — as `memory-model.md` §3
   already specifies.
 - `source_weight`: human 1.0, deterministic 0.9, ai 0.7 — likewise.
