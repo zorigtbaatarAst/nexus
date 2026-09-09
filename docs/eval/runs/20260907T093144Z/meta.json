@@ -1,0 +1,22 @@
+{
+  "stamp": "20260907T093144Z",
+  "image": "nexus-bench:latest",
+  "image_id": "sha256:8ef914a062de21701d8b3056534e826984f1c6376ab87e65fbda73f2be9ed494",
+  "nexus_version": "nexus 0.3.0",
+  "nexus_image_sha256": "77c2f94c2c53c4e130698447f251b8245f5919dfa33129ed654480e84f84187e",
+  "image_artifact_sha256": {
+    "/usr/local/bin/nexus": "77c2f94c2c53c4e130698447f251b8245f5919dfa33129ed654480e84f84187e",
+    "/usr/local/bin/nexus-hook": "2c594d5d21306364093742569cd8492296e60888d9b67fa1bea0cab622f34634",
+    "/usr/local/bin/fixture-build": "edfc5f53b29236062af1bc89a35f211b6593be20ff96b38943a03a23e6c152cb",
+    "/usr/local/bin/bench-mtime": "43c1972b6811e38155e63298e5430c56dad99ca31c570f72163b2abdb597af07"
+  },
+  "model": "claude-opus-5",
+  "reps": 5,
+  "tasks": [
+    "R1-stream-map-size-hint-overflow",
+    "R2-lines-codec-invalid-utf8",
+    "R3-framed-spurious-decode",
+    "R4-abstract-socket-leading-nul",
+    "R5-semaphore-reopens-after-forget"
+  ]
+}

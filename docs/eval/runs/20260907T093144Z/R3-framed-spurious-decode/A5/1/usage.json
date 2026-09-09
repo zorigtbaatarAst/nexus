@@ -1,0 +1,15 @@
+{
+  "task": "R3-framed-spurious-decode",
+  "arm": "A5",
+  "repetition": 1,
+  "model": "claude-opus-5",
+  "input_tokens": 16,
+  "output_tokens": 2934,
+  "cache_read_tokens": 253482,
+  "cache_creation_tokens": 20145,
+  "total_cost_usd": 0.40262000000000003,
+  "num_turns": 10,
+  "duration_api_ms": 41863,
+  "claude_exit": 0,
+  "claimed_done": false
+}

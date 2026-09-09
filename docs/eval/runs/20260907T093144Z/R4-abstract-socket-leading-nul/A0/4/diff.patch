@@ -1,0 +1,34 @@
+diff --git a/tokio/src/net/unix/listener.rs b/tokio/src/net/unix/listener.rs
+index ddd9669f..8a5dd4eb 100644
+--- a/tokio/src/net/unix/listener.rs
++++ b/tokio/src/net/unix/listener.rs
+@@ -80,8 +80,10 @@ impl UnixListener {
+         #[cfg(any(target_os = "linux", target_os = "android"))]
+         let addr = {
+             let os_str_bytes = path.as_ref().as_os_str().as_bytes();
+-            if os_str_bytes.starts_with(b"\0") {
+-                StdSocketAddr::from_abstract_name(os_str_bytes)?
++            // `from_abstract_name` prepends the leading null byte itself, so
++            // it must be given the name without it.
++            if let Some(name) = os_str_bytes.strip_prefix(b"\0") {
++                StdSocketAddr::from_abstract_name(name)?
+             } else {
+                 StdSocketAddr::from_pathname(path)?
+             }
+diff --git a/tokio/src/net/unix/stream.rs b/tokio/src/net/unix/stream.rs
+index 466ed21c..d995a9a2 100644
+--- a/tokio/src/net/unix/stream.rs
++++ b/tokio/src/net/unix/stream.rs
+@@ -76,8 +76,10 @@ impl UnixStream {
+         #[cfg(any(target_os = "linux", target_os = "android"))]
+         let addr = {
+             let os_str_bytes = path.as_ref().as_os_str().as_bytes();
+-            if os_str_bytes.starts_with(b"\0") {
+-                StdSocketAddr::from_abstract_name(os_str_bytes)?
++            // `from_abstract_name` prepends the leading null byte itself, so
++            // it must be given the name without it.
++            if let Some(name) = os_str_bytes.strip_prefix(b"\0") {
++                StdSocketAddr::from_abstract_name(name)?
+             } else {
+                 StdSocketAddr::from_pathname(path)?
+             }

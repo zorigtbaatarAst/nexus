@@ -1,0 +1,21 @@
+{
+  "task": "R2-lines-codec-invalid-utf8",
+  "repo": "tokio",
+  "commit": "a75c989ce4054895ad619bb3e7fbc059c658a557",
+  "L0_build": true,
+  "L1_hidden": true,
+  "L2_collateral": true,
+  "L3_sites_found": [
+    "tokio-util/src/codec/lines_codec.rs"
+  ],
+  "L3_sites_missed": [],
+  "passed": true,
+  "diff_empty": false,
+  "diff_applied": true,
+  "hidden_tests_placed": [
+    "tokio-util/tests/codecs.rs"
+  ],
+  "baseline_exit": 0,
+  "graded_exit": 0,
+  "adjudicate": []
+}

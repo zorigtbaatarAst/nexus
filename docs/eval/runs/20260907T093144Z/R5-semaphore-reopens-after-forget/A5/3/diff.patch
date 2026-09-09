@@ -1,0 +1,28 @@
+diff --git a/tokio/src/sync/batch_semaphore.rs b/tokio/src/sync/batch_semaphore.rs
+index 8662af3b..ec6b1f14 100644
+--- a/tokio/src/sync/batch_semaphore.rs
++++ b/tokio/src/sync/batch_semaphore.rs
+@@ -129,6 +129,8 @@ impl Semaphore {
+     /// future.
+     pub(crate) const MAX_PERMITS: usize = usize::MAX >> 3;
+     const CLOSED: usize = 1;
++    /// Mask of the flag bits reserved in the low bits of the permit counter.
++    const FLAG_MASK: usize = (1 << Self::PERMIT_SHIFT) - 1;
+     // The least-significant bit in the number of permits is reserved to use
+     // as a flag indicating that the semaphore has been closed. Consequently
+     // PERMIT_SHIFT is used to leave that bit for that purpose.
+@@ -382,9 +384,13 @@ impl Semaphore {
+         loop {
+             let curr = curr_bits >> Self::PERMIT_SHIFT;
+             let new = curr.saturating_sub(n);
++            // Preserve the flag bits (e.g. `CLOSED`) stored in the low bits of
++            // the counter; otherwise forgetting permits would reopen a closed
++            // semaphore.
++            let flags = curr_bits & Self::FLAG_MASK;
+             match self.permits.compare_exchange_weak(
+                 curr_bits,
+-                new << Self::PERMIT_SHIFT,
++                (new << Self::PERMIT_SHIFT) | flags,
+                 AcqRel,
+                 Acquire,
+             ) {

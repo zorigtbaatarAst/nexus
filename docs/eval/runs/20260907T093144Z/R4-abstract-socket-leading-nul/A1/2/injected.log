@@ -1,0 +1,60 @@
+=== SessionStart injected=132 bytes
+Project: work
+  languages    rust (711)
+  build        cargo · cargo
+
+considered 0 · included 0 · excluded 0 · 155 of 800 tokens
+=== UserPromptSubmit prompt=192 injected=8021 bytes
+Code (52)
+  tokio::tests::io_panic::unix  name match             tokio/tests/io_panic.rs:46 · seed: 'Unix' in the request
+  tokio-util::tests::udp::ByteCodec  name match        tokio-util/tests/udp.rs:79 · seed: 'byte' is a word in the name ByteCodec
+  tokio::tests::rt_basic::no_extra_poll  name match    tokio/tests/rt_basic.rs:49 · seed: 'extra' is a word in the name no_extra_poll
+  tokio::process::unix  name match                     tokio/src/process/mod.rs:234 · seed: 'Unix' in the request
+  tokio::tests::tcp_accept::no_extra_poll  name match  tokio/tests/tcp_accept.rs:66 · seed: 'extra' is a word in the name no_extra_poll
+  tokio::signal::unix  name match                      tokio/src/signal/mod.rs:63 · seed: 'Unix' in the request
+  tokio::tests::io_panic::unix::MockFd  name match     tokio/tests/io_panic.rs:49 · seed: 'Unix' in the request (member of tokio::tests::io_panic::unix)
+  tokio-util::tests::udp::send_framed_byte_codec  name match tokio-util/tests/udp.rs:27 · seed: 'byte' is a word in the name send_framed_byte_codec
+  tokio::tests::uds_stream::abstract_socket_name  name match tokio/tests/uds_stream.rs:431 · seed: 'abstract' is a word in the name abstract_socket_name
+  tokio::tests::fs_canonicalize_dir::canonicalize_root_dir_unix  name match tokio/tests/fs_canonicalize_dir.rs:8 · seed: 'Unix' in the request
+  tokio::tests::io_panic::unix::MockFd#as_raw_fd  name match tokio/tests/io_panic.rs:52 · seed: 'Unix' in the request (member of tokio::tests::io_panic::unix)
+  tokio_util::net::unix  name match                    tokio-util/src/net/mod.rs:10 · seed: 'Unix' in the request
+  tokio::tests::io_async_fd::await_error_readiness_invalid_address  name match tokio/tests/io_async_fd.rs:761 · seed: 'address' is a word in the name await_error_readiness_invalid_address
+  tokio-util::tests::udp::ByteCodec#decode  name match tokio-util/tests/udp.rs:85 · seed: 'byte' is a word in the name ByteCodec (member of tokio-util::tests::udp::ByteCodec)
+  tokio::signal::unix::OsExtraData  name match         tokio/src/signal/unix.rs:51 · seed: 'extra' is a word in the name OsExtraData
+  tokio-util::tests::length_delimited::read_one_byte_length_field  name match tokio-util/tests/length_delimited.rs:325 · seed: 'byte' is a word in the name read_one_byte_length_field
+  tokio::tests::net_unix_pipe::from_file_detects_wrong_access_mode  name match tokio/tests/net_unix_pipe.rs:247 · seed: 'wrong' is a word in the name from_file_detects_wrong_access_mode
+  tokio::signal::unix::tests  name match               tokio/src/signal/unix.rs:505 · seed: 'Unix' in the request (member of tokio::signal::unix)
+  tokio::signal::unix::Signal  name match              tokio/src/signal/unix.rs:363 · seed: 'Unix' in the request (member of tokio::signal::unix)
+  tests-build::tests::fail::macros_type_mismatch::extra_semicolon  name match tests-build/tests/fail/macros_type_mismatch.rs:14 · seed: 'extra' is a word in the name extra_semicolon
+  tokio::net::tcp::socket::convert_address  name match tokio/src/net/tcp/socket.rs:774 · seed: 'address' is a word in the name convert_address
+  tokio::process::unix::Pipe  name match               tokio/src/process/unix/mod.rs:189 · seed: 'Unix' in the request (member of tokio::process::unix)
+  tokio::process::unix::reap  name match               tokio/src/process/unix/mod.rs:27 · seed: 'Unix' in the request (member of tokio::process::unix)
+  tokio::process::unix::Child  name match              tokio/src/process/unix/mod.rs:106 · seed: 'Unix' in the request (member of tokio::process::unix)
+  tokio::util::linked_list::tests::remove_by_address  name match tokio/src/util/linked_list.rs:592 · seed: 'address' is a word in the name remove_by_address
+  tokio::process::unix::orphan::Wait  name match       tokio/src/process/unix/orphan.rs:9 · seed: 'Unix' in the request (member of tokio::process::unix)
+  tokio::process::unix::orphan::Wait#id  name match    tokio/src/process/unix/orphan.rs:12 · seed: 'Unix' in the request (member of tokio::process::unix)
+  tokio::process::unix::orphan::test  name match       tokio/src/process/unix/orphan.rs:133 · seed: 'Unix' in the request (member of tokio::process::unix)
+  tokio::signal::windows::sys::OsExtraData  name match tokio/src/signal/windows/sys.rs:82 · seed: 'extra' is a word in the name OsExtraData
+  tokio::process::unix::pidfd_reaper::test  name match tokio/src/process/unix/pidfd_reaper.rs:224 · seed: 'Unix' in the request (member of tokio::process::unix)
+  tokio::process::unix::pidfd_reaper::Pidfd  name match tokio/src/process/unix/pidfd_reaper.rs:26 · seed: 'Unix' in the request (member of tokio::process::unix)
+  tokio::process::unix::reap::test  name match         tokio/src/process/unix/reap.rs:133 · seed: 'Unix' in the request (member of tokio::process::unix)
+  tokio::process::unix::reap::Reaper  name match       tokio/src/process/unix/reap.rs:16 · seed: 'Unix' in the request (member of tokio::process::unix)
+  tokio::process::unix::pidfd_reaper::Pidfd#open  name match tokio/src/process/unix/pidfd_reaper.rs:31 · seed: 'Unix' in the request (member of tokio::process::unix)
+  tokio::process::unix::reap::Reaper#deref  name match tokio/src/process/unix/reap.rs:33 · seed: 'Unix' in the request (member of tokio::process::unix)
+  tokio_util::net::unix::UnixListener#local_addr  name match tokio-util/src/net/unix/mod.rs:15 · seed: 'Unix' in the request (member of tokio_util::net::unix)
+  tokio_util::net::unix::UnixListener#poll_accept  name match tokio-util/src/net/unix/mod.rs:11 · seed: 'Unix' in the request (member of tokio_util::net::unix)
+  tokio::runtime::scheduler::multi_thread_alt::idle::IdleMap#matches  name match tokio/src/runtime/scheduler/multi_thread_alt/idle.rs:370 · seed: 'matches' in the request names exactly one symbol
+  tokio::signal::windows::sys::OsExtraData#init  name match tokio/src/signal/windows/sys.rs:85 · seed: 'extra' is a word in the name OsExtraData (member of tokio::signal::windows::sys::OsExtraData)
+  tokio::signal::registry::globals  depth 1            tokio/src/signal/registry.rs:162 · forward: via calls tokio::signal::unix::signal_enable
+  tokio::sync::mpsc::unbounded::unbounded_channel  depth 1 tokio/src/sync/mpsc/unbounded.rs:95 · forward: via calls tokio::tests::tcp_accept::no_extra_poll
+  tokio::util::linked_list::tests::push_all  depth 1   tokio/src/util/linked_list.rs:519 · forward: via calls tokio::util::linked_list::tests::remove_by_address
+  tokio::util::linked_list::tests::collect_list  depth 1 tokio/src/util/linked_list.rs:509 · forward: via calls tokio::util::linked_list::tests::remove_by_address
+  tokio::io::ready::Ready  depth 1                     tokio/src/io/ready.rs:21 · forward: via calls tokio::process::unix::pidfd_reaper::PidfdReaperInner#poll
+  tokio::signal::registry::Init  depth 1               tokio/src/signal/registry.rs:55 · forward: via implements tokio::signal::unix::OsExtraData
+  tokio::process::Command#arg  depth 1                 tokio/src/process/mod.rs:373 · forward: via calls tokio::process::unix::pidfd_reaper::test::is_pidfd_available
+  tokio::process::Command#output  depth 1              tokio/src/process/mod.rs:966 · forward: via calls tokio::process::unix::pidfd_reaper::test::is_pidfd_available
+  tokio::io::async_read::AsyncRead  depth 1            tokio/src/io/async_read.rs:44 · forward: via implements tokio::process::unix::ChildStdio
+  tokio::io::async_fd::AsyncFdTryNewError#source  depth 1 tokio/src/io/async_fd.rs:1352 · forward: via calls tokio::process::unix::pidfd_reaper::is_rt_shutdown_err
+  tokio::signal::registry::Globals#storage  depth 1    tokio/src/signal/registry.rs:146 · forward: via calls tokio::signal::unix::signal_enable
+  tokio::process::kill::Kill  depth 1                  tokio/src/process/kill.rs:4 · forward: via implements tokio::process::unix::Child
+  tokio_util::codec::encoder::Encoder  depth 1         tokio-util/src/codec/encoder.rs:8 · forward: via implements tokio-util::tests::udp::ByteCodec

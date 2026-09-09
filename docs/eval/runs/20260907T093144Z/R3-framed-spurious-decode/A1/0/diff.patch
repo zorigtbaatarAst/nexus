@@ -1,0 +1,25 @@
+diff --git a/tokio-util/src/codec/framed_impl.rs b/tokio-util/src/codec/framed_impl.rs
+index 5647023f..1d370281 100644
+--- a/tokio-util/src/codec/framed_impl.rs
++++ b/tokio-util/src/codec/framed_impl.rs
+@@ -65,6 +65,11 @@ impl Default for WriteFrame {
+ 
+ impl From<BytesMut> for ReadFrame {
+     fn from(mut buffer: BytesMut) -> Self {
++        // The buffer is only readable if it actually holds bytes to decode.
++        // Spare capacity is not data, so an empty buffer recycled from
++        // `into_parts()` must not trigger a `decode` call before the first read.
++        let is_readable = !buffer.is_empty();
++
+         let size = buffer.capacity();
+         if size < INITIAL_CAPACITY {
+             buffer.reserve(INITIAL_CAPACITY - size);
+@@ -72,7 +77,7 @@ impl From<BytesMut> for ReadFrame {
+ 
+         Self {
+             buffer,
+-            is_readable: size > 0,
++            is_readable,
+             eof: false,
+             has_errored: false,
+         }

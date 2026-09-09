@@ -1,0 +1,22 @@
+{
+  "task": "R4-abstract-socket-leading-nul",
+  "repo": "tokio",
+  "commit": "add97230abe448b6f0d7a79924400791163e300a",
+  "L0_build": true,
+  "L1_hidden": true,
+  "L2_collateral": true,
+  "L3_sites_found": [
+    "tokio/src/net/unix/listener.rs",
+    "tokio/src/net/unix/stream.rs"
+  ],
+  "L3_sites_missed": [],
+  "passed": true,
+  "diff_empty": false,
+  "diff_applied": true,
+  "hidden_tests_placed": [
+    "tokio/tests/uds_stream.rs"
+  ],
+  "baseline_exit": 0,
+  "graded_exit": 0,
+  "adjudicate": []
+}

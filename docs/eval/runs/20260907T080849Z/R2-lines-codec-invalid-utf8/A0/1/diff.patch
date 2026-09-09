@@ -1,0 +1,14 @@
+diff --git a/tokio-util/src/codec/lines_codec.rs b/tokio-util/src/codec/lines_codec.rs
+index 47f68d88..1675bfa9 100644
+--- a/tokio-util/src/codec/lines_codec.rs
++++ b/tokio-util/src/codec/lines_codec.rs
+@@ -175,8 +175,8 @@ impl Decoder for LinesCodec {
+                 } else {
+                     let line = buf.split_to(buf.len());
+                     let line = without_carriage_return(&line);
+-                    let line = utf8(line)?;
+                     self.next_index = 0;
++                    let line = utf8(line)?;
+                     Some(line.to_string())
+                 }
+             }

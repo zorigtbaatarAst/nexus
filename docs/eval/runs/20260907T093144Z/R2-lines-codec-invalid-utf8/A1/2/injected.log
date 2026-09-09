@@ -1,0 +1,11 @@
+=== SessionStart injected=132 bytes
+Project: work
+  languages    rust (717)
+  build        cargo · cargo
+
+considered 0 · included 0 · excluded 0 · 155 of 800 tokens
+=== UserPromptSubmit prompt=166 injected=504 bytes
+Code (3)
+  tokio::time::error::Error#invalid  name match        tokio/src/time/error.rs:78 · seed: 'invalid' in the request names exactly one symbol
+  tokio::tests::test_clock::resume_lets_time_move_forward_instead_of_resetting_it  name match tokio/tests/test_clock.rs:7 · seed: 'instead' is a word in the name resume_lets_time_move_forward_instead_of_resetting_it
+  tokio::time::error::Error  depth 1                   tokio/src/time/error.rs:26 · forward: via calls tokio::time::error::Error#invalid

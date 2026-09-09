@@ -1,0 +1,15 @@
+{
+  "task": "R2-lines-codec-invalid-utf8",
+  "arm": "A1",
+  "repetition": 2,
+  "model": "claude-opus-5",
+  "input_tokens": 20,
+  "output_tokens": 3447,
+  "cache_read_tokens": 273194,
+  "cache_creation_tokens": 19221,
+  "total_cost_usd": 0.415082,
+  "num_turns": 12,
+  "duration_api_ms": 54756,
+  "claude_exit": 0,
+  "claimed_done": false
+}

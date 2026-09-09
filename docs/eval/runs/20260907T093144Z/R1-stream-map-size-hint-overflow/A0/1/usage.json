@@ -1,0 +1,15 @@
+{
+  "task": "R1-stream-map-size-hint-overflow",
+  "arm": "A0",
+  "repetition": 1,
+  "model": "claude-opus-5",
+  "input_tokens": 12,
+  "output_tokens": 1633,
+  "cache_read_tokens": 132784,
+  "cache_creation_tokens": 10279,
+  "total_cost_usd": 0.211078,
+  "num_turns": 7,
+  "duration_api_ms": 24781,
+  "claude_exit": 0,
+  "claimed_done": false
+}

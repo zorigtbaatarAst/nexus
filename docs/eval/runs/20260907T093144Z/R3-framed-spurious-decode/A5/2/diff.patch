@@ -1,0 +1,21 @@
+diff --git a/tokio-util/src/codec/framed_impl.rs b/tokio-util/src/codec/framed_impl.rs
+index 5647023f..69153f9f 100644
+--- a/tokio-util/src/codec/framed_impl.rs
++++ b/tokio-util/src/codec/framed_impl.rs
+@@ -70,9 +70,15 @@ impl From<BytesMut> for ReadFrame {
+             buffer.reserve(INITIAL_CAPACITY - size);
+         }
+ 
++        // Only start in the `framing` state if the buffer actually holds bytes
++        // that `decode` could turn into a frame. A buffer that is merely
++        // allocated (e.g. one recycled by `into_parts`) must start in `reading`
++        // so we don't call `decode` before reading anything.
++        let is_readable = !buffer.is_empty();
++
+         Self {
+             buffer,
+-            is_readable: size > 0,
++            is_readable,
+             eof: false,
+             has_errored: false,
+         }

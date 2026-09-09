@@ -1,0 +1,23 @@
+     Locking 192 packages to latest compatible versions
+      Adding criterion v0.5.1 (available: v0.8.2)
+      Adding hashbrown v0.14.5 (available: v0.17.1)
+      Adding http v0.2.12 (available: v1.5.0)
+      Adding minicov v0.3.8 (available: v0.3.9)
+      Adding mio-aio v0.9.0 (available: v2.0.0)
+      Adding mockall v0.11.4 (available: v0.13.1)
+      Adding rand v0.8.8 (available: v0.9.5)
+      Adding rand_chacha v0.3.1 (available: v0.9.0)
+      Adding socket2 v0.5.10 (available: v0.6.5)
+      Adding syn v2.0.119 (available: v3.0.5)
+      Adding windows-sys v0.52.0 (available: v0.61.2)
+   Compiling tokio v1.40.0 (/work/tokio)
+   Compiling tokio-stream v0.1.16 (/work/tokio-stream)
+   Compiling tokio-test v0.4.4 (/work/tokio-test)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.02s
+     Running tests/uds_stream.rs (/cargo-target/R4-abstract-socket-leading-nul/debug/deps/uds_stream-de100d08f4eac7d0)
+
+running 1 test
+test abstract_socket_name ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+

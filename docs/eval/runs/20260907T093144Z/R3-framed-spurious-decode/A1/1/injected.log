@@ -1,0 +1,24 @@
+=== SessionStart injected=132 bytes
+Project: work
+  languages    rust (760)
+  build        cargo · cargo
+
+considered 0 · included 0 · excluded 0 · 155 of 800 tokens
+=== UserPromptSubmit prompt=148 injected=2582 bytes
+Code (16)
+  tokio::tests::rt_basic::no_extra_poll  name match    tokio/tests/rt_basic.rs:48 · seed: 'extra' is a word in the name no_extra_poll
+  tokio::tests::tcp_accept::no_extra_poll  name match  tokio/tests/tcp_accept.rs:67 · seed: 'extra' is a word in the name no_extra_poll
+  tokio::signal::unix::OsExtraData  name match         tokio/src/signal/unix.rs:64 · seed: 'extra' is a word in the name OsExtraData
+  tests-build::tests::fail::macros_type_mismatch::extra_semicolon  name match tests-build/tests/fail/macros_type_mismatch.rs:14 · seed: 'extra' is a word in the name extra_semicolon
+  tokio::tests::sync_broadcast::broadcast_sender_closed_with_extra_subscribe  name match tokio/tests/sync_broadcast.rs:677 · seed: 'extra' is a word in the name broadcast_sender_closed_with_extra_subscribe
+  tokio::io::blocking::Buf#bytes  name match           tokio/src/io/blocking.rs:233 · seed: 'bytes' in the request names exactly one symbol
+  tokio::signal::unix::OsExtraData#default  name match tokio/src/signal/unix.rs:70 · seed: 'extra' is a word in the name OsExtraData (member of tokio::signal::unix::OsExtraData)
+  tokio::sync::mpsc::unbounded::unbounded_channel  depth 1 tokio/src/sync/mpsc/unbounded.rs:95 · both: via calls tokio::tests::tcp_accept::no_extra_poll
+  tokio::io::blocking::Buf#copy_to  depth 1            tokio/src/io/blocking.rs:211 · both: via calls tokio::io::blocking::Buf#bytes
+  tokio::fs::file::File#poll_read  depth 2             tokio/src/fs/file.rs:592 · both: via calls tokio::io::blocking::Buf#bytes
+  tokio::sync::broadcast::Sender#subscribe  depth 1    tokio/src/sync/broadcast.rs:692 · both: via calls tokio::tests::sync_broadcast::broadcast_sender_closed_with_extra_subscribe
+  tokio::sync::watch::Sender#subscribe  depth 1        tokio/src/sync/watch.rs:1387 · both: via calls tokio::tests::sync_broadcast::broadcast_sender_closed_with_extra_subscribe
+  tokio::sync::broadcast::new_receiver  depth 2        tokio/src/sync/broadcast.rs:924 · both: via calls tokio::tests::sync_broadcast::broadcast_sender_closed_with_extra_subscribe
+  tokio::io::blocking::Blocking#poll_read  depth 2     tokio/src/io/blocking.rs:57 · both: via calls tokio::io::blocking::Buf#bytes
+  tokio::loom::std::atomic_u64_static_once_cell::StaticAtomicU64#fetch_add  depth 1 tokio/src/loom/std/atomic_u64_static_once_cell.rs:30 · both: via calls tokio::tests::rt_basic::no_extra_poll
+  tokio::loom::std::atomic_u64_as_mutex::AtomicU64#fetch_add  depth 1 tokio/src/loom/std/atomic_u64_as_mutex.rs:30 · both: via calls tokio::tests::rt_basic::no_extra_poll

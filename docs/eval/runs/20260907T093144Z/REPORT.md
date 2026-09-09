@@ -1,0 +1,35 @@
+# Tier 2 sweep — docs/eval/runs/20260907T093144Z
+
+75 graded runs · 5 tasks · 3 arms · model claude-opus-5
+
+_**Two task sets, one corpus.** **T4** (efficiency, A1 vs A0) is computed over the **5** task(s) that ran both A0 and A1: R1-stream-map-size-hint-overflow, R2-lines-codec-invalid-utf8, R3-framed-spurious-decode, R4-abstract-socket-leading-nul, R5-semaphore-reopens-after-forget. **T7** (ranking, A1 vs A5) is computed over the **5** task(s) that ran both A1 and A5: R1-stream-map-size-hint-overflow, R2-lines-codec-invalid-utf8, R3-framed-spurious-decode, R4-abstract-socket-leading-nul, R5-semaphore-reopens-after-forget. The `tasks` column below is each arm's own count. Two sample sizes over one corpus, not two corpora._
+
+_Runs with `claude_exit` in [-1, 124, 137] (timeout / OOM-killed / never started), or any other non-zero exit that still left every token counter at zero (a crash — run.sh's own words), did not really happen; they are dropped before any statistic below, per arm, so a systematic pattern stays visible instead of dragging a median down. Runs flagged by `adjudicate` spent real tokens but their `passed`/`L1_hidden` is not trustworthy; their tokens still count toward the main CPS's spend (see `CPS (clean-only)` for the bound that excludes them entirely), and both a pass rate that excludes them and one that counts them as failures are reported side by side so neither reading is silently the only one offered._
+
+_`L1_hidden` is `L0 ∧ L2 ∧ hidden`, not an independent measurement — the "L1-only rate" below is computed over clean runs only and is a tripwire, not a purity claim. `L2_collateral` means only "the tests in the tree the agent left all pass", not that every test green at the start commit is still green — nothing here enumerates the start-commit tests._
+
+_`injected` is what the arm's hooks put into the turn at the prompt, from `injected.log`: the median package size, and then what those packages were. **empty** counts packages where nothing was sent at all — still a real condition after the lexical fallback shipped, because the fallback demands two corroborating terms before it will guess and the empty package remains the answer below that bar. **lexical** counts packages ranked by BM25 over file contents: **for A1 that is the fallback firing — the graph anchored nothing and a guess was substituted** — while for A5 every package is lexical by construction, so `A5 lexical == all` is that arm's sanity check rather than a finding. Both are per prompt package. A0 has no hooks and no log, so it reads `— (no hooks)` rather than 0: "no hooks" and "the ranker selected nothing" are different facts. An empty or lexical count above zero means no comparison over those runs is a contrast between two graph rankings. `tasks` is how many tasks the arm ran — it is not the same number for every arm, and which threshold rests on which set is stated under the headline above and again on each threshold's own line._
+
+| arm | tasks | n (total/clean/flagged/infra) | median tokens | IQR | median cache-read | median injected | empty pkgs | lexical pkgs | pass rate (clean) | pass rate (flagged=fail) | L1-only rate | false-done |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A0 | 5 | 25/25/0/0 | 281,184 | 193,327–346,330 | 266,496 | — (no hooks) | — (no hooks) | — (no hooks) | 25/25 | 25/25 | 100% (n=25) | 0/25 |
+| A1 | 5 | 25/25/0/0 | 264,729 | 222,244–326,416 | 249,637 | 2,582 B | 0/24 | 0/24 | 25/25 | 25/25 | 100% (n=25) | 0/25 |
+| A5 | 5 | 25/25/0/0 | 270,038 | 230,998–356,798 | 246,562 | 7,319 B | 0/25 | 25/25 | 25/25 | 25/25 | 100% (n=25) | 0/25 |
+
+**Cost detail** — CPS brackets the flagged-spend question with two numbers rather than settling it (see the caveat above); `max run tokens` names the single largest contributor to the median-tokens column, since CPS is a ratio of sums (a mean in disguise) and one thrashing run can move it while the median holds steady; the two dollar columns come straight from `total_cost_usd` in `usage.json` — the API's own price-weighted figure, which already weights a cache read at its real ~0.1x — so they read $0.00 rather than erroring under subscription auth, where the API reports no per-call price.
+
+| arm | CPS (all spend) | CPS (clean-only) | max run tokens | median $/run | CPS ($) |
+|---|---|---|---|---|---|
+| A0 | 291,299 | 291,299 | 626,685 | $0.3649 | $0.3822 |
+| A1 | 278,841 | 278,841 | 451,691 | $0.3613 | $0.3666 |
+| A5 | 297,428 | 297,428 | 469,493 | $0.4026 | $0.4065 |
+
+**A1 vs A0, token cost** — median per-task delta -10,084, 95% CI [-51,624, 59,543], favourable (A1 cheaper) on 3/5 tasks. Task set: the 5 task(s) run at both arms (R1-stream-map-size-hint-overflow, R2-lines-codec-invalid-utf8, R3-framed-spurious-decode, R4-abstract-socket-leading-nul, R5-semaphore-reopens-after-forget). A1: 0 empty and 0 lexical of 24 injected package(s).
+
+**A1 vs A5, token cost** — median per-task delta -25,981, 95% CI [-116,029, 74,117], favourable (A1 cheaper) on 4/5 tasks. Task set: the 5 task(s) run at both arms (R1-stream-map-size-hint-overflow, R2-lines-codec-invalid-utf8, R3-framed-spurious-decode, R4-abstract-socket-leading-nul, R5-semaphore-reopens-after-forget). A1: 0 empty and 0 lexical of 24 injected package(s). A5: 0 empty and 25 lexical of 25 injected package(s).
+
+**T4 (pre-registered): median CPS reduction ≥ 30% (A1 vs A0), 95% CI excluding zero.** **Task set: the 5 task(s) run at three arms (R1-stream-map-size-hint-overflow, R2-lines-codec-invalid-utf8, R3-framed-spurious-decode, R4-abstract-socket-leading-nul, R5-semaphore-reopens-after-forget) — not the T7 set below.** Observed: 2.1% median reduction, 95% CI [-7.1%, 13.7%], favourable on 3/5 tasks. **does not meet T4** at n=5 of 5 tasks (minimum 3 required). Reported against the threshold, not gated on it — five tasks cannot carry a release gate.
+
+**T7 (pre-registered): A1 CPS < A5 CPS, sign test p < 0.10 across tasks.** **Task set: the 5 task(s) run at A1 and A5 (R1-stream-map-size-hint-overflow, R2-lines-codec-invalid-utf8, R3-framed-spurious-decode, R4-abstract-socket-leading-nul, R5-semaphore-reopens-after-forget) — a different, larger set than T4's above.** Observed: 14.0% median CPS reduction vs A5, 95% CI [-17.9%, 19.5%], favourable on 3/5 tasks (p = 0.5000, one-sided exact binomial over 5 non-tied task(s)). **does not meet T7** at n=5 of 5 tasks (minimum 3 required). **Injection:** of A1's 24 injected package(s), 0 were empty and 0 came from the lexical fallback — the graph anchored nothing there and BM25 over file contents was substituted, which is the same ranking A5 uses, so those tasks are a tie by construction and not a contrast between two rankings. A5: 0 empty of 25 (all of A5's packages are lexical by design). Reported against the threshold, not gated on it — but this is the comparison whose pre-registered consequence is shipping BM25 and deleting the Context Engine.
+
+_Correctness at 5 tasks is a tripwire, not a measurement: it detects a collapse, not a regression. Every number above carries its own n; quoting a correctness delta from this slice past what a tripwire supports is a misuse of it._

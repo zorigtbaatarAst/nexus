@@ -1,0 +1,21 @@
+{
+  "task": "R3-framed-spurious-decode",
+  "repo": "tokio",
+  "commit": "8ef1d8e1adc28e9ea6a8a45e70fc3355ed4ea6d3",
+  "L0_build": true,
+  "L1_hidden": true,
+  "L2_collateral": true,
+  "L3_sites_found": [
+    "tokio-util/src/codec/framed_impl.rs"
+  ],
+  "L3_sites_missed": [],
+  "passed": true,
+  "diff_empty": false,
+  "diff_applied": true,
+  "hidden_tests_placed": [
+    "tokio-util/tests/framed.rs"
+  ],
+  "baseline_exit": 0,
+  "graded_exit": 0,
+  "adjudicate": []
+}

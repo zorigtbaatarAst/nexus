@@ -1,0 +1,23 @@
+Nexus
+────────────────────────────────────────
+
+Project: work
+  languages    rust (717)
+  build        cargo · cargo
+
+Initialized /work/.nexus
+  next: nexus scan
+Nexus
+────────────────────────────────────────
+
+Scan
+  scan-001 · full
+  commit       a75c989
+  files        784
+  symbols      7616
+  call sites   22023 (51% coverage of 18557 in-project, 3466 external)
+  skipped      67 (no analyzer for this language)
+  took         718 ms
+
+  9263 edges point inside the project but matched no symbol (overloads, inherited methods)
+setup exit=0

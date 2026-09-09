@@ -85,6 +85,11 @@ A0-only gate existed to prevent. The gate did its job by returning an answer nob
 
 Until (1) exists, no Tier 2 number means anything, and none should be quoted.
 
+**(1) now exists.** `tests/fixtures/corpora/tokio` is that corpus — 868 files, 181 KLOC,
+replayed from tokio's own history — and [`tier2-result.md`](tier2-result.md) is the sweep it
+carried: 75 runs on which the arms do separate on cost. The verdict above stands for the
+generated corpus it condemns. It is not a standing embargo on every Tier 2 number.
+
 ## Instrument defects found on the way, and their status
 
 - **Empty context packages** on 2 of 7 prompts — fixed (seeding could not reach `idempotencyKey`

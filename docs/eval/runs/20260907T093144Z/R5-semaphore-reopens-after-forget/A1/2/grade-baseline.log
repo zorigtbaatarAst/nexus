@@ -1,0 +1,37 @@
+     Locking 185 packages to latest compatible versions
+      Adding criterion v0.5.1 (available: v0.8.2)
+      Adding hashbrown v0.15.5 (available: v0.17.1)
+      Adding minicov v0.3.8 (available: v0.3.9)
+      Adding mio-aio v1.0.0 (available: v2.0.0)
+      Adding syn v2.0.119 (available: v3.0.5)
+      Adding tracing-mock v0.1.0-beta.1 (available: v0.1.0-beta.3)
+   Compiling tokio v1.51.0 (/work/tokio)
+   Compiling tokio-stream v0.1.18 (/work/tokio-stream)
+   Compiling tokio-test v0.4.5 (/work/tokio-test)
+   Compiling tokio-util v0.7.18 (/work/tokio-util)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.69s
+  Executable tests/sync_semaphore.rs (/cargo-target/R5-semaphore-reopens-after-forget/debug/deps/sync_semaphore-68b6ae207759c635)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.03s
+     Running tests/sync_semaphore.rs (/cargo-target/R5-semaphore-reopens-after-forget/debug/deps/sync_semaphore-68b6ae207759c635)
+
+running 17 tests
+test add_max_amount_permits ... ok
+test add_more_than_max_amount_permits1 - should panic ... ok
+test add_more_than_max_amount_permits2 - should panic ... ok
+test forget_open ... ok
+test add_permits_closed ... ok
+test add_permits_open ... ok
+test acquire ... ok
+test add_permits ... ok
+test forget ... ok
+test merge ... ok
+test merge_unrelated_permits - should panic ... ok
+test no_panic_at_maxpermits ... ok
+test no_permits ... ok
+test split ... ok
+test panic_when_exceeds_maxpermits - should panic ... ok
+test try_acquire ... ok
+test stress_test ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+

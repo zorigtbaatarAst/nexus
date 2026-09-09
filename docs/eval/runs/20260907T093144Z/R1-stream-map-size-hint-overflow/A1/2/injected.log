@@ -1,0 +1,29 @@
+=== SessionStart injected=132 bytes
+Project: work
+  languages    rust (781)
+  build        cargo · cargo
+
+considered 0 · included 0 · excluded 0 · 155 of 800 tokens
+=== UserPromptSubmit prompt=175 injected=3058 bytes
+Code (21)
+  tokio-test::tests::task::SizedStream#size_hint  name match tokio-test/tests/task.rs:16 · seed: 'size_hint' in the request
+  tokio::tests::macros_select::select_streams  name match tokio/tests/macros_select.rs:149 · seed: 'streams' is a word in the name select_streams
+  tokio_test::task::Spawn#size_hint  name match        tokio-test/src/task.rs:152 · seed: 'size_hint' in the request
+  tokio-stream::tests::stream_merge::merge_sync_streams  name match tokio-stream/tests/stream_merge.rs:12 · seed: 'streams' is a word in the name merge_sync_streams
+  tokio_stream::stream_map::StreamMap  name match      tokio-stream/src/stream_map.rs:205 · seed: 'StreamMap' in the request
+  tokio-stream::tests::stream_merge::merge_async_streams  name match tokio-stream/tests/stream_merge.rs:25 · seed: 'streams' is a word in the name merge_async_streams
+  tokio::loom::std::hint  name match                   tokio/src/loom/std/mod.rs:28 · seed: 'hint' in the request names exactly one symbol
+  tokio_stream::once::Once#size_hint  name match       tokio-stream/src/once.rs:49 · seed: 'size_hint' in the request
+  tokio_stream::empty::Empty#size_hint  name match     tokio-stream/src/empty.rs:47 · seed: 'size_hint' in the request
+  tokio_stream::iter::Iter#size_hint  name match       tokio-stream/src/iter.rs:64 · seed: 'size_hint' in the request
+  tokio_stream::stream_map::StreamMap#size_hint  name match tokio-stream/src/stream_map.rs:687 · seed: 'size_hint' in the request
+  tokio_stream::pending::Pending#size_hint  name match tokio-stream/src/pending.rs:51 · seed: 'size_hint' in the request
+  tokio::signal::unix::SignalKind#child  name match    tokio/src/signal/unix.rs:125 · seed: 'child' in the request names exactly one symbol
+  tokio_stream::stream_ext::map::Map#size_hint  name match tokio-stream/src/stream_ext/map.rs:49 · seed: 'size_hint' in the request
+  tokio_stream::stream_ext::take::Take#size_hint  name match tokio-stream/src/stream_ext/take.rs:61 · seed: 'size_hint' in the request
+  tokio_stream::stream_ext::then::Then#size_hint  name match tokio-stream/src/stream_ext/then.rs:75 · seed: 'size_hint' in the request
+  tokio::tests::test_clock::resume_lets_time_move_forward_instead_of_resetting_it  name match tokio/tests/test_clock.rs:7 · seed: 'instead' is a word in the name resume_lets_time_move_forward_instead_of_resetting_it
+  tokio_stream::stream_map::StreamMap#len  name match  tokio-stream/src/stream_map.rs:389 · seed: 'StreamMap' in the request (member of tokio_stream::stream_map::StreamMap)
+  tokio_util::time::delay_queue::SlabStorage#compact  depth 1 tokio-util/src/time/delay_queue.rs:249 · reverse: via calls tokio_stream::stream_map::StreamMap#values_mut
+  tokio::fs::read_dir::ReadDir#next_entry  depth 1     tokio/src/fs/read_dir.rs:78 · reverse: via calls tokio_stream::stream_map::StreamMap#poll_next_entry
+  tokio_stream::wrappers::read_dir::ReadDirStream#poll_next  depth 1 tokio-stream/src/wrappers/read_dir.rs:50 · reverse: via calls tokio_stream::stream_map::StreamMap#poll_next_entry

@@ -1,0 +1,17 @@
+diff --git a/tokio-util/src/codec/framed_impl.rs b/tokio-util/src/codec/framed_impl.rs
+index 5647023f..79cc5957 100644
+--- a/tokio-util/src/codec/framed_impl.rs
++++ b/tokio-util/src/codec/framed_impl.rs
+@@ -71,8 +71,11 @@ impl From<BytesMut> for ReadFrame {
+         }
+ 
+         Self {
++            // The buffer is only worth decoding from if it actually holds
++            // bytes; capacity alone (which `reserve` above always makes
++            // non-zero) would cause a spurious `decode` call before any read.
++            is_readable: !buffer.is_empty(),
+             buffer,
+-            is_readable: size > 0,
+             eof: false,
+             has_errored: false,
+         }

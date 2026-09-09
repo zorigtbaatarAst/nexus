@@ -1,0 +1,24 @@
+diff --git a/tokio/src/sync/batch_semaphore.rs b/tokio/src/sync/batch_semaphore.rs
+index 8662af3b..6b6d1283 100644
+--- a/tokio/src/sync/batch_semaphore.rs
++++ b/tokio/src/sync/batch_semaphore.rs
+@@ -382,12 +382,13 @@ impl Semaphore {
+         loop {
+             let curr = curr_bits >> Self::PERMIT_SHIFT;
+             let new = curr.saturating_sub(n);
+-            match self.permits.compare_exchange_weak(
+-                curr_bits,
+-                new << Self::PERMIT_SHIFT,
+-                AcqRel,
+-                Acquire,
+-            ) {
++            // Preserve the flag bits (e.g. `CLOSED`); forgetting permits must
++            // not reopen a semaphore that has been closed.
++            let new_bits = (new << Self::PERMIT_SHIFT) | (curr_bits & Self::CLOSED);
++            match self
++                .permits
++                .compare_exchange_weak(curr_bits, new_bits, AcqRel, Acquire)
++            {
+                 Ok(_) => return std::cmp::min(curr, n),
+                 Err(actual) => curr_bits = actual,
+             };

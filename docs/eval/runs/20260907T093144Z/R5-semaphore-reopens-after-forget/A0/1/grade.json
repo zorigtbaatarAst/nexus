@@ -1,0 +1,21 @@
+{
+  "task": "R5-semaphore-reopens-after-forget",
+  "repo": "tokio",
+  "commit": "aae2807349c5c80036e185d1b8f29a3089f3db8f",
+  "L0_build": true,
+  "L1_hidden": true,
+  "L2_collateral": true,
+  "L3_sites_found": [
+    "tokio/src/sync/batch_semaphore.rs"
+  ],
+  "L3_sites_missed": [],
+  "passed": true,
+  "diff_empty": false,
+  "diff_applied": true,
+  "hidden_tests_placed": [
+    "tokio/tests/sync_semaphore.rs"
+  ],
+  "baseline_exit": 0,
+  "graded_exit": 0,
+  "adjudicate": []
+}

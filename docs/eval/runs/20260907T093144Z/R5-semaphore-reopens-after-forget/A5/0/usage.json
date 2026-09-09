@@ -1,0 +1,15 @@
+{
+  "task": "R5-semaphore-reopens-after-forget",
+  "arm": "A5",
+  "repetition": 0,
+  "model": "claude-opus-5",
+  "input_tokens": 22,
+  "output_tokens": 3338,
+  "cache_read_tokens": 333884,
+  "cache_creation_tokens": 24917,
+  "total_cost_usd": 0.5006740000000001,
+  "num_turns": 12,
+  "duration_api_ms": 51126,
+  "claude_exit": 0,
+  "claimed_done": false
+}

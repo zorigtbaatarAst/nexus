@@ -1,0 +1,25 @@
+diff --git a/tokio-stream/src/stream_map.rs b/tokio-stream/src/stream_map.rs
+index fa9355cb..f30738c4 100644
+--- a/tokio-stream/src/stream_map.rs
++++ b/tokio-stream/src/stream_map.rs
+@@ -685,15 +685,17 @@ where
+     }
+ 
+     fn size_hint(&self) -> (usize, Option<usize>) {
+-        let mut ret = (0, Some(0));
++        let mut ret: (usize, Option<usize>) = (0, Some(0));
+ 
+         for (_, stream) in &self.entries {
+             let hint = stream.size_hint();
+ 
+-            ret.0 += hint.0;
++            ret.0 = ret.0.saturating_add(hint.0);
+ 
+             match (ret.1, hint.1) {
+-                (Some(a), Some(b)) => ret.1 = Some(a + b),
++                // `checked_add` yields `None` on overflow, which is the correct
++                // "unknown upper bound" answer.
++                (Some(a), Some(b)) => ret.1 = a.checked_add(b),
+                 (Some(_), None) => ret.1 = None,
+                 _ => {}
+             }

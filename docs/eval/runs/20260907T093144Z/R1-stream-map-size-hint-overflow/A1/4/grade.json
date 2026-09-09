@@ -1,0 +1,21 @@
+{
+  "task": "R1-stream-map-size-hint-overflow",
+  "repo": "tokio",
+  "commit": "82f01fd3f7d052d6655556144e621dea04e783b1",
+  "L0_build": true,
+  "L1_hidden": true,
+  "L2_collateral": true,
+  "L3_sites_found": [
+    "tokio-stream/src/stream_map.rs"
+  ],
+  "L3_sites_missed": [],
+  "passed": true,
+  "diff_empty": false,
+  "diff_applied": true,
+  "hidden_tests_placed": [
+    "tokio-stream/tests/stream_stream_map.rs"
+  ],
+  "baseline_exit": 0,
+  "graded_exit": 0,
+  "adjudicate": []
+}

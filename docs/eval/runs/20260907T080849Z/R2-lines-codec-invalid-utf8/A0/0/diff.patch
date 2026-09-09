@@ -1,0 +1,19 @@
+diff --git a/tokio-util/src/codec/lines_codec.rs b/tokio-util/src/codec/lines_codec.rs
+index 47f68d88..0986073e 100644
+--- a/tokio-util/src/codec/lines_codec.rs
++++ b/tokio-util/src/codec/lines_codec.rs
+@@ -174,9 +174,13 @@ impl Decoder for LinesCodec {
+                     None
+                 } else {
+                     let line = buf.split_to(buf.len());
++                    // Reset the search index before the fallible UTF-8
++                    // conversion: the buffer has already been drained, so
++                    // returning early with a stale index would make the next
++                    // `decode` call slice out of bounds.
++                    self.next_index = 0;
+                     let line = without_carriage_return(&line);
+                     let line = utf8(line)?;
+-                    self.next_index = 0;
+                     Some(line.to_string())
+                 }
+             }

@@ -1,0 +1,14 @@
+=== SessionStart injected=132 bytes
+Project: work
+  languages    rust (770)
+  build        cargo · cargo
+
+considered 0 · included 0 · excluded 0 · 155 of 800 tokens
+=== UserPromptSubmit prompt=132 injected=824 bytes
+Code (6)
+  tokio::tests::time_interval::reset_after  name match tokio/tests/time_interval.rs:243 · seed: 'After' in the request
+  tokio::time::interval::Interval#reset_after  name match tokio/src/time/interval.rs:589 · seed: 'After' in the request
+  tokio::runtime::io::registration_set::NOTIFY_AFTER  name match tokio/src/runtime/io/registration_set.rs:11 · seed: 'After' in the request
+  tokio::time::interval::interval_at  depth 1          tokio/src/time/interval.rs:108 · both: via calls tokio::tests::time_interval::reset_after
+  tokio::time::sleep::sleep_until  depth 3             tokio/src/time/sleep.rs:62 · both: via calls tokio::tests::time_interval::reset_after
+  tokio::time::interval::internal_interval_at  depth 2 tokio/src/time/interval.rs:114 · both: via calls tokio::tests::time_interval::reset_after
