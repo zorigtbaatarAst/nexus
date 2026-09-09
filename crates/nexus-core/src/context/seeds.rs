@@ -182,17 +182,6 @@ pub(crate) fn targets(text: &str) -> Vec<String> {
     out
 }
 
-/// A word with no shape a caller already qualified: no dot, slash, hash or `::` (an FQN or a
-/// path), no interior underscore (a `snake_case` identifier), no leading capital (a type
-/// name) — and, since none of those give it away, it only earns a lookup if it is long enough
-/// to be distinctive and is not a word every sentence about a defect contains.
-///
-/// One definition, called from both `targets` (is this word worth an indexed lookup at all?)
-/// and `resolve` (does this target need to prove uniqueness before it can seed?). The two
-/// questions must agree on what "plain" means, or they drift the way `subject_match` and
-/// `subject_prefixes` drifted on the module-boundary rule before `is_anchored_prefix` unified
-/// them — and a function that only answered *half* the question under a name that promised
-/// the whole thing is exactly how that kind of drift starts unnoticed.
 /// Internal evidence that a word was typed as code rather than written as prose.
 ///
 /// A *leading* capital is not evidence: every English sentence starts with one, and reading it
@@ -209,6 +198,16 @@ fn looks_like_code(w: &str) -> bool {
         || w.chars().skip(1).any(char::is_uppercase)
 }
 
+/// A word with no code shape (see `looks_like_code`) that also clears the length floor and the
+/// stopword list — it only earns a lookup if it is long enough to be distinctive and is not a
+/// word every sentence about a defect contains.
+///
+/// One definition, called from both `targets` (is this word worth an indexed lookup at all?)
+/// and `resolve` (does this target need to prove uniqueness before it can seed?). The two
+/// questions must agree on what "plain" means, or they drift the way `subject_match` and
+/// `subject_prefixes` drifted on the module-boundary rule before `is_anchored_prefix` unified
+/// them — and a function that only answered *half* the question under a name that promised
+/// the whole thing is exactly how that kind of drift starts unnoticed.
 fn is_plain_word(w: &str) -> bool {
     !looks_like_code(w) && is_ordinary_word(w)
 }
