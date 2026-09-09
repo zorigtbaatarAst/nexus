@@ -661,7 +661,7 @@ pub mod signals;
 
 pub use intent::{classify, Intent, IntentMatch};
 pub use lexical::RankMode;
-pub use seeds::{Seed, SeedResult, SeedSource};
+pub use seeds::{Seed, SeedResult, SeedSource, SeedStrength};
 pub use signals::{SignalIndex, Signals};
 
 #[cfg(test)]

@@ -497,9 +497,12 @@ impl Engine {
             return Ok(hit);
         }
 
-        // 5 — rank. Seeds score 1.0 on proximity by definition: they are what was asked
-        // about. Everything else inherits the graph score that reached it, which is the
-        // product of edge weights and confidences along a chain the item still carries.
+        // 5 — rank. A seed's proximity is how strong the evidence for it was, not a flat
+        // 1.0: a word typed as code scores the full mark, a prose word that names exactly one
+        // symbol less, a prose word that is merely a token of some names less again. No seed
+        // is dropped — the weaker grades lose rank contests. Everything else inherits the
+        // graph score that reached it, which is the product of edge weights and confidences
+        // along a chain the item still carries.
         let budget = req.budget_tokens.max(1) as f64;
         let mut candidates = Vec::new();
         for seed in &seeded.seeds {
@@ -511,7 +514,7 @@ impl Engine {
             );
             let (score, terms) = crate::context::rank::score(
                 &crate::context::rank::Inputs {
-                    seed_proximity: 1.0,
+                    seed_proximity: seed.strength.weight(),
                     graph_score: 0.0,
                     signals: &signals,
                     token_cost_norm: estimate_tokens(&text) as f64 / budget,

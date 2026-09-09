@@ -14,9 +14,11 @@ use crate::policy::Weights;
 
 /// Seed proximity, or the impact score for an expanded candidate.
 ///
-/// A seed is 1.0 by definition: it is what the request was about. Everything else inherits
-/// the graph score that reached it, which is the product of edge weights and confidences
-/// along its chain — so a candidate's proximity is already proven rather than asserted.
+/// A seed scores its `SeedStrength`, in 0.0..=1.0 exclusive of zero: it is what the request
+/// was about, weighted by how good the evidence for that was — a word typed as code outranks a
+/// prose word that happens to name a symbol. Everything else inherits the graph score that
+/// reached it, which is the product of edge weights and confidences along its chain — so a
+/// candidate's proximity is already proven rather than asserted.
 pub struct Inputs<'a> {
     pub seed_proximity: f64,
     pub graph_score: f64,

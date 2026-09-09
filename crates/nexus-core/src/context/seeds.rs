@@ -117,10 +117,49 @@ impl SeedSource {
     }
 }
 
+/// How good the evidence was, as opposed to `SeedSource`, which says only where it came from.
+///
+/// The two are not the same question and one enum cannot answer both: `SeedSource::NameMatch`
+/// labels a word carrying code shape (`lines_codec`, `StreamMap`), a prose word that names
+/// exactly one symbol, and a prose word that is merely a token of some names — three grades of
+/// evidence under one provenance. Stage 5 needs the grade, so it is carried separately.
+///
+/// Ordered weakest to strongest so a symbol offered twice keeps the better evidence by
+/// comparison rather than by a rule written in a comment — the same trick `SeedSource` plays
+/// with priority. **No variant is zero.** A weaker seed loses rank contests; it is not dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SeedStrength {
+    /// A prose word that is one token of several names — the family rule, weakest of the three.
+    ProseToken,
+    /// A prose word that names exactly one symbol. Real evidence, but the word was written
+    /// about code rather than as code: on R2's lines-codec prompt the prose word `invalid`
+    /// named `tokio::time::error::Error#invalid` exactly and anchored the package on
+    /// `tokio/src/time/`.
+    ProseExact,
+    /// A word carrying code shape — someone typed an identifier — or evidence that never came
+    /// from a prompt word at all: an explicit anchor, the changed set, a screen string, a
+    /// fact's subject.
+    CodeShape,
+}
+
+impl SeedStrength {
+    /// The multiplier stage 5 applies to `seed_proximity`. The numbers are a tuning choice;
+    /// the ordering above is the requirement.
+    pub fn weight(self) -> f64 {
+        match self {
+            SeedStrength::ProseToken => 0.3,
+            SeedStrength::ProseExact => 0.6,
+            SeedStrength::CodeShape => 1.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Seed {
     pub symbol: SymbolRef,
     pub source: SeedSource,
+    /// How strong the evidence was. Multiplied into `seed_proximity` by stage 5.
+    pub strength: SeedStrength,
     pub why: String,
 }
 
@@ -392,22 +431,31 @@ pub fn resolve(
         )
     }
 
-    let offer =
-        |found: &mut BTreeMap<i64, Seed>, symbol: SymbolRef, source: SeedSource, why: String| {
-            found
-                .entry(symbol.id)
-                .and_modify(|existing| {
-                    if source < existing.source {
-                        existing.source = source;
-                        existing.why = why.clone();
-                    }
-                })
-                .or_insert(Seed {
-                    symbol,
-                    source,
-                    why,
-                });
-        };
+    let offer = |found: &mut BTreeMap<i64, Seed>,
+                 symbol: SymbolRef,
+                 source: SeedSource,
+                 strength: SeedStrength,
+                 why: String| {
+        found
+            .entry(symbol.id)
+            .and_modify(|existing| {
+                // Evidence merges independently of provenance. A symbol reached both as one
+                // token of a family and as a name someone typed is anchored on the stronger
+                // reading whichever order the two arrived in — otherwise the grade would
+                // depend on the order the sources happen to run.
+                existing.strength = existing.strength.max(strength);
+                if source < existing.source {
+                    existing.source = source;
+                    existing.why = why.clone();
+                }
+            })
+            .or_insert(Seed {
+                symbol,
+                source,
+                strength,
+                why,
+            });
+    };
 
     // 1 — explicit. The caller has the anchors; nothing here is a guess.
     for fqn in &req.symbols {
@@ -416,6 +464,7 @@ pub fn resolve(
                 &mut found,
                 s,
                 SeedSource::Explicit,
+                SeedStrength::CodeShape,
                 format!("named in the request: {fqn}"),
             );
         }
@@ -426,6 +475,7 @@ pub fn resolve(
                 &mut found,
                 s,
                 SeedSource::Explicit,
+                SeedStrength::CodeShape,
                 format!("in a named file: {path}"),
             );
         }
@@ -480,6 +530,7 @@ pub fn resolve(
                     &mut found,
                     (*only).clone(),
                     SeedSource::NameMatch,
+                    SeedStrength::ProseExact,
                     format!("'{target}' in the request names exactly one symbol"),
                 ),
                 // Several symbols are actually called this. The word cannot tell them apart,
@@ -495,6 +546,7 @@ pub fn resolve(
                             &mut found,
                             s.clone(),
                             SeedSource::NameMatch,
+                            SeedStrength::ProseToken,
                             format!("'{target}' is a word in the name {}", last_segment(&s.fqn)),
                         );
                     }
@@ -508,7 +560,13 @@ pub fn resolve(
             } else {
                 SeedSource::NameMatch
             };
-            offer(&mut found, s, source, format!("'{target}' in the request"));
+            offer(
+                &mut found,
+                s,
+                source,
+                SeedStrength::CodeShape,
+                format!("'{target}' in the request"),
+            );
         }
     }
 
@@ -526,6 +584,7 @@ pub fn resolve(
                             &mut found,
                             s,
                             SeedSource::Changed,
+                            SeedStrength::CodeShape,
                             "changed in this scan".into(),
                         );
                     }
@@ -553,6 +612,7 @@ pub fn resolve(
                     &mut found,
                     s,
                     SeedSource::TextMatch,
+                    SeedStrength::CodeShape,
                     format!("{matched:?} appears in {path}"),
                 );
             }
@@ -575,6 +635,7 @@ pub fn resolve(
                     &mut found,
                     s,
                     SeedSource::FactSubject,
+                    SeedStrength::CodeShape,
                     format!("subject of fact {}", fact.key),
                 );
             }
@@ -589,6 +650,7 @@ pub fn resolve(
                 &mut found,
                 s,
                 SeedSource::Carried,
+                SeedStrength::CodeShape,
                 format!("carried from the previous turn: {fqn}"),
             );
         }
@@ -601,17 +663,18 @@ pub fn resolve(
     // says which container brought them.
     // The closure above borrows `found` mutably for its whole lifetime, so members are
     // collected and inserted directly rather than through it.
-    let containers: Vec<(String, SeedSource, String)> = found
+    let containers: Vec<(String, SeedSource, SeedStrength, String)> = found
         .values()
         .filter(|s| is_container(&s.symbol.kind))
-        .map(|s| (s.symbol.fqn.clone(), s.source, s.why.clone()))
+        .map(|s| (s.symbol.fqn.clone(), s.source, s.strength, s.why.clone()))
         .collect();
-    for (fqn, source, why) in containers {
+    for (fqn, source, strength, why) in containers {
         for member in store.members_of(project_id, &fqn, 100)? {
             let why = format!("{why} (member of {fqn})");
             found
                 .entry(member.id)
                 .and_modify(|existing| {
+                    existing.strength = existing.strength.max(strength);
                     if source < existing.source {
                         existing.source = source;
                         existing.why = why.clone();
@@ -620,6 +683,7 @@ pub fn resolve(
                 .or_insert(Seed {
                     symbol: member,
                     source,
+                    strength,
                     why,
                 });
         }
@@ -643,6 +707,26 @@ pub fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A seed's strength is how good the evidence was, not merely that something matched.
+    ///
+    /// Three grades. A word carrying code shape was typed as an identifier. A prose word that
+    /// names exactly one symbol is real but weaker evidence — in R2 the prose word `invalid`
+    /// named `Error#invalid` exactly and anchored a lines-codec bug on `tokio/src/time/`. A
+    /// prose word that is merely a token of some names is weaker still.
+    #[test]
+    fn seed_strength_ranks_code_shape_above_prose() {
+        assert!(SeedStrength::CodeShape.weight() > SeedStrength::ProseExact.weight());
+        assert!(SeedStrength::ProseExact.weight() > SeedStrength::ProseToken.weight());
+        assert!(
+            SeedStrength::ProseToken.weight() > 0.0,
+            "weaker is not deleted"
+        );
+        // The variant order must agree with the weights: `offer` merges two readings of the
+        // same symbol with `max`, and it compares variants, not weights.
+        assert!(SeedStrength::CodeShape > SeedStrength::ProseExact);
+        assert!(SeedStrength::ProseExact > SeedStrength::ProseToken);
+    }
 
     /// A leading capital is English orthography, not a naming convention. Every sentence has
     /// one, and before this every prompt's first word was read as an identifier — skipping
