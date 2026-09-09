@@ -131,6 +131,11 @@ impl SeedSource {
 pub enum SeedStrength {
     /// A prose word that is one token of several names — the family rule, weakest of the three.
     ProseToken,
+    /// A prose word that is the exact name of several symbols. The word cannot say which, so
+    /// it is discounted below a unique match — but it is evidence about every one of them,
+    /// and treating that as no evidence at all is what left `semaphore` (three matches) and
+    /// `framed` (two) contributing nothing to the prompts they were the subject of.
+    ProseAmbiguous,
     /// A prose word that names exactly one symbol. Real evidence, but the word was written
     /// about code rather than as code: on R2's lines-codec prompt the prose word `invalid`
     /// named `tokio::time::error::Error#invalid` exactly and anchored the package on
@@ -154,6 +159,7 @@ impl SeedStrength {
     pub fn weight(self) -> f64 {
         match self {
             SeedStrength::ProseToken => 0.3,
+            SeedStrength::ProseAmbiguous => 0.45,
             SeedStrength::ProseExact => 0.6,
             SeedStrength::CodeShape => 1.0,
         }
@@ -766,5 +772,19 @@ mod tests {
         // deliberate: it must then prove it names exactly one symbol, and `Semaphore` names
         // five in tokio.
         assert!(is_plain_word("Semaphore"));
+    }
+
+    /// Ambiguity is a discount, not a disqualification. A word that is the exact name of three
+    /// symbols is evidence about all three — weaker than a unique exact match because it cannot
+    /// say which, but stronger than a word that merely appears as one token inside other names.
+    #[test]
+    fn seed_strength_puts_an_ambiguous_exact_name_between_token_and_unique() {
+        assert!(SeedStrength::ProseToken < SeedStrength::ProseAmbiguous);
+        assert!(SeedStrength::ProseAmbiguous < SeedStrength::ProseExact);
+        assert!(SeedStrength::ProseExact < SeedStrength::CodeShape);
+
+        assert_eq!(SeedStrength::ProseAmbiguous.weight(), 0.45);
+        assert!(SeedStrength::ProseToken.weight() < SeedStrength::ProseAmbiguous.weight());
+        assert!(SeedStrength::ProseAmbiguous.weight() < SeedStrength::ProseExact.weight());
     }
 }
