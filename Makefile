@@ -3,7 +3,7 @@ CAP_BIN := target/release/bughunter
 PREFIX  ?= $(HOME)/.local
 
 .PHONY: help build release test lint fmt check eval-selftest install uninstall clean demo smoke \
-        fixtures fixtures-verify tokio-fixture bench-image bench tier1-retrieval
+        fixtures fixtures-verify tokio-fixture bench-image bench tier1-retrieval tier1-rebaseline
 
 help:
 	@echo "build    debug build"
@@ -83,6 +83,13 @@ tokio-fixture:
 tier1-retrieval: tokio-fixture
 	cargo test --locked -p nexus-core --test debug_supply selftest_
 	NEXUS_TIER1_REQUIRED=1 cargo test --locked -p nexus-core --test debug_supply
+
+# Record the retrieval baseline. Deliberately does NOT set NEXUS_TIER1_REQUIRED: the gating run
+# refuses to rewrite the golden it is checking, which is why `tier1-retrieval` cannot do this
+# and this target exists. The tokio-fixture prerequisite is what guarantees the corpus is
+# present, so the test measures rather than skips.
+tier1-rebaseline: tokio-fixture
+	NEXUS_REBASELINE=1 cargo test --locked -p nexus-core --test debug_supply the_task_package_reaches
 
 IMAGE ?= nexus-bench:latest
 bench-image: release fixtures tokio-fixture

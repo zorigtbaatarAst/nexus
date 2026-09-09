@@ -826,9 +826,8 @@ fn the_task_package_reaches_the_sites_a_fix_must_touch() {
         return;
     }
 
-    let raw = std::fs::read_to_string(&path).unwrap_or_else(|_| {
-        panic!("no baseline yet — record one:\n  NEXUS_REBASELINE=1 make tier1-retrieval")
-    });
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("no baseline yet — record one:\n  make tier1-rebaseline"));
     let want: Vec<SiteRecall> = serde_json::from_str(&raw).expect("baseline is valid JSON");
 
     let failures = ratchet_failures(&got, &want);
@@ -836,7 +835,7 @@ fn the_task_package_reaches_the_sites_a_fix_must_touch() {
         failures.is_empty(),
         "retrieval recall regressed:\n  {}\n\nIf a drop was deliberate, it needs an argument \
          in the commit message, not a re-baseline. If an improvement is what you meant:\n  \
-         NEXUS_REBASELINE=1 make tier1-retrieval\n  \
+         make tier1-rebaseline\n  \
          git diff crates/nexus-core/tests/golden/retrieval_tokio.json\n\n\
          Read every line of that diff.",
         failures.join("\n  ")
