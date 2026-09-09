@@ -172,6 +172,31 @@ fn selftest_recall_is_found_over_wanted() {
     let none = site_recall("R9-none", &wanted, &BTreeMap::new(), 0, 0, "task");
     assert_eq!(none.recall, 0.0);
     assert!(none.found.is_empty());
+
+    // Test rounding with non-terminating fractions to ensure the formula is correct.
+    // 1 of 3 must round to 0.333, 2 of 3 must round to 0.667.
+    let wanted_three = vec!["a.rs".to_string(), "b.rs".to_string(), "c.rs".to_string()];
+    let mut ranks_one = BTreeMap::new();
+    ranks_one.insert("a.rs".to_string(), 1usize);
+    let one_of_three = site_recall("R9-one-third", &wanted_three, &ranks_one, 0, 0, "task");
+    assert_eq!(one_of_three.recall, 0.333, "1/3 must round to 0.333");
+
+    let mut ranks_two = BTreeMap::new();
+    ranks_two.insert("a.rs".to_string(), 1usize);
+    ranks_two.insert("b.rs".to_string(), 2usize);
+    let two_of_three = site_recall("R9-two-thirds", &wanted_three, &ranks_two, 0, 0, "task");
+    assert_eq!(two_of_three.recall, 0.667, "2/3 must round to 0.667");
+
+    // Test empty wanted guard: must return 0.0 and not panic or produce NaN.
+    let empty_wanted = vec![];
+    let mut ranks_some = BTreeMap::new();
+    ranks_some.insert("a.rs".to_string(), 1usize);
+    let empty_guard = site_recall("R9-empty", &empty_wanted, &ranks_some, 0, 0, "task");
+    assert_eq!(empty_guard.recall, 0.0, "empty wanted must yield 0.0");
+    assert!(
+        empty_guard.found.is_empty(),
+        "empty wanted means no matches"
+    );
 }
 
 /// The ratchet: hold or improve, never fall. And a task that disappears from the run is a
