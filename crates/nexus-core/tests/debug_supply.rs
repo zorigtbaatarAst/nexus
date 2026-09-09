@@ -43,6 +43,131 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// The join is by task id, never by order: `fixture.toml` lists tasks in corpus order and
+/// the manifest lists them in the order `tokio_fixture.sh` happened to build them. This
+/// fixture deliberately shuffles the manifest so an order-based join fails here rather than
+/// silently scoring R1's package against R2's required sites.
+#[test]
+fn selftest_corpus_reader_joins_sites_to_start_states() {
+    let corpus = r#"
+[fixture]
+name = "tokio"
+
+[[task]]
+id = "R1-x"
+family = "R"
+prompt = "a panic in debug builds"
+required_sites = ["a/b.rs"]
+
+[[task]]
+id = "R2-y"
+family = "R"
+prompt = "invalid utf8 is not reported"
+required_sites = ["c/d.rs", "c/e.rs"]
+"#;
+    let manifest = r#"{"commits":[
+        {"id":"R2","sha":"bbbbbbb","branch":"bench/R2","task":"R2-y"},
+        {"id":"R1","sha":"aaaaaaa","branch":"bench/R1","task":"R1-x"}]}"#;
+
+    let got = tokio_tasks(corpus, manifest);
+
+    assert_eq!(got.len(), 2);
+    assert_eq!(got[0].id, "R1-x");
+    assert_eq!(got[0].sha, "aaaaaaa");
+    assert_eq!(got[0].prompt, "a panic in debug builds");
+    assert_eq!(got[0].required_sites, vec!["a/b.rs".to_string()]);
+    assert_eq!(got[1].id, "R2-y");
+    assert_eq!(got[1].sha, "bbbbbbb");
+    assert_eq!(
+        got[1].required_sites,
+        vec!["c/d.rs".to_string(), "c/e.rs".to_string()]
+    );
+}
+
+/// A task the corpus describes but the clone never materialised must fail loudly. Silently
+/// dropping it would measure four tasks and report them as five.
+#[test]
+#[should_panic(expected = "no start state")]
+fn selftest_corpus_reader_refuses_a_task_with_no_start_state() {
+    let corpus = r#"
+[[task]]
+id = "R1-x"
+prompt = "a panic"
+required_sites = ["a/b.rs"]
+"#;
+    let manifest = r#"{"commits":[]}"#;
+    let _ = tokio_tasks(corpus, manifest);
+}
+
+/// One task of the tokio corpus, joined from the two files that describe it.
+#[derive(Debug, Clone, PartialEq)]
+struct TokioTask {
+    id: String,
+    prompt: String,
+    required_sites: Vec<String>,
+    sha: String,
+}
+
+#[derive(Deserialize)]
+struct CorpusToml {
+    task: Vec<CorpusTask>,
+}
+
+#[derive(Deserialize)]
+struct CorpusTask {
+    id: String,
+    prompt: String,
+    required_sites: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct TokioManifest {
+    commits: Vec<TokioManifestCommit>,
+}
+
+#[derive(Deserialize)]
+struct TokioManifestCommit {
+    sha: String,
+    task: String,
+}
+
+/// Join the corpus description to the materialised clone.
+///
+/// Both halves are load-bearing and neither is sufficient: `fixture.toml` carries
+/// `required_sites` — the ground truth — and no start-state sha; the manifest carries the sha
+/// and no sites. Joined by task id rather than by position, because the two files are written
+/// by different tools and nothing makes them agree on order.
+fn tokio_tasks(corpus_toml: &str, manifest_json: &str) -> Vec<TokioTask> {
+    let corpus: CorpusToml = toml::from_str(corpus_toml).expect("corpus fixture.toml parses");
+    let manifest: TokioManifest =
+        serde_json::from_str(manifest_json).expect("tokio.manifest.json parses");
+    corpus
+        .task
+        .into_iter()
+        .map(|t| {
+            let sha = manifest
+                .commits
+                .iter()
+                .find(|c| c.task == t.id)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "tokio.manifest.json has no start state for {} — the corpus describes \
+                         a task the clone never materialised. Rebuild it:\n  make tokio-fixture",
+                        t.id
+                    )
+                })
+                .sha
+                .clone();
+            TokioTask {
+                id: t.id,
+                prompt: t.prompt,
+                required_sites: t.required_sites,
+                sha,
+            }
+        })
+        .collect()
+}
+
 /// The symptom sentence for each planted bug, by bug id and planting commit.
 ///
 /// Keyed by `(fixture, commit id)` because `spring-payments` plants the same bug id twice:
