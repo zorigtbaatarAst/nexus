@@ -438,11 +438,12 @@ pub fn resolve(
              {SEED_QUERY_CAP} of them, qualified names first",
             targets.len()
         ));
-        // Qualified names first. A word carrying a dot, slash, `#`, `::`, an interior
-        // underscore or a leading capital was typed *as* code; a plain word is prose that
-        // only earns a seed by naming exactly one symbol. `is_plain_word` is the same
-        // predicate the loop below uses to tell those apart, and `sort_by_key` is stable, so
-        // alphabetical order survives inside each group and the cut falls on prose first.
+        // Qualified names first. A word carrying internal evidence of code — a dot, slash,
+        // `#`, `::`, an interior underscore, or a second capital (see `looks_like_code`) —
+        // was typed as code; a plain word is prose that only earns a seed by naming exactly
+        // one symbol. `is_plain_word` is the same predicate the loop below uses to tell those
+        // apart, and `sort_by_key` is stable, so alphabetical order survives inside each group
+        // and the cut falls on prose first.
         targets.sort_by_key(|t| is_plain_word(t));
         targets.truncate(SEED_QUERY_CAP);
     }
