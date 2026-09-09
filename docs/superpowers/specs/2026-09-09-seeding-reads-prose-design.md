@@ -44,6 +44,20 @@ word is a token of more than six names. Its own comment records the calibration:
 The cap is anti-correlated with relevance at scale: the more central a word is to a domain, the
 more names contain it, the more certainly it seeds nothing.
 
+> **Correction, 2026-09-09 — after C2 shipped and was traced against the running index.** This
+> paragraph's claim that the cap deletes `semaphore` and `framed` is false. Both words never
+> reach `token_family` or any cap at all: `exactly_named` matches case-sensitively on a symbol's
+> last path segment, and `semaphore` has **three** such matches (`Tx#semaphore`, `Rx#semaphore`,
+> `OwnedSemaphorePermit#semaphore`) and `framed` has **two** (`Decoder#framed`,
+> `codec::framed`). `targets()`'s match arms are `[]`, `[only]`, and `[_, _, ..]` — two or more
+> exact matches take the last, *ambiguous*, arm, which seeds nothing and never consults
+> `token_family` or the cap C2 built. The real blocker for both words is that arm, not the fixed
+> `6`. C2 was implemented exactly as specified in §3 below and is correctly derived — it simply
+> does not reach the two words this section used as its motivating example. See
+> [`seeding-gate.md`](../../eval/seeding-gate.md) §"C2" for the full trace. The original
+> paragraph above is left as written, because a correction that erases the claim it corrects
+> cannot be checked against the code that was actually read.
+
 **D3 — a prose word that happens to name one symbol seeds it at full strength.** `exactly_named`
 admits a single match unconditionally, and the ranker gives every seed `seed_proximity: 1.0` —
 "a seed is 1.0 by definition" (`context/rank.rs:17`). In R2 the prose word `invalid` named

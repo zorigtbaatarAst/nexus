@@ -243,3 +243,83 @@ every seed feeds expansion (`max_depth: 5`, no node cap). The per-word query cos
 the downstream cost of seeds that did not exist before has not been timed on a real
 repository. Re-run `scripts/eval/measure.sh` against spring-boot before quoting the
 `UserPromptSubmit` column again.
+
+## Re-measured, 2026-09-09 — after the seeding-reads-prose branch
+
+That re-run. HEAD `23fa712`, release binary, same protocol, same four throwaway clones (fresh
+clones, not the ones above — spring-boot's upstream moved between measurements).
+
+| repo | files scanned | symbols | index | cold scan |
+|---|---:|---:|---:|---:|
+| spring-petclinic | 132 | 318 | 840 KB | 65 ms |
+| nexus (self) | 2 954 | 2 518 | 3 212 KB | 311 ms |
+| tokio | 868 | 8 641 | 7 368 KB | 864 ms |
+| spring-boot | 11 515 | 81 955 | 88 388 KB | 7 589 ms |
+
+nexus (self) is 2 954 files against the 339 measured before — this repository has grown
+(`docs/eval/runs/`, `.superpowers/`, `graphify-out/`), not a scanning regression. spring-boot
+and tokio match their earlier file/symbol counts closely; both moved upstream by a handful of
+commits between measurements, which is the source of the small drift.
+
+### Result — p95, milliseconds
+
+| | `SessionStart` ≤400 | `PostToolUse` ≤200 | `UserPromptSubmit` ≤150 | | |
+|---|---:|---:|---:|---:|---:|
+| | `context --session` | `rescan --quiet` (no-op) | seeded | lexical fallback |
+| spring-petclinic | 6 | 7 | 9 | 24 |
+| nexus | 11 | 18 | 8 | **323** |
+| tokio | 38 | 10 | 19 | 110 |
+| spring-boot | 303 | **292** ✗ | **380** ✗ | **737** ✗ |
+
+Same shape as before on the first three repositories, same three breaches on spring-boot.
+`PostToolUse` and the two right-hand columns are within measurement noise of the pre-seeding
+numbers on spring-petclinic and tokio — the seeding rewrite does not touch the code paths those
+columns exercise on a small-to-medium index. nexus's lexical-fallback column jumped 68 ms → 323
+ms; that tracks the repository's own growth to 2 954 files (`lexical_corpus` reads every
+tracked file body, see below), not the seeding change — tokio, which did not grow, moved 113 ms
+→ 110 ms.
+
+**spring-boot's seeded column is the one number this measurement exists to take, and it got
+worse: 302 ms → 380 ms.** That is a further breach of the 150 ms budget, which is exactly the
+condition the spec's §7 named as blocking: "a further breach on spring-boot blocks the change
+rather than being footnoted." Acceptance criterion 5 in
+[`2026-09-09-seeding-reads-prose-design.md`](../superpowers/specs/2026-09-09-seeding-reads-prose-design.md)
+required `UserPromptSubmit` "has not regressed" on spring-boot. **It regressed.**
+
+### The natural symptom-only prompt no longer falls back to lexical, and that costs more than lexical did
+
+The script's third `UserPromptSubmit` probe — a prompt naming no symbol, run without forcing
+`--rank lexical` — is not in the table above because it is not one of the two columns the
+original table tracked, and the two no longer agree closely enough to fold together:
+
+| repo | symptom-only prompt, natural ranking |
+|---|---:|
+| spring-petclinic | 9 ms |
+| nexus | 13 ms |
+| tokio | 40 ms |
+| spring-boot | **1 016 ms** |
+
+On spring-boot this is worse than the *forced-lexical* column (737 ms) and worse than the
+seeded column (380 ms). The per-run output confirms why: both spring-boot probes report
+`engine`, not "no symbol anchored" — before this branch, a prompt naming no symbol reliably
+found nothing to seed and fell through to the lexical path (which is presumably what the
+original 694 ms "lexical fallback" figure measured in practice). C2's cap now admits far more
+names per prose word on an 81 955-symbol index (the cap itself is `max(6, ⌈0.01×symbols⌉)` =
+820 here), so an ordinary symptom sentence now seeds broadly instead of seeding nothing, and
+`max_depth: 5` expansion off a wide seed set costs more than one linear pass over the working
+tree. This is precisely the downstream cost the previous section flagged as unmeasured
+("`token_family` now emits up to `TOKEN_FAMILY_NAME_CAP` seeds for a word that previously
+emitted zero... the downstream cost... has not been timed on a real repository"). It is now
+timed, and on the repository the budget is actually failing on, admitting more is slower than
+admitting nothing.
+
+### Conclusion of the re-measurement
+
+Two of spring-boot's three `UserPromptSubmit` readings are worse than before this branch, not
+comparable-within-noise: the seeded path (+26 %) and the natural path (which stopped being a
+lexical fallback and got 46 % slower than the forced-lexical figure it used to resemble).
+`PostToolUse` did not move outside noise. This is a second, independent finding alongside the
+retrieval gate in [`seeding-gate.md`](seeding-gate.md): even setting recall aside, this branch
+does not clear the latency bar the spec set for itself. Hooks were already off by default per
+ADR-024's condition never having been met; nothing here reopens that question, and this branch
+gives it one more reason to stay closed.
