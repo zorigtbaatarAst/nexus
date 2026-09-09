@@ -57,6 +57,12 @@ more names contain it, the more certainly it seeds nothing.
 > [`seeding-gate.md`](../../eval/seeding-gate.md) §"C2" for the full trace. The original
 > paragraph above is left as written, because a correction that erases the claim it corrects
 > cannot be checked against the code that was actually read.
+>
+> **C2 was subsequently reverted** (`225cea1`, and `a3d05ea`/`bdac524` with it) and §3's C2 is
+> therefore not in the tree. The branch's own per-change goldens showed it demoted both correct
+> answers — R1 rank 4 → 11, R5 rank 3 → 37 — and inflated three packages by up to 6.8× with
+> recall unmoved. `TOKEN_FAMILY_NAME_CAP = 6` is the cap again. Do not re-implement §3's C2 from
+> this document without reading `seeding-gate.md` §"C2" first.
 
 **D3 — a prose word that happens to name one symbol seeds it at full strength.** `exactly_named`
 admits a single match unconditionally, and the ranker gives every seed `seed_proximity: 1.0` —

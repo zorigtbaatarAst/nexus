@@ -323,3 +323,94 @@ retrieval gate in [`seeding-gate.md`](seeding-gate.md): even setting recall asid
 does not clear the latency bar the spec set for itself. Hooks were already off by default per
 ADR-024's condition never having been met; nothing here reopens that question, and this branch
 gives it one more reason to stay closed.
+
+## Re-measured a third time, 2026-09-09 — after C2 was reverted
+
+The section above blocked the change, and C2 (`225cea1`, the family cap) was reverted for that
+reason and for four measured retrieval harms. This is the re-measurement that closes the
+question. **Neither earlier set of numbers is overwritten**; this is a third row, and it is
+the only one of the three that can be compared against anything.
+
+### The earlier two rows are not comparable to each other, and this is why
+
+`scripts/eval/measure.sh` takes `NAMED_PROMPT` and `SYMPTOM_PROMPT` from the environment, and
+**neither of the two runs above recorded the prompts it used.** The p95 of a `context --task`
+call is a function of the prompt: how many words seed, how wide their families are, whether
+anything anchors at all. Two runs with different prompts are two different measurements, and
+`302 ms → 380 ms` across them establishes nothing.
+
+So this run measures **three binaries against one clone with one recorded prompt pair**, in
+one session, back to back. That is an internally valid comparison and the first one in this
+document.
+
+- `pre` — `749f50f`, the merge-base, before any of C1–C3.
+- `c2` — `23fa712`, the branch tip with C1+C2+C3, the state the section above measured.
+- `post` — the branch with C2 reverted, C1 and C3 kept.
+
+```
+NAMED_PROMPT="SpringApplication exits before the context is refreshed"
+SYMPTOM_PROMPT="the response is empty and the page shows nothing at all"
+WIPE=yes NEXUS=<binary> ./scripts/eval/measure.sh <spring-boot clone> <label>
+```
+
+The symptom prompt is chosen, not arbitrary: it is a prompt that **anchors nothing** on
+spring-boot before the branch, which is the case the section above says C2 changed. Confirmed
+directly — `pre` reports `no symbol anchored` and falls through to the lexical scan, `c2`
+reports `engine` and seeds broadly, `post` reports `no symbol anchored` again.
+
+spring-boot at 11 906 files here against 11 515 in the run above: a fresh shallow clone, more
+upstream drift. Absolute figures are therefore not comparable to either earlier table. The
+pre/c2/post columns are comparable to each other, which is the whole point.
+
+### Result — p95, milliseconds, one clone, one prompt pair
+
+| | `SessionStart` ≤400 | `PostToolUse` ≤200 | `UserPromptSubmit` ≤150 | `UserPromptSubmit` ≤150 | `UserPromptSubmit` ≤150 |
+|---|---:|---:|---:|---:|---:|
+| | `context --session` | `rescan --quiet` (no-op) | names a symbol | symptom, natural | symptom, forced lexical |
+| pre (`749f50f`) | 296 | **289** ✗ | **405** ✗ | **1 419** ✗ | **767** ✗ |
+| c2 (`23fa712`) | 298 | **287** ✗ | **391** ✗ | **924** ✗ | **743** ✗ |
+| post (C2 reverted) | 301 | **280** ✗ | **414** ✗ | **1 400** ✗ | **746** ✗ |
+
+Same three binaries against a second prompt pair, whose symptom prompt *does* anchor
+("the application starts and then shuts down immediately with no error"), as a control:
+
+| | `SessionStart` | `PostToolUse` | names a symbol | symptom, natural | symptom, forced lexical |
+|---|---:|---:|---:|---:|---:|
+| pre | 308 | 279 | 407 | 378 | 749 |
+| c2 | 301 | 282 | 408 | 377 | 736 |
+| post | 294 | 277 | 412 | 356 | 710 |
+
+### What this says
+
+**The branch's latency regression closes: `post` is within noise of `pre` on every path, on
+both prompt pairs.** The largest gap is the named-symbol column at 405 → 414 ms (+2 %), which
+is smaller than the spread between repeat runs of the same binary in this document. Acceptance
+criterion 5 — "spring-boot's `UserPromptSubmit` has not regressed" — holds after the revert.
+
+**And the regression the section above attributed to C2 does not reproduce.** On a recorded
+prompt pair, C2 is latency-neutral on the seeded path (405 → 391 → 414, all noise) and on the
+natural path it was *faster*, not slower: 1 419 ms → 924 ms, because seeding something means
+not paying for the lexical scan afterwards. The 1 016 ms figure above is real as a reading; what
+cannot be supported is the claim that C2 caused it, because the run it is compared against used
+an unrecorded and probably different prompt. C2 was reverted on the retrieval evidence, which
+is reproducible from committed goldens. **The latency case against it does not survive
+measurement, and this document should not be cited for it.**
+
+**Note the natural symptom path costs more than the forced-lexical one it falls back to** —
+1 419 ms against 767 ms — in every binary including `pre`. That is not a seeding regression: a
+prompt that anchors nothing pays for the seeding attempt *and then* the full lexical scan. It
+predates this branch and is untouched by it.
+
+**spring-boot is still far outside budget, exactly as it was before this branch.** Three of
+four hooks breach; only `SessionStart` passes. Hooks stay off by default, and ADR-024's
+condition remains unmet for the reasons it was already unmet.
+
+### What this measurement does not settle
+
+- One machine, one session, one clone, 10 reps. p95 over 10 is a coarse statistic and two of
+  these columns differ by less than its resolution.
+- Two prompt pairs is not a prompt distribution. Both are recorded so a third run can compare;
+  neither is claimed to be representative.
+- The prompts for the two earlier tables are still unknown, so those rows remain uncomparable
+  to anything, including each other. Record `NAMED_PROMPT` and `SYMPTOM_PROMPT` with any future
+  row — a measurement whose input is not written down is not a measurement.

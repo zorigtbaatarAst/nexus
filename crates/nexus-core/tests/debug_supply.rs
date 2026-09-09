@@ -282,7 +282,8 @@ fn selftest_the_ratchet_catches_a_sunk_answer_and_a_ballooned_package() {
         "a package growing 3 -> 34 items must fail: {grew:?}"
     );
     assert!(
-        grew.iter().any(|m| m.contains("R2") && m.contains("tokens")),
+        grew.iter()
+            .any(|m| m.contains("R2") && m.contains("tokens")),
         "and so must 423 -> 2883 tokens: {grew:?}"
     );
 
@@ -490,7 +491,9 @@ fn ratchet_failures(got: &[SiteRecall], want: &[SiteRecall]) -> Vec<String> {
             ));
         }
         for (file, rank) in &g.found {
-            let Some(was) = b.found.get(file) else { continue };
+            let Some(was) = b.found.get(file) else {
+                continue;
+            };
             if materially_worse(*rank, *was) {
                 failures.push(format!(
                     "{}: {file} sank from rank {was} to {rank}. Recall held, but nobody reads \
