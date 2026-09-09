@@ -698,6 +698,13 @@ fn the_harness_finds_a_file_when_the_request_names_its_symbol() {
     );
 }
 
+/// The two tokio tests check out different commits in one shared clone, so they cannot run
+/// concurrently — cargo's default runner is multi-threaded and two `git checkout`s race on
+/// the index lock. Serialised here rather than with `--test-threads=1` on a make target,
+/// because `make check` runs the whole workspace multi-threaded and would flake for anyone
+/// who has built the corpus.
+static TOKIO_CLONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Where `scripts/eval/tokio_fixture.sh` materialises the corpus, and where the committed
 /// description of it lives.
 fn tokio_paths() -> (PathBuf, PathBuf, PathBuf) {
@@ -752,6 +759,10 @@ fn tokio_corpus_or_skip() -> Option<(PathBuf, Vec<TokioTask>)> {
 /// is the same ground truth `scripts/eval/grade.sh` scores the agent's diff against.
 #[test]
 fn the_task_package_reaches_the_sites_a_fix_must_touch() {
+    // Poisoning is expected, not exceptional: this test panics by design until Task 5 records
+    // a baseline, and that panic must not stop the control test next door from running.
+    let _guard = TOKIO_CLONE.lock().unwrap_or_else(|e| e.into_inner());
+
     let Some((repo, tasks)) = tokio_corpus_or_skip() else {
         return;
     };
@@ -811,6 +822,8 @@ fn the_task_package_reaches_the_sites_a_fix_must_touch() {
 /// retrieval — the same trap the generated-fixture control next door exists to close.
 #[test]
 fn the_tokio_harness_finds_a_site_when_the_request_names_its_type() {
+    let _guard = TOKIO_CLONE.lock().unwrap_or_else(|e| e.into_inner());
+
     let Some((repo, tasks)) = tokio_corpus_or_skip() else {
         return;
     };
