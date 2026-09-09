@@ -3275,13 +3275,10 @@ impl Store {
     /// Seeding scales a cap by index size: a word that is a token of twenty names is a theme in a
     /// forty-symbol fixture and a rare term in an eight-thousand-symbol one. The count is the
     /// denominator that tells those apart.
+    ///
+    /// Delegates to `index_counts` so the SQL lives in one place.
     pub fn count_symbols(&self, project_id: ProjectId) -> Result<usize> {
-        let n: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM live_symbols WHERE project_id = ?1",
-            params![project_id],
-            |r| r.get(0),
-        )?;
-        Ok(n as usize)
+        Ok(self.index_counts(project_id)?.1 as usize)
     }
 }
 
