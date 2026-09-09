@@ -3,7 +3,7 @@ CAP_BIN := target/release/bughunter
 PREFIX  ?= $(HOME)/.local
 
 .PHONY: help build release test lint fmt check eval-selftest install uninstall clean demo smoke \
-        fixtures fixtures-verify tokio-fixture bench-image bench
+        fixtures fixtures-verify tokio-fixture bench-image bench tier1-retrieval
 
 help:
 	@echo "build    debug build"
@@ -70,6 +70,19 @@ fixtures-verify:
 # first. TOKIO_SOURCE=<path> to replay from a local mirror instead of GitHub.
 tokio-fixture:
 	./scripts/eval/tokio_fixture.sh
+
+# The retrieval oracle: does the context package point at the files a fix must touch?
+# docs/superpowers/specs/2026-09-09-retrieval-oracle-tokio-design.md.
+#
+# Not part of `make check`, which must stay fast and needs no network — this needs the tokio
+# clone. This IS the run that gates: NEXUS_TIER1_REQUIRED makes an absent corpus fatal, so a
+# skip can never be reported as a pass.
+#
+# Two invocations, self-tests first: the scoring logic is proven before it grades anything,
+# the same order in which sweep.sh gates on test_grade.sh before spending money.
+tier1-retrieval: tokio-fixture
+	cargo test -p nexus-core --test debug_supply selftest_
+	NEXUS_TIER1_REQUIRED=1 cargo test -p nexus-core --test debug_supply
 
 IMAGE ?= nexus-bench:latest
 bench-image: release fixtures tokio-fixture

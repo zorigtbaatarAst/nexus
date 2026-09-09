@@ -61,3 +61,17 @@ jobs:
           # A no-op rescan must report no changes. This is the assertion that the
           # incremental cascade actually works, and it is cheap enough to run per commit.
           python3 "$GITHUB_WORKSPACE/scripts/check_smoke.py" "$out/scan.json" "$out/rescan.json"
+
+      # The tokio clone is the expensive part and tokio_fixture.sh reuses an existing one, so
+      # cache it. Keyed on the corpus description: when the tasks change, the replayed start
+      # states change and a stale clone would be scored against the wrong commits.
+      - name: Cache the tokio corpus
+        uses: actions/cache@v4
+        with:
+          path: target/fixtures/tokio
+          key: tokio-corpus-${{ hashFiles('tests/fixtures/corpora/tokio/fixture.toml', 'scripts/eval/tokio_fixture.sh') }}
+
+      # The retrieval oracle: free, deterministic, and the question run 20260907T093144Z
+      # answered for $28.88. Not in `make check` because it needs the corpus above.
+      - name: Retrieval oracle on tokio
+        run: make tier1-retrieval
