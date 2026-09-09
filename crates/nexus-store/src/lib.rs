@@ -3269,6 +3269,20 @@ impl Store {
         )?;
         Ok((files, symbols))
     }
+
+    /// How many symbols this project has indexed.
+    ///
+    /// Seeding scales a cap by index size: a word that is a token of twenty names is a theme in a
+    /// forty-symbol fixture and a rare term in an eight-thousand-symbol one. The count is the
+    /// denominator that tells those apart.
+    pub fn count_symbols(&self, project_id: ProjectId) -> Result<usize> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM live_symbols WHERE project_id = ?1",
+            params![project_id],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
+    }
 }
 
 /// `mn.pay.PaymentService#createPayment(String)` -> `PaymentService#createPayment`.
@@ -4587,5 +4601,82 @@ mod tests {
         let counts = s.edge_counts(p).expect("counts");
         assert_eq!(counts.total, 2, "two lines are two questions");
         assert_eq!(counts.resolved, 2);
+    }
+
+    #[test]
+    fn count_symbols_counts_only_this_project() {
+        let mut s = Store::open_in_memory().expect("open");
+        let p_a = s.ensure_project("/tmp/a", "a", "git").expect("project a");
+        let p_b = s.ensure_project("/tmp/b", "b", "git").expect("project b");
+        let p_empty = s
+            .ensure_project("/tmp/empty", "empty", "git")
+            .expect("project empty");
+
+        let (scan_a, _) = s
+            .begin_scan(p_a, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan a");
+        let (scan_b, _) = s
+            .begin_scan(p_b, ScanKind::Full, None, None, "h", false, "{}")
+            .expect("scan b");
+
+        // Index 2 symbols in project a
+        index_pay(&mut s, p_a, scan_a, "b1");
+        let tx = s.transaction().expect("tx");
+        let file = Store::upsert_file(
+            &tx,
+            p_a,
+            scan_a,
+            "b.java",
+            Some("java"),
+            "h2",
+            20,
+            Some(10),
+            None,
+            ParseStatus::Ok,
+            None,
+        )
+        .expect("upsert");
+        Store::replace_symbols(
+            &tx,
+            p_a,
+            file,
+            scan_a,
+            &[NewSymbol {
+                kind: SymbolKind::Class,
+                name: "Thing".into(),
+                fqn: "mn.thing.Thing".into(),
+                parent_fqn: None,
+                signature: None,
+                visibility: None,
+                start_line: 1,
+                end_line: 10,
+                sig_hash: "s2".into(),
+                body_hash: "b2".into(),
+                annotations: vec![],
+                authority: Authority::Declares,
+            }],
+        )
+        .expect("symbols");
+        tx.commit().expect("commit");
+
+        // Index 1 symbol in project b
+        index_pay(&mut s, p_b, scan_b, "b3");
+
+        // Project a has 2 symbols, project b has 1, empty has 0
+        assert_eq!(
+            s.count_symbols(p_a).expect("count a"),
+            2,
+            "project a has 2 symbols"
+        );
+        assert_eq!(
+            s.count_symbols(p_b).expect("count b"),
+            1,
+            "project b has 1 symbol"
+        );
+        assert_eq!(
+            s.count_symbols(p_empty).expect("count empty"),
+            0,
+            "empty project has 0 symbols"
+        );
     }
 }
