@@ -5,12 +5,12 @@
       "tokio-stream/src/stream_map.rs"
     ],
     "found": {
-      "tokio-stream/src/stream_map.rs": 11
+      "tokio-stream/src/stream_map.rs": 4
     },
     "recall": 1.0,
     "target": 1.0,
-    "items_included": 37,
-    "tokens_estimated": 2820,
+    "items_included": 21,
+    "tokens_estimated": 1675,
     "intent": "build"
   },
   {
@@ -21,8 +21,8 @@
     "found": {},
     "recall": 0.0,
     "target": 1.0,
-    "items_included": 34,
-    "tokens_estimated": 2883,
+    "items_included": 3,
+    "tokens_estimated": 423,
     "intent": "debug"
   },
   {
@@ -33,8 +33,8 @@
     "found": {},
     "recall": 0.0,
     "target": 1.0,
-    "items_included": 48,
-    "tokens_estimated": 3932,
+    "items_included": 16,
+    "tokens_estimated": 1424,
     "intent": "unknown"
   },
   {
@@ -46,8 +46,8 @@
     "found": {},
     "recall": 0.0,
     "target": 1.0,
-    "items_included": 50,
-    "tokens_estimated": 3949,
+    "items_included": 39,
+    "tokens_estimated": 3226,
     "intent": "debug"
   },
   {
@@ -56,12 +56,12 @@
       "tokio/src/sync/batch_semaphore.rs"
     ],
     "found": {
-      "tokio/src/sync/batch_semaphore.rs": 37
+      "tokio/src/sync/batch_semaphore.rs": 3
     },
     "recall": 1.0,
     "target": 1.0,
-    "items_included": 49,
-    "tokens_estimated": 3900,
+    "items_included": 69,
+    "tokens_estimated": 3934,
     "intent": "unknown"
   }
 ]

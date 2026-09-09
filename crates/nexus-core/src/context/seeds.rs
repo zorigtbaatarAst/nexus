@@ -294,21 +294,7 @@ const WORD_HIT_LIMIT: usize = 200;
 /// widest real family is `idempotency` at 4, while `payment` — the word that would drag the
 /// whole repository in — is a token of 13 of them. Six sits between the two and is deliberately
 /// nearer the family.
-///
-/// This is now the floor, not the cap — see `family_cap`.
 const TOKEN_FAMILY_NAME_CAP: usize = 6;
-
-/// How many names a word may be a token of before it names a *theme* rather than a family.
-///
-/// A fraction, not a count, because "how many names contain this word" means nothing without
-/// "out of how many names". `TOKEN_FAMILY_NAME_CAP` is the floor, and it is the number measured
-/// on `spring-payments` (39 symbols, `idempotency` a token of 4, `payment` of 13) — so small
-/// corpora behave exactly as they did. One percent puts tokio's cap at 85, which admits
-/// `semaphore` (20) and `framed` (11): rare terms in an 8,470-symbol index, and the words those
-/// prompts are actually about.
-fn family_cap(symbol_count: usize) -> usize {
-    TOKEN_FAMILY_NAME_CAP.max((symbol_count as f64 * 0.01).ceil() as usize)
-}
 
 /// The symbols a word names outright: their own last segment *is* the word.
 ///
@@ -369,7 +355,7 @@ fn name_tokens(name: &str) -> Vec<String> {
 /// cap. A word the index has more than `WORD_HIT_LIMIT` matches for is a theme by any reading,
 /// so it is refused on the fact of truncation instead of on an arithmetic that cannot be
 /// trusted.
-fn token_family<'a>(hits: &'a [SymbolRef], word: &str, cap: usize) -> Vec<&'a SymbolRef> {
+fn token_family<'a>(hits: &'a [SymbolRef], word: &str) -> Vec<&'a SymbolRef> {
     if hits.len() >= WORD_HIT_LIMIT {
         return Vec::new();
     }
@@ -381,7 +367,7 @@ fn token_family<'a>(hits: &'a [SymbolRef], word: &str, cap: usize) -> Vec<&'a Sy
                 .any(|t| t.eq_ignore_ascii_case(word))
         })
         .collect();
-    if family.len() > cap {
+    if family.len() > TOKEN_FAMILY_NAME_CAP {
         return Vec::new();
     }
     family
@@ -491,10 +477,6 @@ pub fn resolve(
     // runs this discards stderr, so that error reached the developer as no context at all.
     // One cap here, on the binding both sources read, rather than one at each use.
     let mut targets = targets(&req.text);
-    // Computed once, not per candidate word: this runs inside a `UserPromptSubmit` hook on a
-    // 150 ms budget, and a `count_symbols` query per word would put a database round trip in
-    // the loop below.
-    let cap = family_cap(store.count_symbols(project_id)?);
     if targets.len() > SEED_QUERY_CAP {
         notes.push(format!(
             "the request names {} candidate words; the index was asked about \
@@ -541,7 +523,7 @@ pub fn resolve(
                 // says "the idempotency key" where the code says `idempotencyKey`, and before
                 // this arm a prompt written that way anchored nothing at all.
                 [] => {
-                    for s in token_family(&hits, target, cap) {
+                    for s in token_family(&hits, target) {
                         offer(
                             &mut found,
                             s.clone(),
@@ -774,49 +756,5 @@ mod tests {
         // deliberate: it must then prove it names exactly one symbol, and `Semaphore` names
         // five in tokio.
         assert!(is_plain_word("Semaphore"));
-    }
-
-    /// The cap is a fraction of the index, floored at the value measured on `spring-payments`.
-    ///
-    /// That fixture has 39 symbols, and 6 was chosen there because `idempotency` is a token of 4
-    /// names and `payment` — the word that would drag the whole repository in — is a token of 13
-    /// names. Both readings must survive. tokio has 8,470 symbols, where `semaphore` (20 names)
-    /// and `framed` (11) are rare terms, not themes, and an absolute 6 deleted both.
-    #[test]
-    fn the_family_cap_scales_with_the_index() {
-        // spring-payments: unchanged, so the calibration that produced 6 still holds.
-        assert_eq!(
-            family_cap(39),
-            6,
-            "the floor preserves the measured calibration"
-        );
-        assert!(
-            13 > family_cap(39),
-            "`payment` is still a theme at 39 symbols"
-        );
-        assert!(
-            4 <= family_cap(39),
-            "`idempotency` still seeds at 39 symbols"
-        );
-
-        // tokio: 1% of 8,470 is 84.7, so 85.
-        assert_eq!(family_cap(8470), 85);
-        assert!(
-            20 <= family_cap(8470),
-            "`semaphore` is a rare term at 8,470 symbols"
-        );
-        assert!(
-            11 <= family_cap(8470),
-            "`framed` is a rare term at 8,470 symbols"
-        );
-
-        // The floor wins whenever a fraction of the index is smaller than it.
-        assert_eq!(family_cap(0), 6);
-        assert_eq!(
-            family_cap(600),
-            6,
-            "1% of 600 is 6 — the boundary, not above it"
-        );
-        assert_eq!(family_cap(601), 7);
     }
 }
