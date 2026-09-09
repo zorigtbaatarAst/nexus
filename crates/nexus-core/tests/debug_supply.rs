@@ -252,6 +252,47 @@ fn selftest_the_ratchet_catches_a_moved_ground_truth() {
     );
 }
 
+/// Recall held; the answer sank and the package tripled. That must fail.
+///
+/// The numbers are C2's, the change this guard was written for: R5's answer moved rank 3 -> 37
+/// and R2's package 3 items -> 34, both at unchanged recall, and the recall-only ratchet passed
+/// them. The jitter case is asserted in the same test, because a guard that fires on 3 -> 4 is
+/// a guard someone re-baselines past without reading.
+#[test]
+fn selftest_the_ratchet_catches_a_sunk_answer_and_a_ballooned_package() {
+    let row = |task: &str, rank: usize, items: usize, tokens: usize| {
+        let mut r = recall_row(task, 1.0);
+        r.found = BTreeMap::from([("a/b.rs".to_string(), rank)]);
+        r.items_included = items;
+        r.tokens_estimated = tokens;
+        r
+    };
+
+    let base = vec![row("R5", 3, 49, 3934), row("R2", 4, 3, 423)];
+
+    let sank = ratchet_failures(&[row("R5", 37, 49, 3934), row("R2", 4, 3, 423)], &base);
+    assert!(
+        sank.iter().any(|m| m.contains("R5") && m.contains("sank")),
+        "an answer falling rank 3 -> 37 at unchanged recall must fail: {sank:?}"
+    );
+
+    let grew = ratchet_failures(&[row("R5", 3, 49, 3934), row("R2", 4, 34, 2883)], &base);
+    assert!(
+        grew.iter().any(|m| m.contains("R2") && m.contains("items")),
+        "a package growing 3 -> 34 items must fail: {grew:?}"
+    );
+    assert!(
+        grew.iter().any(|m| m.contains("R2") && m.contains("tokens")),
+        "and so must 423 -> 2883 tokens: {grew:?}"
+    );
+
+    // Holding, improving, and tie-order jitter all stay green.
+    assert!(
+        ratchet_failures(&[row("R5", 2, 40, 3000), row("R2", 5, 4, 500)], &base).is_empty(),
+        "improving, and one slot of jitter on a small number, must pass"
+    );
+}
+
 /// Join the corpus description to the materialised clone.
 ///
 /// Both halves are load-bearing and neither is sufficient: `fixture.toml` carries
@@ -383,34 +424,97 @@ fn site_recall(
     }
 }
 
+/// How much worse a recorded number may get before the ratchet calls it a regression.
+///
+/// A ratio with an absolute floor, because both numbers this guards start small: rank 3 and a
+/// 3-item package are one tie-break away from rank 4 and 4 items, and a guard that fired on
+/// that would be re-baselined into meaninglessness inside a week.
+///
+/// `1.5` is not a number picked before the evidence. It is read off the change that exposed
+/// the gap. C2 (`225cea1`, since reverted) moved R1's correct answer from rank 4 to 11 and
+/// R5's from 3 to 37, and grew three of five packages — R1 1.7×, R2 6.8×, R3 2.8× — while
+/// leaving the other two at 1.3× and 1.4×. Half again is the line those two groups fall
+/// either side of.
+const RATCHET_SLACK: f64 = 1.5;
+/// The floor beneath which a ratio means nothing: 3 -> 4 is tie order, not a regression.
+const RATCHET_FLOOR: usize = 3;
+
+/// Bigger by half again *and* by more than a few. Both, so neither small-number jitter nor a
+/// large proportional drift alone counts.
+fn materially_worse(got: usize, base: usize) -> bool {
+    got as f64 > base as f64 * RATCHET_SLACK && got > base + RATCHET_FLOOR
+}
+
 /// The ratchet: a task may improve or hold, never fall.
 ///
-/// This is deliberately *not* a threshold. `debug_supply.rs` argues against thresholds
-/// because a number chosen before the evidence exists is folklore, and that argument is
-/// right and is adopted here. A ratchet asserts nothing about what recall should be — only
-/// that a ranking change may not quietly destroy it.
+/// This is deliberately *not* a threshold on what recall should be. `debug_supply.rs` argues
+/// against thresholds because a number chosen before the evidence exists is folklore, and that
+/// argument is right and is adopted here. A ratchet asserts nothing about the level — only
+/// that a ranking change may not quietly destroy what the last one earned.
+///
+/// **Recall alone is not enough, and that gap shipped a regression green.** Recall is a set
+/// membership test: a correct answer at rank 37 is as "found" as one at rank 3, and a package
+/// of 34 items scores the same 0.0 as one of 3. C2 pushed R5's answer from rank 3 to 37 and
+/// grew R2's package from 3 items to 34 with recall unmoved, and passed four reviews as green
+/// because nothing here looked at the two other numbers the golden already records. So rank
+/// and package size are guarded too, on the same hold-or-improve terms: a correct answer may
+/// not sink and a package may not balloon unless someone re-baselines on purpose.
 fn ratchet_failures(got: &[SiteRecall], want: &[SiteRecall]) -> Vec<String> {
     let baseline: BTreeMap<&str, &SiteRecall> = want.iter().map(|r| (r.task.as_str(), r)).collect();
     let mut failures = Vec::new();
     for g in got {
-        match baseline.get(g.task.as_str()) {
-            None => failures.push(format!(
+        let Some(b) = baseline.get(g.task.as_str()) else {
+            failures.push(format!(
                 "{}: no baseline row — record one with NEXUS_REBASELINE=1",
                 g.task
-            )),
-            Some(b) if g.wanted != b.wanted => failures.push(format!(
+            ));
+            continue;
+        };
+        // The ground truth moving invalidates every other comparison below it, so it is the
+        // one check that stops the row rather than adding to it.
+        if g.wanted != b.wanted {
+            failures.push(format!(
                 "{}: required_sites changed {:?} -> {:?} — the ground truth moved, not the ranker",
                 g.task, b.wanted, g.wanted
-            )),
-            Some(b) if g.recall < b.recall => failures.push(format!(
+            ));
+            continue;
+        }
+        if g.recall < b.recall {
+            failures.push(format!(
                 "{}: recall fell {} -> {}. wanted {:?}, found {:?}",
                 g.task,
                 b.recall,
                 g.recall,
                 g.wanted,
                 g.found.keys().collect::<Vec<_>>()
-            )),
-            Some(_) => {}
+            ));
+        }
+        for (file, rank) in &g.found {
+            let Some(was) = b.found.get(file) else { continue };
+            if materially_worse(*rank, *was) {
+                failures.push(format!(
+                    "{}: {file} sank from rank {was} to {rank}. Recall held, but nobody reads \
+                     that far down a package — re-baseline only if the sink is deliberate",
+                    g.task
+                ));
+            }
+        }
+        // Both size numbers, not one. The density budget caps `tokens_estimated`, so once a
+        // package is at budget `items_included` is the only one of the two still free to grow
+        // — R5 went 49 items to 69 under C2 while its token count did not move at all.
+        if materially_worse(g.items_included, b.items_included) {
+            failures.push(format!(
+                "{}: the package grew from {} items to {} — re-baseline only if that is \
+                 deliberate",
+                g.task, b.items_included, g.items_included
+            ));
+        }
+        if materially_worse(g.tokens_estimated, b.tokens_estimated) {
+            failures.push(format!(
+                "{}: the package grew from {} tokens to {} — re-baseline only if that is \
+                 deliberate",
+                g.task, b.tokens_estimated, g.tokens_estimated
+            ));
         }
     }
     for b in want {

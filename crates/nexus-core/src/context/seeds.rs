@@ -138,7 +138,13 @@ pub enum SeedStrength {
     ProseExact,
     /// A word carrying code shape — someone typed an identifier — or evidence that never came
     /// from a prompt word at all: an explicit anchor, the changed set, a screen string, a
-    /// fact's subject.
+    /// fact's subject, or a seed carried from the previous turn.
+    ///
+    /// The carried case is the one that inflates a grade, and it is deliberate rather than an
+    /// oversight: `TaskRequest::carry_seeds` is a `Vec<String>` of names, so a seed that was
+    /// `ProseToken` last turn comes back as a bare identifier with no grade attached. Nothing
+    /// remains to distinguish it from an identifier the caller typed, so it is re-graded
+    /// `CodeShape`. Round-tripping the grade would mean carrying it in the request.
     CodeShape,
 }
 
@@ -429,9 +435,21 @@ pub fn resolve(
                 // token of a family and as a name someone typed is anchored on the stronger
                 // reading whichever order the two arrived in — otherwise the grade would
                 // depend on the order the sources happen to run.
-                existing.strength = existing.strength.max(strength);
-                if source < existing.source {
+                //
+                // `why` follows *either* improvement, not just the source. It is the sentence
+                // `--explain` prints under the score, and a seed first offered as a prose token
+                // and later as a code-shaped name keeps its source (both are `NameMatch`) while
+                // its strength rises to 1.0. Replacing `why` only on a better source would
+                // leave the weaker explanation standing under the stronger number.
+                let better_source = source < existing.source;
+                let better_strength = strength > existing.strength;
+                if better_source {
                     existing.source = source;
+                }
+                if better_strength {
+                    existing.strength = strength;
+                }
+                if better_source || better_strength {
                     existing.why = why.clone();
                 }
             })
@@ -643,8 +661,9 @@ pub fn resolve(
     // naming the class is the commonest way a person names the code. Its members are what
     // the request actually meant, so they are seeded at the same strength, and the `why`
     // says which container brought them.
-    // The closure above borrows `found` mutably for its whole lifetime, so members are
-    // collected and inserted directly rather than through it.
+    // Members go through `offer` like every other source: the merge rule is one function, not
+    // a copy per call site. Containers are collected first because `found` cannot be iterated
+    // and written in the same expression.
     let containers: Vec<(String, SeedSource, SeedStrength, String)> = found
         .values()
         .filter(|s| is_container(&s.symbol.kind))
@@ -652,22 +671,13 @@ pub fn resolve(
         .collect();
     for (fqn, source, strength, why) in containers {
         for member in store.members_of(project_id, &fqn, 100)? {
-            let why = format!("{why} (member of {fqn})");
-            found
-                .entry(member.id)
-                .and_modify(|existing| {
-                    existing.strength = existing.strength.max(strength);
-                    if source < existing.source {
-                        existing.source = source;
-                        existing.why = why.clone();
-                    }
-                })
-                .or_insert(Seed {
-                    symbol: member,
-                    source,
-                    strength,
-                    why,
-                });
+            offer(
+                &mut found,
+                member,
+                source,
+                strength,
+                format!("{why} (member of {fqn})"),
+            );
         }
     }
 

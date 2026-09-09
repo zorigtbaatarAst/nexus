@@ -24,8 +24,8 @@ Four repositories, spanning two orders of magnitude:
 
 ## Result — p95, milliseconds
 
-| | `SessionStart` ≤400 | `PostToolUse` ≤200 | `UserPromptSubmit` ≤150 | | |
-|---|---:|---:|---:|---:|---:|
+| | `SessionStart` ≤400 | `PostToolUse` ≤200 | `UserPromptSubmit` ≤150 | `UserPromptSubmit` ≤150 |
+|---|---:|---:|---:|---:|
 | | `context --session` | `rescan --quiet` (no-op) | seeded | lexical fallback |
 | spring-petclinic | 5 | 6 | 11 | 25 |
 | nexus | 13 | 8 | 9 | 68 |
@@ -263,8 +263,8 @@ commits between measurements, which is the source of the small drift.
 
 ### Result — p95, milliseconds
 
-| | `SessionStart` ≤400 | `PostToolUse` ≤200 | `UserPromptSubmit` ≤150 | | |
-|---|---:|---:|---:|---:|---:|
+| | `SessionStart` ≤400 | `PostToolUse` ≤200 | `UserPromptSubmit` ≤150 | `UserPromptSubmit` ≤150 |
+|---|---:|---:|---:|---:|
 | | `context --session` | `rescan --quiet` (no-op) | seeded | lexical fallback |
 | spring-petclinic | 6 | 7 | 9 | 24 |
 | nexus | 11 | 18 | 8 | **323** |

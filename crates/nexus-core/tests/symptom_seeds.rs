@@ -592,5 +592,14 @@ fn the_stronger_reading_of_a_word_wins_whichever_arrives_first() {
              the code-shaped word names it outright. The stronger reading must survive the \
              merge: {seed:?}"
         );
+        // The sentence has to survive the merge with the number it explains. Both readings
+        // arrive as `NameMatch`, so a merge that replaced `why` only on a better *source*
+        // would leave "is a word in the name …" standing under a 1.0 — and `--explain` is
+        // where a person reads that, so a wrong sentence there is a wrong answer.
+        assert!(
+            !seed.why.contains("is a word in the name"),
+            "{order}: the explanation must follow the strength it explains, not the weaker \
+             reading that arrived first: {seed:?}"
+        );
     }
 }
