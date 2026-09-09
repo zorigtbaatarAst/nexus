@@ -5,12 +5,12 @@
       "tokio-stream/src/stream_map.rs"
     ],
     "found": {
-      "tokio-stream/src/stream_map.rs": 4
+      "tokio-stream/src/stream_map.rs": 2
     },
     "recall": 1.0,
     "target": 1.0,
     "items_included": 21,
-    "tokens_estimated": 1675,
+    "tokens_estimated": 1678,
     "intent": "build"
   },
   {
@@ -22,7 +22,7 @@
     "recall": 0.0,
     "target": 1.0,
     "items_included": 3,
-    "tokens_estimated": 423,
+    "tokens_estimated": 427,
     "intent": "debug"
   },
   {
@@ -47,7 +47,7 @@
     "recall": 0.0,
     "target": 1.0,
     "items_included": 39,
-    "tokens_estimated": 3226,
+    "tokens_estimated": 3224,
     "intent": "debug"
   },
   {
