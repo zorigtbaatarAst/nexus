@@ -487,16 +487,25 @@ fn engine(root: &Path) -> Engine {
     e
 }
 
-fn supply(repo: &Path, request_text: &str) -> (BTreeMap<String, usize>, usize, usize, String) {
+fn supply(
+    repo: &Path,
+    request_text: &str,
+    purpose: Purpose,
+) -> (BTreeMap<String, usize>, usize, usize, String) {
     let e = engine(repo);
     let req = TaskRequest {
         text: request_text.to_string(),
         files: Vec::new(),
         symbols: Vec::new(),
         budget_tokens: nexus_core::context::TASK_BUDGET_TOKENS,
-        // Declared, not derived: the harness knows this is a defect hunt, and #28 exists so
-        // that knowledge does not have to survive a round trip through a verb table.
-        purpose: Purpose::Debug,
+        // Declared by the caller, because the two corpora are asking different questions.
+        // The generated fixtures declare Debug: the harness knows it is a defect hunt and
+        // #28 exists so that knowledge need not survive a round trip through a verb table.
+        // The tokio cases declare Task, because that is what A1's hook actually ran — the
+        // CLI defaults `declared_purpose` to Purpose::Task when no --purpose is given
+        // (crates/nexus-cli/src/main.rs:926), and intent is upstream of every ranker weight,
+        // so pinning Debug there would measure a pipeline the benchmark never ran.
+        purpose,
         rank: RankMode::default(),
         explain: false,
         carry_seeds: Vec::new(),
@@ -581,7 +590,8 @@ fn the_debug_package_reaches_what_a_fix_would_touch() {
         // baseline carried across them would answer for the wrong tree.
         git(&generated.repo, &["checkout", "-q", &planting.sha]);
         let _ = std::fs::remove_dir_all(generated.repo.join(".nexus"));
-        let (ranks, included, tokens, intent) = supply(&generated.repo, request_text);
+        let (ranks, included, tokens, intent) =
+            supply(&generated.repo, request_text, Purpose::Debug);
 
         let found: BTreeMap<String, usize> = wanted
             .iter()
@@ -668,7 +678,11 @@ fn the_harness_finds_a_file_when_the_request_names_its_symbol() {
         .expect("c3");
     git(&generated.repo, &["checkout", "-q", &planting.sha]);
 
-    let (ranks, included, _, intent) = supply(&generated.repo, "PaymentService is charging twice");
+    let (ranks, included, _, intent) = supply(
+        &generated.repo,
+        "PaymentService is charging twice",
+        Purpose::Debug,
+    );
     let _ = std::fs::remove_dir_all(&out_root);
 
     assert_eq!(intent, "debug");
@@ -681,5 +695,143 @@ fn the_harness_finds_a_file_when_the_request_names_its_symbol() {
         ranks.contains_key("src/main/java/mn/pay/PaymentService.java"),
         "the named symbol's file must be present under the same path shape ground truth \
          uses, or the golden's zeroes are an artefact of formatting: {ranks:?}"
+    );
+}
+
+/// Where `scripts/eval/tokio_fixture.sh` materialises the corpus, and where the committed
+/// description of it lives.
+fn tokio_paths() -> (PathBuf, PathBuf, PathBuf) {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    (
+        root.join("target/fixtures/tokio"),
+        root.join("target/fixtures/tokio.manifest.json"),
+        root.join("tests/fixtures/corpora/tokio/fixture.toml"),
+    )
+}
+
+/// Present, or a loud refusal when this is the run that gates.
+///
+/// `cargo test --workspace` reaches this test on machines that have never built the corpus,
+/// and a plain skip there is the silently-green check the spec rejects. So absence is fatal
+/// exactly when `NEXUS_TIER1_REQUIRED` is set — which `make tier1-retrieval` and CI set, and
+/// `make check` does not. The skip can therefore never be the result of the gating run.
+fn tokio_corpus_or_skip() -> Option<(PathBuf, Vec<TokioTask>)> {
+    let (repo, manifest, corpus) = tokio_paths();
+    let required = std::env::var("NEXUS_TIER1_REQUIRED").is_ok();
+    if !repo.join(".git").is_dir() {
+        assert!(
+            !required,
+            "NEXUS_TIER1_REQUIRED is set but {} is not a git repository.\n\
+             Build the corpus first:\n  make tokio-fixture",
+            repo.display()
+        );
+        eprintln!(
+            "skipping the tokio retrieval oracle: {} is absent (make tokio-fixture).\n\
+             This is not the run that gates — `make tier1-retrieval` is.",
+            repo.display()
+        );
+        return None;
+    }
+    let manifest_json = std::fs::read_to_string(&manifest).unwrap_or_else(|e| {
+        panic!(
+            "{}: {e} — rebuild with make tokio-fixture",
+            manifest.display()
+        )
+    });
+    let corpus_toml =
+        std::fs::read_to_string(&corpus).unwrap_or_else(|e| panic!("{}: {e}", corpus.display()));
+    Some((repo, tokio_tasks(&corpus_toml, &manifest_json)))
+}
+
+/// Does the package point at the files the fix has to touch, on a corpus large enough for
+/// the question to mean anything?
+///
+/// The generated-fixture golden next door asks this of 6–8 kB repositories, which
+/// `docs/eval/tier2-corpus-verdict.md` established a bare agent simply reads in full. tokio
+/// is ~800 files and ~165 KLOC per start state, and `required_sites` is curated per task and
+/// is the same ground truth `scripts/eval/grade.sh` scores the agent's diff against.
+#[test]
+fn the_task_package_reaches_the_sites_a_fix_must_touch() {
+    let Some((repo, tasks)) = tokio_corpus_or_skip() else {
+        return;
+    };
+    assert!(!tasks.is_empty(), "the tokio corpus describes no tasks");
+
+    let mut got: Vec<SiteRecall> = Vec::new();
+    for t in &tasks {
+        // The package is built against the index as it stands at the start state, and the
+        // index goes with it: five tasks are five different trees, and an index carried
+        // across them would answer for the wrong one.
+        git(&repo, &["checkout", "-q", &t.sha]);
+        let _ = std::fs::remove_dir_all(repo.join(".nexus"));
+        let (ranks, included, tokens, intent) = supply(&repo, &t.prompt, Purpose::Task);
+        got.push(site_recall(
+            &t.id,
+            &t.required_sites,
+            &ranks,
+            included,
+            tokens,
+            &intent,
+        ));
+    }
+
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("golden")
+        .join("retrieval_tokio.json");
+
+    if std::env::var("NEXUS_REBASELINE").is_ok() {
+        let body = serde_json::to_string_pretty(&got).expect("serialize");
+        std::fs::write(&path, format!("{body}\n")).expect("write golden");
+        return;
+    }
+
+    let raw = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+        panic!("no baseline yet — record one:\n  NEXUS_REBASELINE=1 make tier1-retrieval")
+    });
+    let want: Vec<SiteRecall> = serde_json::from_str(&raw).expect("baseline is valid JSON");
+
+    let failures = ratchet_failures(&got, &want);
+    assert!(
+        failures.is_empty(),
+        "retrieval recall regressed:\n  {}\n\nIf a drop was deliberate, it needs an argument \
+         in the commit message, not a re-baseline. If an improvement is what you meant:\n  \
+         NEXUS_REBASELINE=1 make tier1-retrieval\n  \
+         git diff crates/nexus-core/tests/golden/retrieval_tokio.json\n\n\
+         Read every line of that diff.",
+        failures.join("\n  ")
+    );
+}
+
+/// The control arm: a request naming a required site's own type reaches that file.
+///
+/// Without this, a zero in the baseline is unfalsifiable. A package path formatted
+/// differently from `required_sites` would empty every `found` in the golden, and the
+/// recorded zeroes would be an artefact of formatting rather than a finding about
+/// retrieval — the same trap the generated-fixture control next door exists to close.
+#[test]
+fn the_tokio_harness_finds_a_site_when_the_request_names_its_type() {
+    let Some((repo, tasks)) = tokio_corpus_or_skip() else {
+        return;
+    };
+    let r1 = tasks
+        .iter()
+        .find(|t| t.id.starts_with("R1-"))
+        .expect("the corpus has an R1 task");
+
+    git(&repo, &["checkout", "-q", &r1.sha]);
+    let _ = std::fs::remove_dir_all(repo.join(".nexus"));
+    let (ranks, included, _, _) = supply(
+        &repo,
+        "StreamMap size_hint overflows when summing child hints",
+        Purpose::Task,
+    );
+
+    assert!(included > 0, "naming a type must select something");
+    assert!(
+        ranks.contains_key("tokio-stream/src/stream_map.rs"),
+        "the named type's file must be present under the same path shape required_sites \
+         uses, or every zero in the baseline is a formatting artefact: {:?}",
+        ranks.keys().collect::<Vec<_>>()
     );
 }
