@@ -46,8 +46,8 @@
     "found": {},
     "recall": 0.0,
     "target": 1.0,
-    "items_included": 52,
-    "tokens_estimated": 3943,
+    "items_included": 39,
+    "tokens_estimated": 3226,
     "intent": "debug"
   },
   {

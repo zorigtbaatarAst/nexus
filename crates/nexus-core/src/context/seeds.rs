@@ -193,14 +193,24 @@ pub(crate) fn targets(text: &str) -> Vec<String> {
 /// `subject_prefixes` drifted on the module-boundary rule before `is_anchored_prefix` unified
 /// them — and a function that only answered *half* the question under a name that promised
 /// the whole thing is exactly how that kind of drift starts unnoticed.
+/// Internal evidence that a word was typed as code rather than written as prose.
+///
+/// A *leading* capital is not evidence: every English sentence starts with one, and reading it
+/// as a type name is what let `After` seed `reset_after` and `NOTIFY_AFTER` on a prompt about
+/// semaphores. What distinguishes an identifier is a convention *inside* the word — a second
+/// capital, an interior underscore, or a path/FQN separator — and none of those depend on
+/// where the word sits in a sentence.
+fn looks_like_code(w: &str) -> bool {
+    w.contains('.')
+        || w.contains('/')
+        || w.contains('#')
+        || w.contains("::")
+        || w.trim_matches('_').contains('_')
+        || w.chars().skip(1).any(char::is_uppercase)
+}
+
 fn is_plain_word(w: &str) -> bool {
-    !w.contains('.')
-        && !w.contains('/')
-        && !w.contains('#')
-        && !w.contains("::")
-        && !w.trim_matches('_').contains('_')
-        && !w.chars().next().is_some_and(char::is_uppercase)
-        && is_ordinary_word(w)
+    !looks_like_code(w) && is_ordinary_word(w)
 }
 
 /// The last name in a qualified path, whichever separator wrote it.
@@ -615,4 +625,57 @@ pub fn resolve(
         );
     }
     Ok(SeedResult { seeds, notes })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A leading capital is English orthography, not a naming convention. Every sentence has
+    /// one, and before this every prompt's first word was read as an identifier — skipping
+    /// both the stopword list and the uniqueness rule. All five tokio prompts open with a
+    /// capital.
+    #[test]
+    fn a_sentence_initial_capital_is_prose_not_code() {
+        // The opening word of each tokio benchmark prompt. None was typed as code, so none
+        // carries code shape — that's `looks_like_code`, not `is_plain_word`: `after` is a
+        // stopword, so `is_plain_word("After")` must still be false once it reads as prose.
+        for w in ["After", "Summing", "Feeding", "Binding", "Rebuilding"] {
+            assert!(!looks_like_code(w), "{w} opens a sentence; it is prose");
+        }
+        // The four non-stopword openers are prose *and* worth seeding.
+        for w in ["Summing", "Feeding", "Binding", "Rebuilding"] {
+            assert!(
+                is_plain_word(w),
+                "{w} is prose and not a stopword; it should seed"
+            );
+        }
+        // `after` is already in STOPWORDS. Once `After` is read as prose instead of an
+        // identifier, the stopword list finally reaches it and it seeds nothing at all —
+        // that is the whole point of the fix.
+        assert!(
+            !is_ordinary_word("After"),
+            "a capitalised stopword is still a stopword"
+        );
+        assert!(
+            !is_plain_word("After"),
+            "a capitalised stopword must not seed"
+        );
+
+        // Internal evidence of a naming convention still reads as code.
+        for w in [
+            "StreamMap",
+            "NOTIFY_AFTER",
+            "lines_codec",
+            "tokio::sync",
+            "src/lib.rs",
+        ] {
+            assert!(!is_plain_word(w), "{w} carries code shape");
+        }
+
+        // A single-word type name has no internal evidence and becomes prose. That is
+        // deliberate: it must then prove it names exactly one symbol, and `Semaphore` names
+        // five in tokio.
+        assert!(is_plain_word("Semaphore"));
+    }
 }
