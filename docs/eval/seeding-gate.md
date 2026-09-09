@@ -55,7 +55,28 @@ seeded (`STOPWORDS` holds `after`, lowercase, and never sees `After` because the
 check routes it around the stopword list entirely), and it seeded `reset_after` and
 `NOTIFY_AFTER` — real symbols, wrong file. That wrong anchor won a place in the package and
 crowded out room for the correct one during graph expansion. With `After` correctly read as
-prose and stopped, `semaphore` reaches the target list and anchors the right file.
+prose and stopped, `semaphore` reaches the target list and anchors the right file. *(Corrected
+below — it doesn't. Nothing anchors; a fallback does.)*
+
+### Correction (2026-09-09, from the ambiguous-exact-names cycle): R5 rose through the fallback, not the graph
+
+The paragraphs above are right about the number and wrong about the cause. R5 did rise from
+`0.0` to `1.0` when C1 landed, and `batch_semaphore.rs` did land at rank 3 — but no seed in that
+shipped tree points at the file, and none ever did. `semaphore` did not "reach the target list"
+by anchoring anything: before C1, and still after it, the plain-word branch's ambiguous-exact-
+match arm saw `semaphore`'s three exact matches (`Tx#semaphore`/`Rx#semaphore` in
+`tokio/src/sync/mpsc/chan.rs`, `OwnedSemaphorePermit#semaphore` in `tokio/src/sync/semaphore.rs`)
+and seeded none of them, same as always. What C1 actually did was remove `After` as a bad anchor.
+With *nothing* anchoring the prompt at all, `Engine::task_package` fell through to its BM25
+lexical fallback — and the fallback, not the graph, is what ranked `batch_semaphore.rs` at 3.
+
+This surfaced because the next cycle changed exactly the arm this document's "remaining blocker"
+section identifies below, so that `semaphore` *does* anchor — on the three getter-idiom matches
+above. None of them is in `batch_semaphore.rs`. Anchoring something disqualifies the prompt from
+the fallback it had been quietly relying on, and R5's recall fell straight back to `0.0`. On R5,
+BM25 beats the graph — the same relationship the Tier 2 sweep measured on R3, where BM25 beat
+the graph's token CPS by 17.9% (`tier2-result.md`, "Per task, and where it inverts"). Full
+account: [`ambiguous-names-gate.md`](ambiguous-names-gate.md).
 
 ### C2 — the family cap becomes a fraction of the index: reverted, because it cost four things and bought none
 
