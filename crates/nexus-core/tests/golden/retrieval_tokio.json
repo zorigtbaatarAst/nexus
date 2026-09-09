@@ -55,11 +55,13 @@
     "wanted": [
       "tokio/src/sync/batch_semaphore.rs"
     ],
-    "found": {},
-    "recall": 0.0,
+    "found": {
+      "tokio/src/sync/batch_semaphore.rs": 3
+    },
+    "recall": 1.0,
     "target": 1.0,
-    "items_included": 6,
-    "tokens_estimated": 628,
+    "items_included": 69,
+    "tokens_estimated": 3934,
     "intent": "unknown"
   }
 ]

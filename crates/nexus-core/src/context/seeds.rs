@@ -131,13 +131,13 @@ pub struct SeedResult {
     pub notes: Vec<String>,
 }
 
-/// Candidate words from the prompt that could name a symbol: anything containing a dot,
-/// slash, hash or `::` (an FQN or a path), an underscore (a `snake_case` identifier), a
-/// capital (a type name), or a plain lowercase word of four characters or more that is not a
-/// stopword.
+/// Candidate words from the prompt that could name a symbol: anything `looks_like_code` (a
+/// dot, slash, hash or `::` for an FQN or a path; an interior underscore for a `snake_case`
+/// identifier; a second capital for a type or constant name), or a plain lowercase word of
+/// four characters or more that is not a stopword.
 ///
 /// The plain-word arm is what lets a *symptom* find code. `cache` is indexed as
-/// `nexus_core::context::cache`, and refusing it because it carries no capital meant four
+/// `nexus_core::context::cache`, and refusing it because it carries no code shape meant four
 /// real defects, handed to the context engine as their symptoms, produced zero hits and three
 /// empty packages.
 ///
@@ -155,18 +155,10 @@ pub(crate) fn targets(text: &str) -> Vec<String> {
         .split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '"' | '\'' | '(' | ')'))
         .map(|w| w.trim_end_matches(['.', '?', '!', ':']))
         .filter(|w| w.len() > 2)
-        .filter(|w| {
-            w.contains('.')
-                || w.contains('/')
-                || w.contains('#')
-                || w.contains("::")
-                // An underscore inside a word is an identifier, not English prose. Leading
-                // and trailing ones are stripped first so `_private` and a markdown `_word_`
-                // do not both arrive as targets.
-                || w.trim_matches('_').contains('_')
-                || w.chars().next().is_some_and(char::is_uppercase)
-                || is_plain_word(w)
-        })
+        // `looks_like_code` is the one place code shape is decided — see its doc for why a
+        // *leading* capital used to be tested here too and is not evidence. `is_plain_word`
+        // covers the other admission: a plain word earns a lookup on its own.
+        .filter(|w| looks_like_code(w) || is_plain_word(w))
         .map(str::to_string)
         .collect();
     // A member is stored as `Owner#name` in every language, because the platform needs one
@@ -194,6 +186,9 @@ fn looks_like_code(w: &str) -> bool {
         || w.contains('/')
         || w.contains('#')
         || w.contains("::")
+        // An underscore inside a word is an identifier, not English prose. Leading and
+        // trailing ones are stripped first so `_private` and a markdown `_word_` do not
+        // both read as code.
         || w.trim_matches('_').contains('_')
         || w.chars().skip(1).any(char::is_uppercase)
 }
