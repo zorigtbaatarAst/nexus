@@ -131,11 +131,6 @@ impl SeedSource {
 pub enum SeedStrength {
     /// A prose word that is one token of several names — the family rule, weakest of the three.
     ProseToken,
-    /// A prose word that is the exact name of several symbols. The word cannot say which, so
-    /// it is discounted below a unique match — but it is evidence about every one of them,
-    /// and treating that as no evidence at all is what left `semaphore` (three matches) and
-    /// `framed` (two) contributing nothing to the prompts they were the subject of.
-    ProseAmbiguous,
     /// A prose word that names exactly one symbol. Real evidence, but the word was written
     /// about code rather than as code: on R2's lines-codec prompt the prose word `invalid`
     /// named `tokio::time::error::Error#invalid` exactly and anchored the package on
@@ -159,7 +154,6 @@ impl SeedStrength {
     pub fn weight(self) -> f64 {
         match self {
             SeedStrength::ProseToken => 0.3,
-            SeedStrength::ProseAmbiguous => 0.45,
             SeedStrength::ProseExact => 0.6,
             SeedStrength::CodeShape => 1.0,
         }
@@ -307,19 +301,6 @@ const WORD_HIT_LIMIT: usize = 200;
 /// whole repository in — is a token of 13 of them. Six sits between the two and is deliberately
 /// nearer the family.
 const TOKEN_FAMILY_NAME_CAP: usize = 6;
-
-/// How many symbols may share an exact name before the word is an idiom rather than a subject.
-///
-/// Measured in tokio: `drop` is the exact name of 104 symbols, `poll` 90, `poll_next` 58,
-/// `from` 42 — trait-method idioms, every one. Against a smooth distribution (431 words name
-/// two symbols, 144 name three, 63 name four), so there is no knee to appeal to and this
-/// number is chosen partly because it admits `semaphore` (3) and `framed` (2). That is fitting
-/// a constant to its examples and is recorded as such in the spec rather than dressed up.
-///
-/// What guards it is not the number but the instrument: the retrieval ratchet now fails on a
-/// materially worse rank or a materially larger package, which is what a too-generous cap
-/// would produce and what it failed to catch when a previous cap change shipped.
-const AMBIGUOUS_NAME_CAP: usize = 4;
 
 /// The symbols a word names outright: their own last segment *is* the word.
 ///
@@ -544,8 +525,7 @@ pub fn resolve(
         // the moment either one changed.
         if is_plain_word(target) {
             let hits = store.find_symbols_by_word(project_id, target, WORD_HIT_LIMIT)?;
-            let named = exactly_named(&hits, target);
-            match named.as_slice() {
+            match exactly_named(&hits, target).as_slice() {
                 [only] => offer(
                     &mut found,
                     (*only).clone(),
@@ -553,33 +533,10 @@ pub fn resolve(
                     SeedStrength::ProseExact,
                     format!("'{target}' in the request names exactly one symbol"),
                 ),
-                // Several symbols are actually called this, so the word cannot say which —
-                // but it is evidence about all of them, and treating that as no evidence is
-                // what left `semaphore` (three matches) and `framed` (two) contributing
-                // nothing to the prompts they were the subject of. Discounted below a unique
-                // match, and bounded: seeding every definition of `drop` would flood the
-                // package and the hook's latency budget alike.
-                [_, _, ..] if named.len() <= AMBIGUOUS_NAME_CAP => {
-                    for s in &named {
-                        offer(
-                            &mut found,
-                            (*s).clone(),
-                            SeedSource::NameMatch,
-                            SeedStrength::ProseAmbiguous,
-                            format!(
-                                "'{target}' names {} symbols and this is one of them",
-                                named.len()
-                            ),
-                        );
-                    }
-                }
-                // Above the cap the word is an idiom, not a subject. Recorded rather than
-                // dropped in silence: an omission nobody can see is the failure the inclusion
-                // ledger exists to prevent.
-                [_, _, ..] => notes.push(format!(
-                    "'{target}' is the exact name of {} symbols, too many to tell apart",
-                    named.len()
-                )),
+                // Several symbols are actually called this. The word cannot tell them apart,
+                // and guessing between them anchors the package on the wrong one — which is
+                // the whole reason this arm exists.
+                [_, _, ..] => {}
                 // Nothing is called this, so the word may still be a *part* of names. A prompt
                 // says "the idempotency key" where the code says `idempotencyKey`, and before
                 // this arm a prompt written that way anchored nothing at all.
@@ -809,58 +766,5 @@ mod tests {
         // deliberate: it must then prove it names exactly one symbol, and `Semaphore` names
         // five in tokio.
         assert!(is_plain_word("Semaphore"));
-    }
-
-    /// Ambiguity is a discount, not a disqualification. A word that is the exact name of three
-    /// symbols is evidence about all three — weaker than a unique exact match because it cannot
-    /// say which, but stronger than a word that merely appears as one token inside other names.
-    #[test]
-    fn seed_strength_puts_an_ambiguous_exact_name_between_token_and_unique() {
-        assert!(SeedStrength::ProseToken < SeedStrength::ProseAmbiguous);
-        assert!(SeedStrength::ProseAmbiguous < SeedStrength::ProseExact);
-        assert!(SeedStrength::ProseExact < SeedStrength::CodeShape);
-
-        assert_eq!(SeedStrength::ProseAmbiguous.weight(), 0.45);
-        assert!(SeedStrength::ProseToken.weight() < SeedStrength::ProseAmbiguous.weight());
-        assert!(SeedStrength::ProseAmbiguous.weight() < SeedStrength::ProseExact.weight());
-    }
-
-    /// **This tests counting, not dispatch.** It confirms `exactly_named` reports more than
-    /// `AMBIGUOUS_NAME_CAP` matches for a word actually shared by that many symbols — the
-    /// arithmetic `resolve`'s guard (`named.len() <= AMBIGUOUS_NAME_CAP`) depends on. It never
-    /// calls `resolve` and never observes the arm's dispatch: delete the guard entirely,
-    /// collapsing back to one arm that seeds every ambiguous match unconditionally, and this
-    /// test still passes unchanged. That was overstated in an earlier version of this test's
-    /// doc comment ("tests the same comparison `resolve`'s arm makes, directly") — it does not,
-    /// and a review caught it.
-    ///
-    /// The dispatch itself — no seed at that grade, and the exclusion note present — is what
-    /// `an_exact_name_over_the_cap_seeds_nothing_and_says_why` in `tests/symptom_seeds.rs`
-    /// covers, against a fixture built with five identically-named symbols (`scanned_over_cap`,
-    /// the same generator-loop idiom `scanned_crowded` already uses for `WORD_HIT_LIMIT` and
-    /// `TOKEN_FAMILY_NAME_CAP`). This one stays, narrowed to what it actually shows.
-    #[test]
-    fn exactly_named_over_the_cap_is_counted_correctly() {
-        let hits: Vec<SymbolRef> = (0..=AMBIGUOUS_NAME_CAP)
-            .map(|i| SymbolRef {
-                id: i as i64,
-                fqn: format!("m{i}::drop"),
-                kind: "function".to_string(),
-                file_path: format!("src/m{i}.rs"),
-                start_line: 1,
-            })
-            .collect();
-
-        let named = exactly_named(&hits, "drop");
-        assert_eq!(
-            named.len(),
-            AMBIGUOUS_NAME_CAP + 1,
-            "the fixture must actually exceed the cap for this test to mean anything: {named:?}"
-        );
-        assert!(
-            named.len() > AMBIGUOUS_NAME_CAP,
-            "this is exactly the guard `resolve`'s arm negates to fall through to the \
-             over-cap arm instead of seeding: {named:?}"
-        );
     }
 }
