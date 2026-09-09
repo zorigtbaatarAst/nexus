@@ -63,8 +63,10 @@ jobs:
           python3 "$GITHUB_WORKSPACE/scripts/check_smoke.py" "$out/scan.json" "$out/rescan.json"
 
       # The tokio clone is the expensive part and tokio_fixture.sh reuses an existing one, so
-      # cache it. Keyed on the corpus description: when the tasks change, the replayed start
-      # states change and a stale clone would be scored against the wrong commits.
+      # cache it. Keyed on the corpus description purely as a cheap invalidation — a stale
+      # clone can never be scored against the wrong commits, because tokio_fixture.sh replays
+      # every start state on each invocation. Correctness comes from that idempotent replay,
+      # not from this key.
       - name: Cache the tokio corpus
         uses: actions/cache@v4
         with:

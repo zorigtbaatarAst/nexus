@@ -127,6 +127,11 @@ recall.
 **Improvement requires a deliberate commit.** That is the property that makes this safe to
 build before the seeding fix rather than after it.
 
+**The ratchet binds one task today.** Four of the five rows are recorded at `0.0`, the floor —
+`recall` cannot fall below it, so the ratchet has nothing to hold there. Only R1, recorded at
+`1.0`, can actually regress and be caught. Read this as protecting one task until the zeroes
+lift, not as a guarantee over all five.
+
 ## 6. Parity with the benchmark's A1 arm
 
 The oracle must select what A1 selected, or it measures a different product. Verified against
@@ -147,6 +152,27 @@ The hook passed no purpose flag, so the production path takes whatever `declared
 resolves to and lets the intent classifier run. The tokio cases must pass what the hook passed,
 not a pinned purpose — intent is upstream of every weight in the ranker, so pinning it measures
 a pipeline the benchmark never ran.
+
+**One divergence that cannot close, and is bounded instead.** The oracle's `engine()` helper
+builds `Engine::init(...)` with `nexus_lang_pack::default_registry()` and no capabilities
+registered, then only calls `scan()`. The benchmark arm ran `nexus init && nexus scan` through
+the CLI, and `Command::Scan` additionally runs `engine.analyze("architect", Scope::Everything)`
+(`crates/nexus-cli/src/main.rs:464`), which persists findings. Findings are a ranker signal —
+read via `Engine::findings_for` in `crates/nexus-core/src/engine/query.rs` and folded into
+`SignalIndex` in `crates/nexus-core/src/context/signals.rs` (`findings_by_file`,
+`findings_by_fqn`). So the oracle ranks with that signal uniformly empty, where the benchmark
+run had whatever Architect found.
+
+This cannot be closed in-place: `cap-architect` depends on `nexus-core`
+(`crates/cap-architect/Cargo.toml`), so `nexus-core` taking it on as a dev-dependency to run
+Architect from this test would be a dependency cycle, not a test fixture. The effect on this
+corpus is expected to be small: Architect's rules (`crates/cap-architect/src/rules/`) look for
+a datastore with no MCP tooling configured, scaffolding files missing from the project root,
+and a scan scoped to one module of something larger — all project-level judgements about a
+mature, complete Cargo workspace, not anything tied to the five bugs' own code paths. tokio has
+a `Cargo.toml` at its root, no datastore for the tooling rule to detect, and each start state is
+a full clone rather than a narrowed scan. This is recorded here as a named, bounded non-parity,
+not something the R1–R5 numbers already correct for.
 
 ## 7. Non-goals
 

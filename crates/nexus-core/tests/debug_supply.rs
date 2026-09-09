@@ -231,6 +231,27 @@ fn selftest_the_ratchet_holds_and_improves_but_never_falls() {
     );
 }
 
+/// Same task, same recall, different `required_sites`: must fail.
+///
+/// Without this, emptying `required_sites` in `fixture.toml` (or pointing it at a file the
+/// package already contains) leaves a `0.0` baseline trivially satisfiable forever — the
+/// ratchet would hold green while the ground truth, not the ranker, is what moved.
+#[test]
+fn selftest_the_ratchet_catches_a_moved_ground_truth() {
+    let base = vec![recall_row("R2", 0.0)];
+
+    let mut moved = recall_row("R2", 0.0);
+    moved.wanted = vec!["different/file.rs".to_string()];
+
+    let failures = ratchet_failures(&[moved], &base);
+    assert!(
+        failures
+            .iter()
+            .any(|m| m.contains("R2") && m.contains("required_sites changed")),
+        "a changed wanted set at an unchanged recall must fail: {failures:?}"
+    );
+}
+
 /// Join the corpus description to the materialised clone.
 ///
 /// Both halves are load-bearing and neither is sufficient: `fixture.toml` carries
@@ -377,6 +398,10 @@ fn ratchet_failures(got: &[SiteRecall], want: &[SiteRecall]) -> Vec<String> {
                 "{}: no baseline row — record one with NEXUS_REBASELINE=1",
                 g.task
             )),
+            Some(b) if g.wanted != b.wanted => failures.push(format!(
+                "{}: required_sites changed {:?} -> {:?} — the ground truth moved, not the ranker",
+                g.task, b.wanted, g.wanted
+            )),
             Some(b) if g.recall < b.recall => failures.push(format!(
                 "{}: recall fell {} -> {}. wanted {:?}, found {:?}",
                 g.task,
@@ -503,7 +528,7 @@ fn supply(
         // #28 exists so that knowledge need not survive a round trip through a verb table.
         // The tokio cases declare Task, because that is what A1's hook actually ran — the
         // CLI defaults `declared_purpose` to Purpose::Task when no --purpose is given
-        // (crates/nexus-cli/src/main.rs:926), and intent is upstream of every ranker weight,
+        // (crates/nexus-cli/src/main.rs:927), and intent is upstream of every ranker weight,
         // so pinning Debug there would measure a pipeline the benchmark never ran.
         purpose,
         rank: RankMode::default(),
@@ -792,6 +817,10 @@ fn the_task_package_reaches_the_sites_a_fix_must_touch() {
         .join("retrieval_tokio.json");
 
     if std::env::var("NEXUS_REBASELINE").is_ok() {
+        assert!(
+            std::env::var("NEXUS_TIER1_REQUIRED").is_err(),
+            "refusing to re-baseline the gating run: NEXUS_REBASELINE and NEXUS_TIER1_REQUIRED are both set"
+        );
         let body = serde_json::to_string_pretty(&got).expect("serialize");
         std::fs::write(&path, format!("{body}\n")).expect("write golden");
         return;
@@ -816,10 +845,14 @@ fn the_task_package_reaches_the_sites_a_fix_must_touch() {
 
 /// The control arm: a request naming a required site's own type reaches that file.
 ///
-/// Without this, a zero in the baseline is unfalsifiable. A package path formatted
-/// differently from `required_sites` would empty every `found` in the golden, and the
-/// recorded zeroes would be an artefact of formatting rather than a finding about
-/// retrieval — the same trap the generated-fixture control next door exists to close.
+/// Checked out against **R5**, not R1: R1 already scores 1.0, so a control planted there
+/// proves nothing about the four rows still at the floor. R5 is one of them — recall 0.0 —
+/// so this is the proof that the machinery can reach a required site at all on a tree where
+/// the real task fails, which is the only tree where the question is worth asking. Without
+/// this, a zero in the baseline is unfalsifiable: a package path formatted differently from
+/// `required_sites` would empty every `found` in the golden, and the recorded zeroes would be
+/// an artefact of formatting rather than a finding about retrieval — the same trap the
+/// generated-fixture control next door exists to close.
 #[test]
 fn the_tokio_harness_finds_a_site_when_the_request_names_its_type() {
     let _guard = TOKIO_CLONE.lock().unwrap_or_else(|e| e.into_inner());
@@ -827,22 +860,22 @@ fn the_tokio_harness_finds_a_site_when_the_request_names_its_type() {
     let Some((repo, tasks)) = tokio_corpus_or_skip() else {
         return;
     };
-    let r1 = tasks
+    let r5 = tasks
         .iter()
-        .find(|t| t.id.starts_with("R1-"))
-        .expect("the corpus has an R1 task");
+        .find(|t| t.id.starts_with("R5-"))
+        .expect("the corpus has an R5 task");
 
-    git(&repo, &["checkout", "-q", &r1.sha]);
+    git(&repo, &["checkout", "-q", &r5.sha]);
     let _ = std::fs::remove_dir_all(repo.join(".nexus"));
     let (ranks, included, _, _) = supply(
         &repo,
-        "StreamMap size_hint overflows when summing child hints",
+        "BatchSemaphore forgets a permit after close",
         Purpose::Task,
     );
 
     assert!(included > 0, "naming a type must select something");
     assert!(
-        ranks.contains_key("tokio-stream/src/stream_map.rs"),
+        ranks.contains_key("tokio/src/sync/batch_semaphore.rs"),
         "the named type's file must be present under the same path shape required_sites \
          uses, or every zero in the baseline is a formatting artefact: {:?}",
         ranks.keys().collect::<Vec<_>>()

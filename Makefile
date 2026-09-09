@@ -81,8 +81,8 @@ tokio-fixture:
 # Two invocations, self-tests first: the scoring logic is proven before it grades anything,
 # the same order in which sweep.sh gates on test_grade.sh before spending money.
 tier1-retrieval: tokio-fixture
-	cargo test -p nexus-core --test debug_supply selftest_
-	NEXUS_TIER1_REQUIRED=1 cargo test -p nexus-core --test debug_supply
+	cargo test --locked -p nexus-core --test debug_supply selftest_
+	NEXUS_TIER1_REQUIRED=1 cargo test --locked -p nexus-core --test debug_supply
 
 IMAGE ?= nexus-bench:latest
 bench-image: release fixtures tokio-fixture
