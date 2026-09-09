@@ -1,0 +1,65 @@
+[
+  {
+    "task": "R1-stream-map-size-hint-overflow",
+    "wanted": [
+      "tokio-stream/src/stream_map.rs"
+    ],
+    "found": {
+      "tokio-stream/src/stream_map.rs": 4
+    },
+    "recall": 1.0,
+    "target": 1.0,
+    "items_included": 21,
+    "tokens_estimated": 1675,
+    "intent": "build"
+  },
+  {
+    "task": "R2-lines-codec-invalid-utf8",
+    "wanted": [
+      "tokio-util/src/codec/lines_codec.rs"
+    ],
+    "found": {},
+    "recall": 0.0,
+    "target": 1.0,
+    "items_included": 3,
+    "tokens_estimated": 423,
+    "intent": "debug"
+  },
+  {
+    "task": "R3-framed-spurious-decode",
+    "wanted": [
+      "tokio-util/src/codec/framed_impl.rs"
+    ],
+    "found": {},
+    "recall": 0.0,
+    "target": 1.0,
+    "items_included": 16,
+    "tokens_estimated": 1424,
+    "intent": "unknown"
+  },
+  {
+    "task": "R4-abstract-socket-leading-nul",
+    "wanted": [
+      "tokio/src/net/unix/listener.rs",
+      "tokio/src/net/unix/stream.rs"
+    ],
+    "found": {},
+    "recall": 0.0,
+    "target": 1.0,
+    "items_included": 52,
+    "tokens_estimated": 3943,
+    "intent": "debug"
+  },
+  {
+    "task": "R5-semaphore-reopens-after-forget",
+    "wanted": [
+      "tokio/src/sync/batch_semaphore.rs"
+    ],
+    "found": {},
+    "recall": 0.0,
+    "target": 1.0,
+    "items_included": 6,
+    "tokens_estimated": 628,
+    "intent": "unknown"
+  }
+]
