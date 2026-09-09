@@ -13,6 +13,10 @@ spring-boot), p95 over wall time of the exact command ADR-024's table puts in ea
 Every repository is a throwaway clone, scanned cold from an empty `.nexus/`.
 Reproduction: `scripts/eval/measure.sh <repo> <label>`.
 
+The script prints the exact `NAMED_PROMPT`/`SYMPTOM_PROMPT` text beside every measurement
+that depends on one, because two of the tables below were recorded without it and are
+uncomparable as a result (see "Re-measured a third time" below).
+
 Four repositories, spanning two orders of magnitude:
 
 | repo | files | symbols | source LOC | index | cold scan |

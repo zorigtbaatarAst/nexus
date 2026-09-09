@@ -52,6 +52,8 @@ print(f'$desc\t{p50}\t{p95}\t{v[0]}\t{v[-1]}')
 
 echo "=== $LABEL ==="
 echo "files: $(find "$REPO" -type f -not -path '*/.git/*' -not -path '*/target/*' -not -path '*/.nexus/*' | wc -l)"
+printf 'named prompt: "%s"\n' "$NAMED_PROMPT"
+printf 'symptom prompt: "%s"\n' "$SYMPTOM_PROMPT"
 
 rm -rf "${REPO:?}/.nexus"
 t0=$(date +%s%N)
@@ -77,6 +79,7 @@ echo
 
 echo "--- what the two prompts actually returned"
 for p in "$NAMED_PROMPT" "$SYMPTOM_PROMPT"; do
+  printf '  prompt: "%s"\n' "$p"
   "$NEXUS" --project "$REPO" context --task "$p" --budget 4000 --json 2>/dev/null | python3 -c "
 import json,sys
 d=json.load(sys.stdin); r=d.get('result',d)
