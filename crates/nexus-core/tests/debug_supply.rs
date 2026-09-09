@@ -131,6 +131,81 @@ struct TokioManifestCommit {
     task: String,
 }
 
+fn recall_row(task: &str, recall: f64) -> SiteRecall {
+    SiteRecall {
+        task: task.to_string(),
+        wanted: vec!["a/b.rs".to_string()],
+        found: BTreeMap::new(),
+        recall,
+        target: 1.0,
+        items_included: 0,
+        tokens_estimated: 0,
+        intent: "task".to_string(),
+    }
+}
+
+/// Recall is `found / wanted`, rounded to three places so a float never makes a golden diff
+/// unreadable, and `0.0` when a package reached none of the sites — not an error and not
+/// absent. R2's whole value to this instrument is that it records a real zero.
+#[test]
+fn selftest_recall_is_found_over_wanted() {
+    let wanted = vec!["a/b.rs".to_string(), "c/d.rs".to_string()];
+    let mut ranks = BTreeMap::new();
+    ranks.insert("a/b.rs".to_string(), 3usize);
+    ranks.insert("z/unrelated.rs".to_string(), 1usize);
+
+    let got = site_recall("R9-half", &wanted, &ranks, 7, 1234, "task");
+
+    assert_eq!(got.recall, 0.5);
+    assert_eq!(got.found.get("a/b.rs"), Some(&3));
+    assert_eq!(
+        got.found.len(),
+        1,
+        "an unrelated file is not a hit: {:?}",
+        got.found
+    );
+    assert_eq!(got.wanted, wanted);
+    assert_eq!(got.target, 1.0);
+    assert_eq!(got.items_included, 7);
+    assert_eq!(got.tokens_estimated, 1234);
+
+    let none = site_recall("R9-none", &wanted, &BTreeMap::new(), 0, 0, "task");
+    assert_eq!(none.recall, 0.0);
+    assert!(none.found.is_empty());
+}
+
+/// The ratchet: hold or improve, never fall. And a task that disappears from the run is a
+/// corpus that shrank, which must fail rather than pass by vacuity.
+#[test]
+fn selftest_the_ratchet_holds_and_improves_but_never_falls() {
+    let base = vec![recall_row("R1", 1.0), recall_row("R2", 0.0)];
+
+    assert!(
+        ratchet_failures(&[recall_row("R1", 1.0), recall_row("R2", 0.0)], &base).is_empty(),
+        "holding must pass"
+    );
+    assert!(
+        ratchet_failures(&[recall_row("R1", 1.0), recall_row("R2", 1.0)], &base).is_empty(),
+        "improving must pass"
+    );
+
+    let fell = ratchet_failures(&[recall_row("R1", 0.5), recall_row("R2", 0.0)], &base);
+    assert_eq!(fell.len(), 1, "{fell:?}");
+    assert!(fell[0].contains("R1"), "{fell:?}");
+
+    let vanished = ratchet_failures(&[recall_row("R1", 1.0)], &base);
+    assert!(
+        vanished.iter().any(|m| m.contains("R2")),
+        "a task missing from the run must fail: {vanished:?}"
+    );
+
+    let unknown = ratchet_failures(&[recall_row("R3", 1.0)], &[]);
+    assert!(
+        unknown.iter().any(|m| m.contains("R3")),
+        "a task with no baseline must fail rather than pass silently: {unknown:?}"
+    );
+}
+
 /// Join the corpus description to the materialised clone.
 ///
 /// Both halves are load-bearing and neither is sufficient: `fixture.toml` carries
@@ -211,6 +286,92 @@ struct BugSupply {
     items_included: usize,
     tokens_estimated: usize,
     intent: String,
+}
+
+/// What the package reached, of what the task requires.
+///
+/// `target` is recorded per row rather than assumed, so a task sitting below perfect stays
+/// visible in the golden instead of being normalised into "what we score".
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+struct SiteRecall {
+    task: String,
+    /// The files `required_sites` asks for, in corpus order.
+    wanted: Vec<String>,
+    /// Those the package anchored on, with the rank at which each appeared.
+    found: BTreeMap<String, usize>,
+    recall: f64,
+    target: f64,
+    items_included: usize,
+    tokens_estimated: usize,
+    intent: String,
+}
+
+fn site_recall(
+    task: &str,
+    wanted: &[String],
+    ranks: &BTreeMap<String, usize>,
+    items_included: usize,
+    tokens_estimated: usize,
+    intent: &str,
+) -> SiteRecall {
+    let found: BTreeMap<String, usize> = wanted
+        .iter()
+        .filter_map(|f| ranks.get(f).map(|r| (f.clone(), *r)))
+        .collect();
+    // Rounded to three places: an unrounded ratio puts 0.6666666666666666 in a golden and
+    // turns every diff into a reading exercise.
+    let recall = if wanted.is_empty() {
+        0.0
+    } else {
+        ((found.len() as f64 / wanted.len() as f64) * 1000.0).round() / 1000.0
+    };
+    SiteRecall {
+        task: task.to_string(),
+        wanted: wanted.to_vec(),
+        found,
+        recall,
+        target: 1.0,
+        items_included,
+        tokens_estimated,
+        intent: intent.to_string(),
+    }
+}
+
+/// The ratchet: a task may improve or hold, never fall.
+///
+/// This is deliberately *not* a threshold. `debug_supply.rs` argues against thresholds
+/// because a number chosen before the evidence exists is folklore, and that argument is
+/// right and is adopted here. A ratchet asserts nothing about what recall should be — only
+/// that a ranking change may not quietly destroy it.
+fn ratchet_failures(got: &[SiteRecall], want: &[SiteRecall]) -> Vec<String> {
+    let baseline: BTreeMap<&str, &SiteRecall> = want.iter().map(|r| (r.task.as_str(), r)).collect();
+    let mut failures = Vec::new();
+    for g in got {
+        match baseline.get(g.task.as_str()) {
+            None => failures.push(format!(
+                "{}: no baseline row — record one with NEXUS_REBASELINE=1",
+                g.task
+            )),
+            Some(b) if g.recall < b.recall => failures.push(format!(
+                "{}: recall fell {} -> {}. wanted {:?}, found {:?}",
+                g.task,
+                b.recall,
+                g.recall,
+                g.wanted,
+                g.found.keys().collect::<Vec<_>>()
+            )),
+            Some(_) => {}
+        }
+    }
+    for b in want {
+        if !got.iter().any(|g| g.task == b.task) {
+            failures.push(format!(
+                "{}: in the baseline but not in this run — the corpus shrank",
+                b.task
+            ));
+        }
+    }
+    failures
 }
 
 fn git(repo: &Path, args: &[&str]) -> String {
