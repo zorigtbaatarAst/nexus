@@ -16,9 +16,9 @@ pub mod budget;
 use cap_architect::Architect as ArchitectCapability;
 use cap_bughunter::BugHunter as BugHunterCapability;
 use cap_review::Review as ReviewCapability;
-use nexus_core::capability::Scope;
 use nexus_core::impact::{Direction, ImpactQuery};
 use nexus_core::Engine;
+use nexus_core::EngineError;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, ServerCapabilities, ServerInfo};
@@ -60,6 +60,21 @@ pub struct SymbolArgs {
     /// Include a capped source excerpt. Off by default: source is expensive context.
     #[serde(default)]
     pub with_source: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AnalyzeArgs {
+    /// bughunter | architect | review. `nexus_capabilities` lists what this build has.
+    /// Defaults to bughunter.
+    #[serde(default)]
+    pub capability: Option<String>,
+    /// Only what changed since the previous scan, instead of the whole index. This is how
+    /// review is meant to be run after an edit.
+    #[serde(default)]
+    pub changed: bool,
+    /// Only these repo-relative paths. Takes precedence over `changed`.
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -391,28 +406,49 @@ impl Nexus {
     }
 
     #[tool(
-        description = "Run the deterministic detectors and reconcile the results with what is \
-                       already known. Findings are recognized across scans by fingerprint, so a \
-                       bug seen again is not reported twice; one that stops firing is closed; \
-                       one that returns after a fix is a regression. No model is involved, so \
-                       these confidences are not model estimates."
+        description = "Run a capability's deterministic detectors and reconcile the results \
+                       with what is already known. The name is historical: this dispatches \
+                       whichever `capability` you ask for, and defaults to bughunter. Pass \
+                       capability=review with changed=true after an edit — that is the run \
+                       that reports a change no test reaches and callers that did not move \
+                       with a signature. Findings are recognized across scans by fingerprint, \
+                       so a bug seen again is not reported twice; one that stops firing is \
+                       closed; one that returns after a fix is a regression. No model is \
+                       involved, so these confidences are not model estimates."
     )]
     async fn bughunter_analyze(
         &self,
-        Parameters(_): Parameters<NoArgs>,
+        Parameters(a): Parameters<AnalyzeArgs>,
     ) -> Result<CallToolResult, ErrorData> {
+        let capability = a.capability.unwrap_or_else(|| "bughunter".to_string());
+        let (changed, files) = (a.changed, a.files);
         match self
-            .with_engine(|e| {
-                e.analyze("bughunter", Scope::Everything)
-                    .map_err(|e| e.to_string())
+            .with_engine(move |e| {
+                let scope = e
+                    .analyze_scope(changed, &files)
+                    .map_err(|e| e.to_string())?;
+                // Classified inside the closure because the two failures need different
+                // advice: a scan cannot fix a capability this build does not have, and
+                // telling an agent to run one wastes a full index pass on a typo.
+                Ok(match e.analyze(&capability, scope) {
+                    Ok(r) => Ok(r),
+                    Err(e @ EngineError::UnknownCapability { .. }) => {
+                        Err(("unknown_capability", e.to_string()))
+                    }
+                    Err(e) => Err(("no_baseline", e.to_string())),
+                })
             })
             .await
         {
-            Ok(r) => Ok(ok(budget::fit(
+            Ok(Ok(r)) => Ok(ok(budget::fit(
                 &r,
                 "findings",
                 "filter with nexus_get_findings",
             ))),
+            Ok(Err((kind @ "unknown_capability", m))) => {
+                Ok(failure(kind, m, &["nexus_capabilities"]))
+            }
+            Ok(Err((kind, m))) => Ok(failure(kind, m, &["nexus_scan"])),
             Err(m) => Ok(failure("no_baseline", m, &["nexus_scan"])),
         }
     }
@@ -788,9 +824,11 @@ impl ServerHandler for Nexus {
              the edge chain that produced it and the weakest confidence along that chain — \
              treat a low min_confidence as a lead, not a fact.\n\
              \n\
-             bughunter_analyze runs deterministic rules only: Spring proxy mistakes, GraphQL \
-             fields no resolver serves. Their confidences are not \
-             model estimates, so do not discount them as such.\n\
+             bughunter_analyze dispatches whichever capability you name and defaults to \
+             bughunter; pass capability=review with changed=true after an edit, before \
+             calling the work done. It runs deterministic rules only: Spring proxy \
+             mistakes, GraphQL fields no resolver serves. Their confidences are not model \
+             estimates, so do not discount them as such.\n\
              \n\
              What the rules cannot do is reason about business logic, races or data \
              consistency. That is yours — and nexus_record_finding is how you contribute it, \

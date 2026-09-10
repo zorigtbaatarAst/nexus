@@ -42,7 +42,7 @@ capability. Every tool stays callable; only the shorthand goes away.
 | `nexus_get_known` | what is already known about this code: findings and facts |
 | `nexus_record_finding` | contribute a finding you reasoned out — it gets the same identity and history a rule's does |
 | `nexus_record_fact` | remember something for the next session |
-| `bughunter_analyze` | run BugHunter's deterministic rules |
+| `bughunter_analyze` | run a capability's deterministic rules — `capability`: bughunter (default), architect, review; `changed: true` scopes it to the edit |
 | `nexus_get_symbol` | one symbol's neighbourhood, following renames |
 | `nexus_get_graph` | how much of the dependency graph exists — coverage, not accuracy |
 | `nexus_doctor` | what is misconfigured, and the command that fixes it |

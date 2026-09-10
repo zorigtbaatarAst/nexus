@@ -4,7 +4,8 @@ argument-hint: [capability] [--changed]
 ---
 
 1. Call `nexus_capabilities` if $ARGUMENTS names none, and say which are available.
-2. Call `bughunter_analyze` (or the named capability's analyze tool).
+2. Call `bughunter_analyze` with `capability` set to what $ARGUMENTS named — it
+   dispatches all three and defaults to bughunter. Pass `changed: true` for `--changed`.
 3. Report counts first — new, recurring, regressed, closed — then the findings themselves.
    `regressed` is the one worth leading with: it broke, was fixed, and broke again.
 4. These are deterministic rules. Do not describe their confidence as an estimate.

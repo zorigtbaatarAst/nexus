@@ -698,18 +698,9 @@ fn run(cli: &Cli) -> Result<u8, Box<dyn std::error::Error>> {
             file,
         } => {
             let mut engine = open(&root)?;
-            let scope = if !file.is_empty() {
-                Scope::Files(file.clone())
-            } else if *changed {
-                // The previous scan is what "changed" is measured against, and the rescan
-                // cascade already worked out exactly which symbols moved.
-                match engine.previous_scan_id()? {
-                    Some(id) => Scope::Changed { since_scan: id },
-                    None => Scope::Everything,
-                }
-            } else {
-                Scope::Everything
-            };
+            // The previous scan is what "changed" is measured against, and the rescan
+            // cascade already worked out exactly which symbols moved.
+            let scope = engine.analyze_scope(*changed, file)?;
             match engine.analyze(capability, scope) {
                 Ok(report) => emit!(&report, {
                     render::banner(&mut out, &st)?;

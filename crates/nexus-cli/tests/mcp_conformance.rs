@@ -471,3 +471,47 @@ fn verification_refuses_to_execute_without_a_committed_permission() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// The handler used to hardcode `bughunter` over `Scope::Everything`, so Review — the run
+/// that belongs at the end of an edit — had no MCP tool at all, even though
+/// `nexus_capabilities` advertised it. The tool name stays historical; the dispatch does not.
+#[test]
+fn analyze_dispatches_the_capability_and_scope_the_agent_asked_for() {
+    let root = fixture("analyze-capability");
+    let Some(mut s) = Server::start(&root) else {
+        return;
+    };
+    s.handshake();
+    let scan = s.call(2, "nexus_scan", serde_json::json!({}));
+    assert!(scan["symbols_indexed"].as_u64().unwrap_or(0) > 0, "{scan}");
+
+    let review = s.call(
+        3,
+        "bughunter_analyze",
+        serde_json::json!({"capability": "review", "changed": true}),
+    );
+    assert_eq!(review["capability"], "review", "{review}");
+    // Scope::describe() renders Everything as "the whole project", so asserting the negative
+    // against the enum's own spelling would pass while the argument was being ignored.
+    assert!(
+        review["scope"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("what changed since scan")),
+        "changed=true must narrow the scope, not silently run the whole index: {review}"
+    );
+
+    let default = s.call(4, "bughunter_analyze", serde_json::json!({}));
+    assert_eq!(default["capability"], "bughunter", "{default}");
+
+    // A typo must not be answered with "run a scan": no scan can add a capability this
+    // build does not have, and running one to find that out costs a full index pass.
+    let bad = s.call(
+        5,
+        "bughunter_analyze",
+        serde_json::json!({"capability": "revue"}),
+    );
+    assert_eq!(bad["kind"], "unknown_capability", "{bad}");
+    assert_eq!(bad["next"][0], "nexus_capabilities", "{bad}");
+
+    let _ = std::fs::remove_dir_all(&root);
+}

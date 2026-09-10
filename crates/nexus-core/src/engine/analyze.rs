@@ -6,16 +6,34 @@
 use super::*;
 
 impl Engine {
-    /// Run every deterministic detector and reconcile the results with what is already known.
+    /// The scope an `analyze` run should use, given the two ways a caller can narrow it.
     ///
-    /// No model is asked here, so nothing this produces is subject to the 0.75 clamp that
-    /// applies to a model's own confidence: both sides of every claim are in the index and
-    /// comparing them is a query.
+    /// Shared so the CLI and the MCP handler cannot drift on what `changed` means. It is
+    /// measured against the previous successful scan; a project whose only scan is the
+    /// baseline has nothing to compare against, so it widens to `Everything` rather than
+    /// erroring — an empty report there would read as "nothing is wrong", which is a lie.
+    pub fn analyze_scope(&self, changed: bool, files: &[String]) -> Result<Scope> {
+        if !files.is_empty() {
+            return Ok(Scope::Files(files.to_vec()));
+        }
+        if !changed {
+            return Ok(Scope::Everything);
+        }
+        Ok(match self.previous_scan_id()? {
+            Some(since_scan) => Scope::Changed { since_scan },
+            None => Scope::Everything,
+        })
+    }
+
     /// Run one capability over a scope and reconcile its findings with what is known.
     ///
     /// Nexus owns identity, lifecycle and storage; the capability only says what is wrong.
     /// That split is what lets a second capability be a few hundred lines instead of a
     /// re-argument about when a finding is new, recurring, fixed or regressed.
+    ///
+    /// No model is asked here, so nothing this produces is subject to the 0.75 clamp that
+    /// applies to a model's own confidence: both sides of every claim are in the index and
+    /// comparing them is a query.
     pub fn analyze(&mut self, capability_id: &str, scope: Scope) -> Result<AnalyzeReport> {
         let started = Instant::now();
         let (commit, _) = self.head();

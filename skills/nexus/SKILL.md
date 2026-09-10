@@ -1,6 +1,6 @@
 ---
 name: nexus
-description: "Use when working in a codebase Nexus has indexed (a .nexus/ directory exists), at three moments: starting in an unfamiliar project, to learn what it is built from and what tooling working in it needs; after finishing an edit and before saying it is done, to see what the change reaches and whether anything tests it; and when a bug is suspected. It answers what changed since the last scan, what a change touches across the frontend/backend seam, what is already known about a file or symbol, and which Spring proxy mistakes or orphaned GraphQL fields exist. NOT for writing code, running tests, general Java/TypeScript questions, or opinions about style."
+description: "Answers what the source text cannot: what a change breaks across the frontend/backend seam, what moved since the last scan down to the symbol, what has already gone wrong in a file, and which Spring proxy mistakes or orphaned GraphQL fields exist. Use it whenever the question is what something affects, touches or depends on; whenever you are about to edit code you have not read; and after finishing an edit, before calling it done. Prefer it over grep and reading files to trace a dependency — nothing in the text connects fetch('/api/x') to @QueryMapping, but the index does. For style opinions and for running tests, look elsewhere."
 metadata:
   version: "0.3.0"
   user-invocable: "true"
@@ -52,6 +52,10 @@ diff shows, because none of them are in the files you edited.
 **BugHunter** is for a suspected defect, not for a routine check. Its rules are deterministic:
 Spring proxy mistakes, and GraphQL fields no resolver serves.
 
+All three run through one tool, `bughunter_analyze` — the name is historical, the `capability`
+argument is what picks. It defaults to bughunter, so pass `capability` explicitly for the other
+two, and pass `changed: true` to scope the run to the edit instead of the whole index.
+
 ## A normal sequence
 
 ```
@@ -60,7 +64,9 @@ nexus_rescan                  what changed since it was last indexed
 nexus_get_impact <symbol>     what breaks, including on the other side of the stack
 nexus_get_known <file>        what is already known about this code
   … make the change …
-analyze review --changed      what the edit reaches, and what covers it
+nexus_rescan                  what the edit moved
+bughunter_analyze             capability: review, changed: true — what the edit reaches,
+                              and what covers it
 ```
 
 ## Reading the answers honestly
