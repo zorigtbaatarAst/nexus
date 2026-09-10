@@ -137,7 +137,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cap-architect"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "nexus-core",
  "nexus-types",
@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "cap-bughunter"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "nexus-core",
  "nexus-lang-pack",
@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "cap-review"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "nexus-core",
  "nexus-types",
@@ -816,7 +816,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "nexus-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "cap-architect",
@@ -835,7 +835,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "ignore",
@@ -856,7 +856,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-eval"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "protobuf",
@@ -868,7 +868,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-fixtures"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "git2",
@@ -881,7 +881,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-lang"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "nexus-types",
@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-lang-graphql"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "nexus-lang",
@@ -899,7 +899,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-lang-java"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "nexus-lang",
@@ -910,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-lang-pack"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "nexus-lang",
  "nexus-lang-graphql",
@@ -922,7 +922,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-lang-python"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "nexus-lang",
@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-lang-rust"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "nexus-lang",
@@ -944,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-lang-ts"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "nexus-lang",
@@ -955,7 +955,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-mcp"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "cap-architect",
@@ -972,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-store"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "nexus-types",
  "rusqlite",
@@ -983,7 +983,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-types"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "schemars",
  "serde",
@@ -991,7 +991,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-vcs"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "git2",
  "tempfile",
@@ -1000,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-verify"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "thiserror 2.0.20",

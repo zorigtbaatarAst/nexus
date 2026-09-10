@@ -231,7 +231,7 @@ subject-match weighting, no recency decay, no top-K, no budget.
 | Surface | Shipped | State |
 |---|---|---|
 | **MCP server** | `nexus mcp` on stdio, 16 tools via `rmcp` | Working. Conformance-tested (`tests/mcp_conformance.rs`) |
-| **Claude Code plugin** | `.claude-plugin/plugin.json` v0.3.0 — commands, skill, `mcp.json` | Working |
+| **Claude Code plugin** | `.claude-plugin/plugin.json` v0.3.1 — commands, skill, `mcp.json` | Working |
 | **Slash commands** | 8 in `commands/` — scan, rescan, impact, known, explain, analyze, status, update | Working |
 | **Skill** | `skills/nexus/SKILL.md`, describes three capabilities at three moments | Working, and well written |
 | **Codex** | `integrations/codex/config.toml` | Config only; untested against a live Codex |

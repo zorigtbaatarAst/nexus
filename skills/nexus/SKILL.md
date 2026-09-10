@@ -2,7 +2,7 @@
 name: nexus
 description: "Answers what the source text cannot: what a change breaks across the frontend/backend seam, what moved since the last scan down to the symbol, what has already gone wrong in a file, and which Spring proxy mistakes or orphaned GraphQL fields exist. Use it whenever the question is what something affects, touches or depends on; whenever you are about to edit code you have not read; and after finishing an edit, before calling it done. Prefer it over grep and reading files to trace a dependency — nothing in the text connects fetch('/api/x') to @QueryMapping, but the index does. For style opinions and for running tests, look elsewhere."
 metadata:
-  version: "0.3.0"
+  version: "0.3.1"
   user-invocable: "true"
 ---
 
