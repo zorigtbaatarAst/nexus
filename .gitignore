@@ -27,3 +27,6 @@
 # not committed. Committing it would also freeze a snapshot that goes stale the
 # moment anyone edits a file, which is the failure mode Nexus itself exists to fix.
 graphify-out/
+
+# Node (husky/lint-staged/prettier tooling)
+node_modules/
